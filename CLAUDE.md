@@ -10,21 +10,21 @@ UI strings are **English**; code comments, the system prompt, and tool descripti
 
 ## Build & run
 
-Single Xcode project, single target/scheme (`TriGenius_app`), no test target. Requires **Xcode-beta** (deployment targets are iOS 27+/macOS 27+; the Apple Intelligence backend needs the iOS/macOS 26 FoundationModels framework).
+Single Xcode project, single target/scheme (`TriGenius`), no test target. Requires **Xcode-beta** (deployment targets are iOS 27+/macOS 27+; the Apple Intelligence backend needs the iOS/macOS 26 FoundationModels framework).
 
 ```bash
 # Build for a simulator
-xcodebuild -project TriGenius_app.xcodeproj -scheme TriGenius_app \
-  -destination 'platform=iOS Simulator,name=iPhone 16 Pro' build
+xcodebuild -project TriGenius.xcodeproj -scheme TriGenius \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' build
 
 # Build for macOS
-xcodebuild -project TriGenius_app.xcodeproj -scheme TriGenius_app \
+xcodebuild -project TriGenius.xcodeproj -scheme TriGenius \
   -destination 'platform=macOS' build
 ```
 
 Prefer building/running through Xcode; everyday work is usually faster via the IDE. There are no automated tests to run.
 
-The project uses Xcode **synchronized groups** (`PBXFileSystemSynchronizedRootGroup`, `objectVersion = 90`): the `TriGenius_app/` folder tree maps directly to the build target. New `.swift` files added anywhere under it are picked up automatically — **do not** edit `project.pbxproj` to register them.
+The project uses Xcode **synchronized groups** (`PBXFileSystemSynchronizedRootGroup`, `objectVersion = 90`): the `TriGenius/` folder tree maps directly to the build target. New `.swift` files added anywhere under it are picked up automatically — **do not** edit `project.pbxproj` to register them.
 
 ## Architecture
 

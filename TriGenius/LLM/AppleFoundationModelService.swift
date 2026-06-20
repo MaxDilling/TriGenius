@@ -8,7 +8,7 @@ import FoundationModels
 // alive across turns (faster follow-ups, real multi-turn context) and lets the
 // framework run the tool-call loop internally via `CoachToolBridge` tools.
 
-@available(iOS 26.0, macOS 26.0, *)
+@available(iOS 27.0, macOS 27.0, *)
 @MainActor
 final class AppleFoundationModelBackend: LLMBackend {
     let displayName = "Apple Intelligence"
@@ -164,7 +164,7 @@ final class UnavailableFoundationModelBackend: LLMBackend {
 
 enum FoundationModelBackendFactory {
     static func make() -> LLMBackend {
-        if #available(iOS 26.0, macOS 26.0, *) {
+        if #available(iOS 27.0, macOS 27.0, *) {
             return AppleFoundationModelBackend()
         } else {
             return UnavailableFoundationModelBackend()

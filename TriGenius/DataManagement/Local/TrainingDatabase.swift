@@ -32,9 +32,10 @@ final class ActivityRecord {
     var name: String
     var durationMinutes: Double
     var distanceKm: Double
-    /// Garmin training load (`activityTrainingLoad`) — the TSS-equivalent value
-    /// driving the PMC. Nil when the source did not report it (e.g. HealthKit).
-    var trainingLoad: Double?
+    /// TSS — the Training Stress Score driving the PMC. Currently sourced from
+    /// Garmin's `activityTrainingLoad`; later computed natively (see `TSS`).
+    /// Nil when the source did not report it (e.g. HealthKit).
+    var tss: Double?
     var aerobicTE: Double?
     var anaerobicTE: Double?
     /// The full coach-facing record, JSON-encoded, served verbatim by `get_activities`.
@@ -48,7 +49,7 @@ final class ActivityRecord {
         name: String,
         durationMinutes: Double,
         distanceKm: Double,
-        trainingLoad: Double?,
+        tss: Double?,
         aerobicTE: Double?,
         anaerobicTE: Double?,
         detailsJSON: String
@@ -60,7 +61,7 @@ final class ActivityRecord {
         self.name = name
         self.durationMinutes = durationMinutes
         self.distanceKm = distanceKm
-        self.trainingLoad = trainingLoad
+        self.tss = tss
         self.aerobicTE = aerobicTE
         self.anaerobicTE = anaerobicTE
         self.detailsJSON = detailsJSON
@@ -79,16 +80,16 @@ struct IngestedActivity: Sendable {
     let name: String
     let durationMinutes: Double
     let distanceKm: Double
-    let trainingLoad: Double?
+    let tss: Double?
     let aerobicTE: Double?
     let anaerobicTE: Double?
     let detailsJSON: String
 }
 
-/// One day's aggregated training load — the unit the PMC engine works on.
-struct DailyTrainingLoad: Sendable, Identifiable {
+/// One day's aggregated TSS — the unit the PMC engine works on.
+struct DailyTSS: Sendable, Identifiable {
     let date: Date
-    let totalLoad: Double
+    let totalTSS: Double
     var id: Date { date }
 }
 
@@ -129,7 +130,7 @@ final class TrainingDataStore {
                 record.name = a.name
                 record.durationMinutes = a.durationMinutes
                 record.distanceKm = a.distanceKm
-                record.trainingLoad = a.trainingLoad
+                record.tss = a.tss
                 record.aerobicTE = a.aerobicTE
                 record.anaerobicTE = a.anaerobicTE
                 record.detailsJSON = a.detailsJSON
@@ -142,7 +143,7 @@ final class TrainingDataStore {
                     name: a.name,
                     durationMinutes: a.durationMinutes,
                     distanceKm: a.distanceKm,
-                    trainingLoad: a.trainingLoad,
+                    tss: a.tss,
                     aerobicTE: a.aerobicTE,
                     anaerobicTE: a.anaerobicTE,
                     detailsJSON: a.detailsJSON
@@ -168,8 +169,8 @@ final class TrainingDataStore {
         (try? context.fetchCount(FetchDescriptor<ActivityRecord>())) ?? 0
     }
 
-    /// Daily total training load over `[from, to]`, ascending — input for the PMC engine.
-    func dailyTrainingLoad(from: Date, to: Date) -> [DailyTrainingLoad] {
+    /// Daily total TSS over `[from, to]`, ascending — input for the PMC engine.
+    func dailyTSS(from: Date, to: Date) -> [DailyTSS] {
         let descriptor = FetchDescriptor<ActivityRecord>(
             predicate: #Predicate { $0.date >= from && $0.date <= to },
             sortBy: [SortDescriptor(\.date, order: .forward)]
@@ -179,10 +180,10 @@ final class TrainingDataStore {
         var totals: [Date: Double] = [:]
         for r in records {
             let day = cal.startOfDay(for: r.date)
-            totals[day, default: 0] += r.trainingLoad ?? 0
+            totals[day, default: 0] += r.tss ?? 0
         }
         return totals
-            .map { DailyTrainingLoad(date: $0.key, totalLoad: $0.value) }
+            .map { DailyTSS(date: $0.key, totalTSS: $0.value) }
             .sorted { $0.date < $1.date }
     }
 }

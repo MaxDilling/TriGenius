@@ -145,7 +145,7 @@ actor GarminService {
             name: rec["name"] as? String ?? "Activity",
             durationMinutes: (rec["duration_minutes"] as? NSNumber)?.doubleValue ?? 0,
             distanceKm: (rec["distance_km"] as? NSNumber)?.doubleValue ?? 0,
-            trainingLoad: (rec["training_load"] as? NSNumber)?.doubleValue,
+            tss: (rec["training_load"] as? NSNumber)?.doubleValue,
             aerobicTE: (rec["aerobic_te"] as? NSNumber)?.doubleValue,
             anaerobicTE: (rec["anaerobic_te"] as? NSNumber)?.doubleValue,
             detailsJSON: detailsJSON

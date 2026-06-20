@@ -4,11 +4,13 @@ import Combine
 // MARK: - Chat Message Model
 
 struct ChatMessage: Identifiable {
-    enum Author { case user, coach }
+    enum Author { case user, coach, tool }
     var id = UUID()
     let author: Author
     var text: String
     let timestamp: Date
+    /// Set only for `.tool` messages (Debug Mode) — the underlying tool call.
+    var toolEvent: CoachToolEvent? = nil
 
     var isUser: Bool { author == .user }
 }
@@ -32,6 +34,16 @@ final class ChatViewModel {
     init(brain: CoachBrain) {
         self.brain = brain
         self.greeting = brain.greeting()
+        // Debug Mode: render the coach's hidden tool calls inline. The handler
+        // only fires when Debug Mode is on (gated in CoachBrain).
+        brain.toolEventHandler = { [weak self] event in
+            self?.messages.append(ChatMessage(
+                author: .tool,
+                text: event.name,
+                timestamp: event.timestamp,
+                toolEvent: event
+            ))
+        }
     }
 
     /// Warm up the backend (Apple FM) so the first reply comes back faster.
@@ -101,8 +113,14 @@ struct CoachChatView: View {
                         }
 
                         ForEach(viewModel.messages) { message in
-                            MessageBubble(message: message)
-                                .id(message.id)
+                            Group {
+                                if message.author == .tool {
+                                    ToolCallBubble(message: message)
+                                } else {
+                                    MessageBubble(message: message)
+                                }
+                            }
+                            .id(message.id)
                         }
 
                         if viewModel.isThinking {
@@ -216,6 +234,55 @@ private struct MessageBubble: View {
 
             if !message.isUser { Spacer(minLength: 40) }
         }
+    }
+}
+
+// MARK: - Tool Call Bubble (Debug Mode)
+
+private struct ToolCallBubble: View {
+    let message: ChatMessage
+    @State private var expanded = false
+
+    private var event: CoachToolEvent? { message.toolEvent }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "wrench.and.screwdriver.fill")
+                        .font(.caption2)
+                    Text(event?.name ?? message.text)
+                        .font(.system(.caption, design: .monospaced))
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                }
+                .foregroundStyle(.orange)
+            }
+            .buttonStyle(.plain)
+
+            if expanded, let event {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("args: \(event.argumentsJSON)")
+                    Text("→ \(event.resultPreview)")
+                        .foregroundStyle(.secondary)
+                }
+                .font(.system(.caption2, design: .monospaced))
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.08))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.orange.opacity(0.25), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 8)
     }
 }
 

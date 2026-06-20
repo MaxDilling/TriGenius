@@ -1,0 +1,78 @@
+import Foundation
+
+// MARK: - Proactive Coach
+//
+// Evaluates the athlete's current state (today: PMC / form; later: poor sleep,
+// at-risk goals) and produces proactive signals. Deliberately split from the
+// chat loop so the SAME evaluation can drive two sinks:
+//   (a) a section injected into the coach's system prompt (implemented now), and
+//   (b) — later — local push notifications via a background coordinator.
+//
+// GOAL.md: "Implement Proactive PMC Coach Triggers".
+
+/// A single proactive concern the coach should be aware of / may act on.
+struct ProactiveSignal: Sendable {
+    enum Severity: Sendable { case info, warning }
+    let severity: Severity
+    /// One-line, athlete-facing phrasing (reusable as a push notification body).
+    let message: String
+}
+
+enum ProactiveCoach {
+
+    // Heuristic thresholds for TSB (Form). These are coaching rules of thumb,
+    // not hard science — labelled as heuristics in the prompt section.
+    private static let tsbOvertrainedThreshold = -30.0   // deep fatigue / overreaching
+    private static let tsbFreshThreshold = 15.0           // very fresh / detraining-leaning
+    private static let ctlDetrainingThreshold = 20.0      // low chronic load
+
+    /// Evaluate the current PMC snapshot into proactive signals.
+    static func signals(from snapshot: PMCSnapshot?) -> [ProactiveSignal] {
+        guard let s = snapshot else { return [] }
+        var out: [ProactiveSignal] = []
+
+        if s.tsb <= tsbOvertrainedThreshold {
+            out.append(ProactiveSignal(
+                severity: .warning,
+                message: "Form (TSB) is very negative (\(rounded(s.tsb))) — accumulated fatigue is high. Overtraining/illness risk; prioritise recovery before adding load."
+            ))
+        } else if s.tsb >= tsbFreshThreshold && s.ctl < ctlDetrainingThreshold {
+            out.append(ProactiveSignal(
+                severity: .warning,
+                message: "Form (TSB \(rounded(s.tsb))) is high while fitness (CTL \(rounded(s.ctl))) is low — this points to detraining, not race-readiness. Consistent volume is the lever."
+            ))
+        } else if s.tsb >= tsbFreshThreshold {
+            out.append(ProactiveSignal(
+                severity: .info,
+                message: "Form (TSB \(rounded(s.tsb))) is positive — the athlete is fresh and likely well-placed for a key session or race."
+            ))
+        }
+
+        return out
+    }
+
+    /// The system-prompt section describing the current PMC state + any signals.
+    /// Returns "" when there is no PMC data yet (keeps the prompt clean).
+    static func promptSection(from snapshot: PMCSnapshot?) -> String {
+        guard let s = snapshot else { return "" }
+        var lines = [
+            "=== CURRENT TRAINING LOAD (PMC) ===",
+            "These are locally computed from stored TSS (heuristic; CTL needs >6 weeks of history to be reliable):",
+            "- Fitness (CTL, 42-day): \(rounded(s.ctl))",
+            "- Fatigue (ATL, 7-day): \(rounded(s.atl))",
+            "- Form (TSB = CTL−ATL): \(rounded(s.tsb))"
+        ]
+        let sigs = signals(from: s)
+        if !sigs.isEmpty {
+            lines.append("\nProactive flags to weave in naturally when relevant (don't lecture):")
+            for sig in sigs {
+                lines.append("- \(sig.severity == .warning ? "⚠️ " : "")\(sig.message)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static func rounded(_ v: Double) -> String {
+        String(Int(v.rounded()))
+    }
+}

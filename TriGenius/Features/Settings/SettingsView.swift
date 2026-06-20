@@ -29,6 +29,11 @@ final class AppSettings: ObservableObject {
     @Published var garminEmail: String {
         didSet { UserDefaults.standard.set(garminEmail, forKey: "garmin_email") }
     }
+    /// Developer toggle: surface hidden tool calls in the chat and log prompts to
+    /// the console. Read live by `CoachBrain.isDebugEnabled`.
+    @Published var debugMode: Bool {
+        didSet { UserDefaults.standard.set(debugMode, forKey: "debug_mode") }
+    }
 
     static let availableGeminiModels = [
         "gemini-2.5-flash",
@@ -46,6 +51,7 @@ final class AppSettings: ObservableObject {
         let savedSource = UserDefaults.standard.string(forKey: "data_source") ?? ""
         dataSource = DataSource(rawValue: savedSource) ?? .appleHealth
         garminEmail = UserDefaults.standard.string(forKey: "garmin_email") ?? ""
+        debugMode = UserDefaults.standard.bool(forKey: "debug_mode")
     }
 
     var isConfigured: Bool {
@@ -158,6 +164,17 @@ struct SettingsView: View {
                     profileRow("Phase", value: memory.trainingPlan.currentPhase?.uppercased())
                     profileRow("Focus", value: memory.trainingPlan.monthlyFocus)
                 }
+            }
+
+            // Developer section
+            Section {
+                Toggle(isOn: $settings.debugMode) {
+                    Label("Debug Mode", systemImage: "ladybug")
+                }
+            } header: {
+                Text("Developer")
+            } footer: {
+                Text("Shows the coach's hidden tool calls as messages in the chat and logs the full prompt to the console.")
             }
 
             // About section

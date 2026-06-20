@@ -64,22 +64,7 @@ final class DataSyncCoordinator {
         let since = days.map { Calendar.current.date(byAdding: .day, value: -$0, to: Date())! }
         let all = store.activities(since: since)
         guard let sport, !sport.isEmpty else { return all }
-        return all.filter { Self.matchesSport($0.sport, filter: sport) }
-    }
-
-    /// Family match between a stored sport key and a requested filter, tolerant
-    /// of source naming differences (Garmin "lap_swimming" vs HealthKit "Swimming").
-    private static func matchesSport(_ stored: String, filter: String) -> Bool {
-        let s = stored.lowercased()
-        switch filter.lowercased() {
-        case "running": return s.contains("run")
-        case "cycling": return s.contains("cycl") || s.contains("ride") || s.contains("bik")
-        case "swimming": return s.contains("swim")
-        case "strength", "gym": return s.contains("strength") || s.contains("gym")
-        case "hiking": return s.contains("hik")
-        case "walking": return s.contains("walk")
-        default: return s.contains(filter.lowercased())
-        }
+        return all.filter { SportFamily.matches(storedSport: $0.sport, filter: sport) }
     }
 
     // MARK: - Response building
@@ -130,7 +115,7 @@ final class DataSyncCoordinator {
             name: w.name,
             durationMinutes: w.durationMin,
             distanceKm: w.distanceKm ?? 0,
-            trainingLoad: nil,   // HealthKit does not provide a TSS-equivalent.
+            tss: nil,   // HealthKit does not provide a TSS value.
             aerobicTE: nil,
             anaerobicTE: nil,
             detailsJSON: detailsJSON
