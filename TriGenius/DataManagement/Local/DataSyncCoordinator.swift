@@ -20,28 +20,67 @@ final class DataSyncCoordinator {
     /// How many recent activities to pull per sync.
     private let syncCount = 100
 
+    // MARK: - Sync state (last successful sync per source)
+
+    private func lastSyncKey(_ source: DataSource) -> String {
+        "trigenius.lastSync.\(source.rawValue)"
+    }
+
+    /// When `source` was last synced, or nil if never.
+    func lastSync(for source: DataSource) -> Date? {
+        let t = UserDefaults.standard.double(forKey: lastSyncKey(source))
+        return t > 0 ? Date(timeIntervalSince1970: t) : nil
+    }
+
+    private func markSynced(_ source: DataSource, at date: Date = Date()) {
+        UserDefaults.standard.set(date.timeIntervalSince1970, forKey: lastSyncKey(source))
+    }
+
     // MARK: - Sync
 
-    /// Pull the latest activities from `source` into the local database.
+    /// Pull activities from `source` into the local database. Incremental: only
+    /// fetches activities since the last successful sync (inclusive of that day,
+    /// so same-day activities added after the last sync are picked up). The first
+    /// ever sync does a full recent backfill. Ingest upserts by id, so re-fetching
+    /// the last sync day is harmless.
     /// Returns the number of activities now stored, or nil on failure.
     @discardableResult
     func sync(source: DataSource) async -> Int? {
+        // Number of days back to fetch. nil = full backfill (first sync).
+        let days = windowDays(since: lastSync(for: source))
+
         switch source {
         case .garmin:
             guard await GarminAuth.shared.isAuthenticated else { return nil }
             // getActivities ingests into the store as a side effect.
-            _ = await GarminService.shared.getActivities(sport: nil, count: syncCount, days: nil)
+            let result = await GarminService.shared.getActivities(sport: nil, count: syncCount, days: days)
+            // Only advance the watermark on success, else a network failure would
+            // skip the failed window on the next (now smaller) incremental sync.
+            guard !result.hasPrefix("✗") else { return nil }
+            markSynced(source)
             return store.count
         case .appleHealth:
             do {
                 try await HealthKitService.shared.requestAuthorization()
-                let workouts = try await HealthKitService.shared.fetchRecentWorkouts(count: syncCount)
+                let since = days.map { Calendar.current.date(byAdding: .day, value: -$0, to: Calendar.current.startOfDay(for: Date()))! }
+                let workouts = try await HealthKitService.shared.fetchRecentWorkouts(count: syncCount, since: since)
                 store.ingest(workouts.compactMap(Self.ingestDTO(from:)))
+                markSynced(source)
                 return store.count
             } catch {
                 return nil
             }
         }
+    }
+
+    /// Calendar days from the last sync's start-of-day to today, or nil if never
+    /// synced (→ full backfill). Day 0 (synced today) still re-fetches today.
+    private func windowDays(since last: Date?) -> Int? {
+        guard let last else { return nil }
+        let cal = Calendar.current
+        let from = cal.startOfDay(for: last)
+        let to = cal.startOfDay(for: Date())
+        return max(0, cal.dateComponents([.day], from: from, to: to).day ?? 0)
     }
 
     // MARK: - Coach read path (DB-backed)
@@ -61,7 +100,12 @@ final class DataSyncCoordinator {
     // MARK: - Querying / filtering
 
     private func filtered(sport: String?, days: Int?) -> [ActivityRecord] {
-        let since = days.map { Calendar.current.date(byAdding: .day, value: -$0, to: Date())! }
+        // Normalize the cutoff to the start of the day, otherwise `days: 1` at
+        // 15:00 would drop yesterday-morning activities (cutoff "yesterday 15:00").
+        // `days: 1` now means "today and yesterday", `days: 7` the last 7 days + today.
+        let since = days.map {
+            Calendar.current.date(byAdding: .day, value: -$0, to: Calendar.current.startOfDay(for: Date()))!
+        }
         let all = store.activities(since: since)
         guard let sport, !sport.isEmpty else { return all }
         return all.filter { SportFamily.matches(storedSport: $0.sport, filter: sport) }

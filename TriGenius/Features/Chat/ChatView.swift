@@ -131,6 +131,11 @@ struct CoachChatView: View {
                     .padding(.horizontal)
                     .padding(.bottom, 8)
                 }
+                // Dismiss the keyboard by dragging the message list, so it never
+                // gets stuck covering the tab bar with no way back out.
+                .scrollDismissesKeyboard(.interactively)
+                // Tapping anywhere in the message area also dismisses it.
+                .onTapGesture { inputFocused = false }
                 .onChange(of: viewModel.messages.count) {
                     if let last = viewModel.messages.last {
                         withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }

@@ -40,12 +40,15 @@ final class HealthKitService {
 
     // MARK: - Recent Workouts
 
-    func fetchRecentWorkouts(count: Int = 10) async throws -> [WorkoutSummary] {
+    /// `since` bounds the query to workouts on/after that date — used by the
+    /// incremental sync so only new activities are fetched.
+    func fetchRecentWorkouts(count: Int = 10, since: Date? = nil) async throws -> [WorkoutSummary] {
         let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
+        let predicate = since.map { HKQuery.predicateForSamples(withStart: $0, end: nil) }
         return try await withCheckedThrowingContinuation { continuation in
             let query = HKSampleQuery(
                 sampleType: .workoutType(),
-                predicate: nil,
+                predicate: predicate,
                 limit: count,
                 sortDescriptors: [sort]
             ) { _, samples, error in

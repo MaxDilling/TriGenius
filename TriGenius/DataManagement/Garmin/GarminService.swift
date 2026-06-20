@@ -158,7 +158,11 @@ actor GarminService {
         do {
             let fetchCount = sport != nil ? count * 3 : count
             let raw = try await client.getActivities(start: 0, limit: min(fetchCount, 100))
-            let cutoff: Date? = days.map { Calendar.current.date(byAdding: .day, value: -$0, to: Date())! }
+            // Cutoff at the start of the day so `days: 1` keeps all of yesterday
+            // (and today), not just the last 24h from now. See DataSyncCoordinator.
+            let cutoff: Date? = days.map {
+                Calendar.current.date(byAdding: .day, value: -$0, to: Calendar.current.startOfDay(for: Date()))!
+            }
             let targetIDs = sport.flatMap { GarminMappings.sportFilterIDs[$0.lowercased()] }
 
             var formatted: [[String: Any]] = []
