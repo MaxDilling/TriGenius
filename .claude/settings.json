@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(IF=\"/Applications/Xcode-beta.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk/System/Library/Frameworks/FoundationModels.framework/Versions/A/Modules/FoundationModels.swiftmodule/arm64e-apple-ios-macabi.swiftinterface\"; echo \"===== DynamicGenerationSchema =====\"; grep -nE \"struct DynamicGenerationSchema|public init|struct Property\" \"$IF\" | grep -A0 -iE \"DynamicGenerationSchema|Property|init\\\\\\(name|init\\\\\\(arrayOf|init\\\\\\(referenceTo|init\\\\\\(type\" | head -40)",
+      "Read(//Applications/Xcode-beta.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks/FoundationModels.framework/Versions/A/Modules/FoundationModels.swiftmodule/**)",
+      "Bash(IF=\"/Applications/Xcode-beta.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX27.0.sdk/System/Library/Frameworks/FoundationModels.framework/Versions/A/Modules/FoundationModels.swiftmodule/arm64e-apple-ios-macabi.swiftinterface\"; echo \"===== Tool protocol =====\"; grep -n \"public protocol Tool\" \"$IF\"; sed -n '/public protocol Tool /,/^}/p' \"$IF\" | head -40)",
+      "Bash(xcodebuild -project TriGenius_app.xcodeproj -scheme TriGenius_app -destination 'platform=iOS Simulator,name=iPhone 16 Pro' build)"
+    ],
+    "additionalDirectories": [
+      "/Applications/Xcode-beta.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks/FoundationModels.framework/Versions/A/Modules/FoundationModels.swiftmodule"
+    ]
+  }
+}

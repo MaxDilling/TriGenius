@@ -1,0 +1,67 @@
+{
+  "fill" : {
+    "linear-gradient" : [
+      "display-p3:0.88086,0.94531,0.92627,1.00000",
+      "display-p3:0.34741,0.61914,0.65918,1.00000"
+    ]
+  },
+  "groups" : [
+    {
+      "layers" : [
+        {
+          "blend-mode" : "soft-light",
+          "glass" : true,
+          "image-name" : "Gemini_Generated_Image_l93hxql93hxql93h.png",
+          "name" : "Gemini_Generated_Image_l93hxql93hxql93h",
+          "position" : {
+            "scale" : 0.5,
+            "translation-in-points" : [
+              -8.20638670982521,
+              -16.55324090949125
+            ]
+          }
+        },
+        {
+          "blend-mode" : "normal",
+          "glass" : true,
+          "image-name" : "Gemini_Generated_Image_jgf92fjgf92fjgf9.png",
+          "name" : "Gemini_Generated_Image_jgf92fjgf92fjgf9",
+          "position" : {
+            "scale" : 0.5,
+            "translation-in-points" : [
+              6.321664823708716,
+              -24.55324090949125
+            ]
+          }
+        },
+        {
+          "glass" : true,
+          "hidden" : false,
+          "image-name" : "Gemini_Generated_Image_2ovpts2ovpts2ovp 2.png",
+          "name" : "Gemini_Generated_Image_2ovpts2ovpts2ovp 2",
+          "position" : {
+            "scale" : 0.5,
+            "translation-in-points" : [
+              -22.222295199510427,
+              38.28764626580141
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.6
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.2
+      }
+    }
+  ],
+  "supported-platforms" : {
+    "circles" : [
+      "watchOS"
+    ],
+    "squares" : "shared"
+  }
+}
