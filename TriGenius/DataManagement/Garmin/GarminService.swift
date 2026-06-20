@@ -294,19 +294,6 @@ actor GarminService {
                     ]
                 } else { day["hrv"] = NSNull() }
 
-                // Body battery
-                if let bb = try? await client.getBodyBattery(date: dateStr), let latest = bb.last {
-                    let valuesArray = latest["bodyBatteryValuesArray"] as? [[Any]] ?? []
-                    let levels = valuesArray.compactMap { $0.count > 1 ? ($0[1] as? NSNumber)?.intValue : nil }
-                    day["body_battery"] = [
-                        "current": levels.last ?? NSNull(),
-                        "high": levels.max() ?? NSNull(),
-                        "low": levels.min() ?? NSNull(),
-                        "charged": latest["charged"] ?? NSNull(),
-                        "drained": latest["drained"] ?? NSNull()
-                    ]
-                } else { day["body_battery"] = NSNull() }
-
                 // Sleep
                 if let sleep = try? await client.getSleepData(date: dateStr),
                    let dto = sleep["dailySleepDTO"] as? [String: Any] {
@@ -333,7 +320,6 @@ actor GarminService {
                 }
             }
             let hrvValues = collect(("hrv", "last_night"))
-            let bbValues = collect(("body_battery", "current"))
             let sleepScores = collect(("sleep", "score"))
             let sleepDurations = collect(("sleep", "duration_hours"))
 
@@ -350,7 +336,6 @@ actor GarminService {
                 "daily_metrics": dailyMetrics,
                 "summary": [
                     "avg_hrv": avg(hrvValues, 1),
-                    "avg_body_battery": avg(bbValues, 1),
                     "avg_sleep_score": avg(sleepScores, 1),
                     "avg_sleep_hours": avg(sleepDurations, 1),
                     "trend": hrvValues.isEmpty ? "Unknown" : GarminTransform.analyzeTrend(hrvValues)

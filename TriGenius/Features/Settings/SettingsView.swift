@@ -260,10 +260,6 @@ struct SettingsView: View {
                     .foregroundStyle(.red)
                     .font(.caption)
             }
-
-            Text("Apple Intelligence does not support tool calls — health data and profile updates are unavailable in this mode.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 

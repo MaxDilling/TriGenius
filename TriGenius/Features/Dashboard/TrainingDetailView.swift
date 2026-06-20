@@ -43,8 +43,11 @@ struct TrainingDetailView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 12))
                     VStack(alignment: .leading, spacing: 3) {
                         Text(record.name).font(.headline)
-                        Text(record.date, style: .date)
-                            .font(.subheadline).foregroundStyle(.secondary)
+                        HStack(){
+                            Text(record.date, style: .date)
+                            Text("(\(record.source))")
+                        }
+                        .font(.subheadline).foregroundStyle(.secondary)
                     }
                 }
                 .padding(.vertical, 4)

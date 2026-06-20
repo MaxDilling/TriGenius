@@ -53,19 +53,18 @@ struct RootTabView: View {
     var body: some View {
         TabView {
             NavigationStack {
-                CoachChatView(brain: brain)
-            }
-            .tabItem {
-                Label("Coach", systemImage: "bubble.left.and.bubble.right.fill")
-            }
-
-            NavigationStack {
                 DashboardView(dataSource: settings.dataSource)
             }
             .tabItem {
                 Label("Dashboard", systemImage: "chart.xyaxis.line")
             }
 
+            NavigationStack {
+                CoachChatView(brain: brain)
+            }
+            .tabItem {
+                Label("Coach", systemImage: "bubble.left.and.bubble.right.fill")
+            }
             NavigationStack {
                 SettingsView(
                     settings: settings,

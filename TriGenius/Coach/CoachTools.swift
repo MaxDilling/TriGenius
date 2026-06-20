@@ -335,7 +335,7 @@ final class GarminToolHandler: CoachToolHandler {
         [
             ToolDefinition(
                 name: "get_health_metrics",
-                description: "Fetch recovery data from Garmin: HRV, Body Battery, sleep, and short-term trends.",
+                description: "Fetch recovery data from Garmin: HRV, sleep, and short-term trends.",
                 parameters: [
                     "type": "object",
                     "properties": ["days": ["type": "integer", "description": "Number of days to fetch. Default 7."]],

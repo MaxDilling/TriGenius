@@ -126,14 +126,6 @@ actor GarminClient {
         try await connectapi("/hrv-service/hrv/\(date)") as? [String: Any]
     }
 
-    func getBodyBattery(date: String) async throws -> [[String: Any]] {
-        let result = try await connectapi(
-            "/wellness-service/wellness/bodyBattery/reports/daily",
-            query: [("startDate", date), ("endDate", date)]
-        )
-        return result as? [[String: Any]] ?? []
-    }
-
     func getSleepData(date: String) async throws -> [String: Any]? {
         let name = try await displayName()
         return try await connectapi(

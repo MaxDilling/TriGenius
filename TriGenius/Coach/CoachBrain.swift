@@ -478,7 +478,7 @@ final class CoachBrain {
             === DATA FROM GARMIN CONNECT ===
 
             The athlete's data comes from Garmin Connect.
-            - Activities, HRV, Body Battery, sleep, training status, power curve, calendar are available
+            - Activities, HRV, sleep, training status, power curve, calendar are available
             - You can also create, move and delete scheduled workouts and sync athlete settings (FTP, HR/power zones, VO2max, CSS)
             - Device estimates may have inaccuracies — treat as guidance, not ground truth
             - HR lags 30–90s behind effort during intervals — use RPE as cross-check
