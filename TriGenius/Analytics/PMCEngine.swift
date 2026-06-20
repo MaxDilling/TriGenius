@@ -10,10 +10,10 @@ import Foundation
 //   ATL_today = ATL_yest + (TSS_today − ATL_yest) · (1 − e^(−1/7))
 //   TSB_today = CTL_yest − ATL_yest        (Form = yesterday's fitness − fatigue)
 //
-// Note: CTL needs a long warm-up (>42 days) to be meaningful. We therefore
-// compute over ALL available history but only return the last 6 weeks for the
-// UI. Deeper historical backfill (e.g. via the `garmin-health-data` lib) will
-// improve early-history accuracy.
+// Note: CTL needs a long warm-up (>42 days) to be meaningful. We compute over
+// ALL available history and return the full series; callers slice the window
+// they need. Deeper historical backfill (e.g. via the `garmin-health-data` lib)
+// will improve early-history accuracy.
 
 struct PMCPoint: Identifiable, Sendable {
     let date: Date
@@ -31,10 +31,19 @@ struct PMCSnapshot: Sendable {
 }
 
 struct PMCResult: Sendable {
-    /// Last 6 weeks (42 days), ascending — for charting.
+    /// The full computed history, ascending — callers slice the range they need
+    /// (the dashboard shows the last weeks; the detail view offers 30D/90D/1Y).
     let points: [PMCPoint]
     /// Most recent day's values.
     let snapshot: PMCSnapshot?
+
+    /// The value `days` ago (closest point at/before that date), for deltas.
+    func value(daysAgo days: Int, _ metric: (PMCPoint) -> Double) -> Double? {
+        guard let last = points.last else { return nil }
+        let cal = Calendar.current
+        guard let target = cal.date(byAdding: .day, value: -days, to: last.date) else { return nil }
+        return points.last(where: { $0.date <= target }).map(metric)
+    }
 }
 
 enum PMCEngine {
@@ -42,7 +51,7 @@ enum PMCEngine {
     static let ctlTimeConstant = 42.0
     static let atlTimeConstant = 7.0
 
-    /// Number of trailing days to expose to the UI (6 weeks).
+    /// Trailing window the main dashboard summarises (6 weeks).
     static let displayDays = 42
 
     /// Pure computation. `dailyTSS` may have gaps; missing days count as 0 TSS.
@@ -85,8 +94,7 @@ enum PMCEngine {
         let snapshot = points.last.map {
             PMCSnapshot(date: $0.date, ctl: $0.ctl, atl: $0.atl, tsb: $0.tsb)
         }
-        let trimmed = Array(points.suffix(displayDays))
-        return PMCResult(points: trimmed, snapshot: snapshot)
+        return PMCResult(points: points, snapshot: snapshot)
     }
 
     /// Convenience: read the local store and compute the current PMC.

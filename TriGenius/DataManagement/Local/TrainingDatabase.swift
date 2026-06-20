@@ -1,6 +1,14 @@
 import Foundation
 import SwiftData
 
+extension Notification.Name {
+    /// Posted (on the main actor) whenever the local scheduled-workout store is
+    /// mutated by a user action — a reschedule or delete. Views that render the
+    /// agenda from a cached snapshot (the Dashboard) observe this to reload
+    /// without triggering a full network re-sync.
+    static let scheduledWorkoutsDidChange = Notification.Name("trigenius.scheduledWorkoutsDidChange")
+}
+
 // MARK: - Local Time-Series Database
 //
 // GOAL.md step 1+2: a persistent local store for historical activity data and
@@ -68,6 +76,90 @@ final class ActivityRecord {
     }
 }
 
+// MARK: - Performance metric model
+//
+// FEATURES.md "Performance data in the database (with history)": performance
+// values (FTP, CSS, lactate thresholds, VO2max, …) used to live in
+// `coach_memory.json` as overwrite-in-place scalars. They are now stored here as
+// a timestamped, append-only time series — the same way Garmin tracks them — so
+// the progression over time can be charted and the coach reads the latest value
+// per metric from the DB instead of the JSON.
+
+/// One performance value at a point in time. Keyed by a composite
+/// "<metricKey>:<source>:<yyyy-MM-dd>" id so repeated same-day syncs upsert
+/// instead of duplicating, while different days append to the series.
+@Model
+final class PerformanceMetricRecord {
+    @Attribute(.unique) var id: String
+    /// snake_case metric key, e.g. "cycling_ftp", "swim_css_pace".
+    var metricKey: String
+    var value: Double
+    /// Unit token, e.g. "watts", "bpm", "ml_kg_min", "sec_per_100m".
+    var unit: String
+    /// Origin of the value ("garmin", "healthkit", "manual").
+    var source: String
+    /// Start-of-day date the value belongs to (local).
+    var date: Date
+
+    init(id: String, metricKey: String, value: Double, unit: String, source: String, date: Date) {
+        self.id = id
+        self.metricKey = metricKey
+        self.value = value
+        self.unit = unit
+        self.source = source
+        self.date = date
+    }
+}
+
+// MARK: - Scheduled workout model
+//
+// FEATURES.md "Future / scheduled workouts in the Agenda" + "Training calendar
+// screen" + "Drag-and-drop workout reschedule": a local store of PLANNED
+// workouts (target sport / duration / TSS on a future date), distinct from the
+// completed `ActivityRecord`s. Source-agnostic: populated from Garmin's calendar
+// (`get_calendar`) and from the coach's own scheduling tools (`add_workout`).
+// The dashboard Agenda, the calendar screen and the weekly targets all read it.
+
+/// One planned workout. Keyed by a source-qualified id ("garmin:<workoutId>",
+/// "local:<uuid>") so repeated calendar syncs upsert instead of duplicating.
+@Model
+final class ScheduledWorkoutRecord {
+    @Attribute(.unique) var id: String
+    /// Origin of the record ("garmin", "local").
+    var source: String
+    /// Start-of-day the workout is planned for (local).
+    var date: Date
+    /// Sport key (e.g. "running", "cycling", "lap_swimming").
+    var sport: String
+    var name: String
+    /// Planned duration in minutes (0 when the source didn't specify one).
+    var targetDurationMinutes: Double
+    /// Planned TSS, when known. Nil → estimated from duration at read time.
+    var targetTSS: Double?
+    /// Optional free-text description of the planned session.
+    var notes: String
+
+    init(
+        id: String,
+        source: String,
+        date: Date,
+        sport: String,
+        name: String,
+        targetDurationMinutes: Double,
+        targetTSS: Double?,
+        notes: String = ""
+    ) {
+        self.id = id
+        self.source = source
+        self.date = date
+        self.sport = sport
+        self.name = name
+        self.targetDurationMinutes = targetDurationMinutes
+        self.targetTSS = targetTSS
+        self.notes = notes
+    }
+}
+
 // MARK: - Ingest DTO
 
 /// Sendable snapshot used to hand activities from the (non-MainActor) data
@@ -86,11 +178,63 @@ struct IngestedActivity: Sendable {
     let detailsJSON: String
 }
 
+/// Sendable snapshot used to hand planned workouts from the (non-MainActor)
+/// data sources to the MainActor-bound store. `date` is normalized to
+/// start-of-day on ingest.
+struct IngestedScheduledWorkout: Sendable {
+    let id: String
+    let source: String
+    let date: Date
+    let sport: String
+    let name: String
+    let targetDurationMinutes: Double
+    let targetTSS: Double?
+    let notes: String
+}
+
 /// One day's aggregated TSS — the unit the PMC engine works on.
 struct DailyTSS: Sendable, Identifiable {
     let date: Date
     let totalTSS: Double
     var id: Date { date }
+}
+
+/// Sendable performance value handed from the (non-MainActor) data sources to
+/// the MainActor-bound store. `date` is normalized to start-of-day on ingest.
+struct IngestedMetric: Sendable {
+    let metricKey: String
+    let value: Double
+    let unit: String
+    let source: String
+    let date: Date
+}
+
+/// Latest value per performance metric, read from the DB to build the coach's
+/// system-prompt context and the Settings display. Replaces the former
+/// `coach_memory.json` scalars.
+struct PerformanceSnapshot: Sendable {
+    var cyclingFTP: Int?
+    var runningFTP: Int?
+    /// Swim critical-swim-speed pace, in seconds per 100 m.
+    var cssPaceSeconds: Double?
+    var lactateThrHR: Int?
+    /// Running lactate-threshold pace, in seconds per km.
+    var lactateThrPaceSeconds: Double?
+    var vo2maxRunning: Double?
+    var vo2maxCycling: Double?
+    var weightKg: Double?
+
+    /// CSS pace formatted as "m:ss" per 100 m (matches `GarminTransform.speedToPace`).
+    var cssPaceFormatted: String? {
+        guard let s = cssPaceSeconds, s > 0 else { return nil }
+        return String(format: "%d:%02d", Int(s) / 60, Int(s) % 60)
+    }
+
+    /// Lactate-threshold pace formatted as "m:ss" per km.
+    var lactateThrPaceFormatted: String? {
+        guard let s = lactateThrPaceSeconds, s > 0 else { return nil }
+        return String(format: "%d:%02d", Int(s) / 60, Int(s) % 60)
+    }
 }
 
 // MARK: - Store
@@ -106,13 +250,23 @@ final class TrainingDataStore {
 
     private init() {
         do {
-            container = try ModelContainer(for: ActivityRecord.self)
+            container = try ModelContainer(for: ActivityRecord.self, PerformanceMetricRecord.self, ScheduledWorkoutRecord.self)
         } catch {
             // An in-memory fallback keeps the app usable even if the on-disk
             // store can't be opened (e.g. an incompatible migration).
             let config = ModelConfiguration(isStoredInMemoryOnly: true)
-            container = try! ModelContainer(for: ActivityRecord.self, configurations: config)
+            container = try! ModelContainer(for: ActivityRecord.self, PerformanceMetricRecord.self, ScheduledWorkoutRecord.self, configurations: config)
         }
+    }
+
+    /// Delete every stored record — activities, performance metrics and
+    /// scheduled workouts. The `coach_memory.json` profile/settings are NOT
+    /// touched; this only clears the local time-series database.
+    func deleteAllData() {
+        try? context.delete(model: ActivityRecord.self)
+        try? context.delete(model: PerformanceMetricRecord.self)
+        try? context.delete(model: ScheduledWorkoutRecord.self)
+        try? context.save()
     }
 
     /// Upsert a batch of activities (insert new, update existing by id).
@@ -153,6 +307,22 @@ final class TrainingDataStore {
         try? context.save()
     }
 
+    /// Delete `source`-originated activities on/after `from` whose id is not in
+    /// `keep`. Used to reconcile the Apple Health import after dropping
+    /// Garmin-mirrored workouts at the source: stale duplicates already stored
+    /// from earlier syncs are removed, while activities from other sources and
+    /// the freshly-fetched ones are untouched.
+    func pruneActivities(source: String, from: Date, keeping keep: Set<String>) {
+        let stale = (try? context.fetch(
+            FetchDescriptor<ActivityRecord>(
+                predicate: #Predicate { $0.source == source && $0.date >= from }
+            )
+        ))?.filter { !keep.contains($0.id) } ?? []
+        guard !stale.isEmpty else { return }
+        for r in stale { context.delete(r) }
+        try? context.save()
+    }
+
     /// Activities on/after `since` (or all), newest first.
     func activities(since: Date? = nil) -> [ActivityRecord] {
         var descriptor = FetchDescriptor<ActivityRecord>(
@@ -185,5 +355,167 @@ final class TrainingDataStore {
         return totals
             .map { DailyTSS(date: $0.key, totalTSS: $0.value) }
             .sorted { $0.date < $1.date }
+    }
+
+    // MARK: - Scheduled workouts
+
+    /// Upsert a batch of planned workouts (insert new, update existing by id).
+    /// Dates are normalized to start-of-day so they bucket per calendar day.
+    func ingestScheduled(_ workouts: [IngestedScheduledWorkout]) {
+        guard !workouts.isEmpty else { return }
+        let cal = Calendar.current
+        for w in workouts {
+            let id = w.id
+            let day = cal.startOfDay(for: w.date)
+            let existing = try? context.fetch(
+                FetchDescriptor<ScheduledWorkoutRecord>(predicate: #Predicate { $0.id == id })
+            ).first
+            if let record = existing {
+                record.source = w.source
+                record.date = day
+                record.sport = w.sport
+                record.name = w.name
+                record.targetDurationMinutes = w.targetDurationMinutes
+                record.targetTSS = w.targetTSS
+                record.notes = w.notes
+            } else {
+                context.insert(ScheduledWorkoutRecord(
+                    id: w.id, source: w.source, date: day, sport: w.sport, name: w.name,
+                    targetDurationMinutes: w.targetDurationMinutes, targetTSS: w.targetTSS, notes: w.notes
+                ))
+            }
+        }
+        try? context.save()
+    }
+
+    /// Planned workouts within `[from, to]` (start-of-day inclusive), ascending.
+    func scheduledWorkouts(from: Date, to: Date) -> [ScheduledWorkoutRecord] {
+        let cal = Calendar.current
+        let lo = cal.startOfDay(for: from)
+        let hi = cal.startOfDay(for: to)
+        let descriptor = FetchDescriptor<ScheduledWorkoutRecord>(
+            predicate: #Predicate { $0.date >= lo && $0.date <= hi },
+            sortBy: [SortDescriptor(\.date, order: .forward)]
+        )
+        return (try? context.fetch(descriptor)) ?? []
+    }
+
+    /// Reschedule a planned workout to a new day. Returns the updated record.
+    @discardableResult
+    func moveScheduledWorkout(id: String, to newDate: Date) -> ScheduledWorkoutRecord? {
+        let record = try? context.fetch(
+            FetchDescriptor<ScheduledWorkoutRecord>(predicate: #Predicate { $0.id == id })
+        ).first
+        guard let record else { return nil }
+        record.date = Calendar.current.startOfDay(for: newDate)
+        try? context.save()
+        NotificationCenter.default.post(name: .scheduledWorkoutsDidChange, object: nil)
+        return record
+    }
+
+    /// Remove a planned workout by id.
+    func deleteScheduledWorkout(id: String) {
+        guard let record = try? context.fetch(
+            FetchDescriptor<ScheduledWorkoutRecord>(predicate: #Predicate { $0.id == id })
+        ).first else { return }
+        context.delete(record)
+        try? context.save()
+        NotificationCenter.default.post(name: .scheduledWorkoutsDidChange, object: nil)
+    }
+
+    /// Replace all `source`-originated planned workouts within `[from, to]` with
+    /// a fresh batch — used when re-syncing the Garmin calendar so deletions on
+    /// the device are reflected locally. Locally-created workouts are untouched.
+    func replaceScheduled(source: String, from: Date, to: Date, with workouts: [IngestedScheduledWorkout]) {
+        let cal = Calendar.current
+        let lo = cal.startOfDay(for: from)
+        let hi = cal.startOfDay(for: to)
+        let stale = (try? context.fetch(
+            FetchDescriptor<ScheduledWorkoutRecord>(
+                predicate: #Predicate { $0.source == source && $0.date >= lo && $0.date <= hi }
+            )
+        )) ?? []
+        for r in stale { context.delete(r) }
+        try? context.save()
+        ingestScheduled(workouts)
+    }
+
+    // MARK: - Performance metrics
+
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    /// Upsert a batch of performance metrics. Same (metric, source, day) updates
+    /// in place; a new day appends, building the time series.
+    func ingestMetrics(_ metrics: [IngestedMetric]) {
+        guard !metrics.isEmpty else { return }
+        let cal = Calendar.current
+        for m in metrics {
+            let day = cal.startOfDay(for: m.date)
+            let id = "\(m.metricKey):\(m.source):\(Self.dayFormatter.string(from: day))"
+            let existing = try? context.fetch(
+                FetchDescriptor<PerformanceMetricRecord>(predicate: #Predicate { $0.id == id })
+            ).first
+            if let record = existing {
+                record.metricKey = m.metricKey
+                record.value = m.value
+                record.unit = m.unit
+                record.source = m.source
+                record.date = day
+            } else {
+                context.insert(PerformanceMetricRecord(
+                    id: id, metricKey: m.metricKey, value: m.value, unit: m.unit, source: m.source, date: day
+                ))
+            }
+        }
+        try? context.save()
+    }
+
+    /// Source preference when two records share the newest day for a metric.
+    private static func sourceRank(_ source: String) -> Int {
+        switch source {
+        case "garmin": return 3
+        case "healthkit": return 2
+        default: return 1   // "manual"
+        }
+    }
+
+    /// Latest value per metric key — the source for the coach's prompt context
+    /// and the Settings display. Newest date wins; ties break by source rank.
+    func latestSnapshot() -> PerformanceSnapshot {
+        let records = (try? context.fetch(FetchDescriptor<PerformanceMetricRecord>())) ?? []
+        var latest: [String: PerformanceMetricRecord] = [:]
+        for r in records {
+            if let cur = latest[r.metricKey] {
+                let better = r.date > cur.date ||
+                    (r.date == cur.date && Self.sourceRank(r.source) > Self.sourceRank(cur.source))
+                if better { latest[r.metricKey] = r }
+            } else {
+                latest[r.metricKey] = r
+            }
+        }
+        var snap = PerformanceSnapshot()
+        snap.cyclingFTP = latest["cycling_ftp"].map { Int($0.value.rounded()) }
+        snap.runningFTP = latest["running_ftp"].map { Int($0.value.rounded()) }
+        snap.cssPaceSeconds = latest["swim_css_pace"]?.value
+        snap.lactateThrHR = latest["lactate_threshold_hr"].map { Int($0.value.rounded()) }
+        snap.lactateThrPaceSeconds = latest["lactate_threshold_pace"]?.value
+        snap.vo2maxRunning = latest["vo2max_running"]?.value
+        snap.vo2maxCycling = latest["vo2max_cycling"]?.value
+        snap.weightKg = latest["weight_kg"]?.value
+        return snap
+    }
+
+    /// Records for one metric over `[from, to]`, ascending — for history charts.
+    func metricSeries(key: String, from: Date, to: Date) -> [PerformanceMetricRecord] {
+        let descriptor = FetchDescriptor<PerformanceMetricRecord>(
+            predicate: #Predicate { $0.metricKey == key && $0.date >= from && $0.date <= to },
+            sortBy: [SortDescriptor(\.date, order: .forward)]
+        )
+        return (try? context.fetch(descriptor)) ?? []
     }
 }

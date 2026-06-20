@@ -142,17 +142,21 @@ final class CoachMemory: ObservableObject {
 
     // MARK: - Context summary for LLM
 
+    /// Performance metrics (FTP, CSS, …) are auto-synced from the data source and
+    /// are deliberately NOT requested here — the coach neither asks for nor edits
+    /// them. Only profile facts the athlete must supply are listed.
     var missingInfo: [String] {
         var items: [String] = []
         if userProfile.name == nil { items.append("athlete name") }
         if userProfile.maxHR == nil { items.append("maximum heart rate") }
-        if userProfile.ftp == nil { items.append("FTP (Functional Threshold Power)") }
         if userProfile.goals.isEmpty { items.append("training goals (e.g. triathlon, marathon)") }
         if weeklyStructure.maxHours == nil { items.append("maximum training hours per week") }
         return items
     }
 
-    var contextSummary: String {
+    /// `performance` is the latest-per-metric snapshot read from the DB
+    /// (`TrainingDataStore.latestSnapshot()`), the source of truth for FTP/CSS/etc.
+    func contextSummary(performance: PerformanceSnapshot) -> String {
         var parts = ["=== ATHLETE CONTEXT ==="]
 
         let missing = missingInfo
@@ -163,9 +167,14 @@ final class CoachMemory: ObservableObject {
 
         parts.append("\n--- Known information ---")
         if let name = userProfile.name { parts.append("Name: \(name)") }
-        if let ftp = userProfile.ftp { parts.append("FTP: \(ftp) W") }
+        if let ftp = performance.cyclingFTP { parts.append("FTP: \(ftp) W") }
+        if let runFTP = performance.runningFTP { parts.append("Running threshold power: \(runFTP) W") }
         if let maxHR = userProfile.maxHR { parts.append("Max HR: \(maxHR) bpm") }
-        if let css = userProfile.cssPace { parts.append("CSS: \(css)/100m") }
+        if let lthr = performance.lactateThrHR { parts.append("Lactate threshold HR: \(lthr) bpm") }
+        if let ltPace = performance.lactateThrPaceFormatted { parts.append("Lactate threshold pace: \(ltPace)/km") }
+        if let css = performance.cssPaceFormatted { parts.append("CSS: \(css)/100m") }
+        if let vo2 = performance.vo2maxRunning { parts.append("VO2max (running): \(vo2)") }
+        if let vo2c = performance.vo2maxCycling { parts.append("VO2max (cycling): \(vo2c)") }
         if !userProfile.goals.isEmpty { parts.append("Goals: \(userProfile.goals.joined(separator: ", "))") }
         if let maxH = weeklyStructure.maxHours { parts.append("Max weekly hours: \(maxH)") }
         if let rd = weeklyStructure.preferredRestDay { parts.append("Rest day: \(rd)") }
@@ -226,14 +235,20 @@ final class CoachMemory: ObservableObject {
 
 struct UserProfile {
     var name: String?
-    var ftp: Int?
     var maxHR: Int?
-    var cssPace: String?
     var goals: [String] = []
-    var vo2max: Double?
-    var weightKg: Double?
-    var lactateThrHR: Int?
     var coordinates: (lat: Double, lon: Double)?
+
+    // Legacy performance/biometric values. Performance metrics (FTP, CSS, VO2max,
+    // lactate-threshold HR, weight and HR/power zones) now live in the SwiftData
+    // time series (`PerformanceMetricRecord`); these are parsed from an existing
+    // `coach_memory.json` only so the one-time seed can migrate them into the DB,
+    // and are no longer written back (see `toDict()`).
+    var ftp: Int?
+    var cssPace: String?
+    var vo2max: Double?
+    var lactateThrHR: Int?
+    var weightKg: Double?
     var zones: [String: Any] = [:]
 
     init() {}
@@ -256,17 +271,14 @@ struct UserProfile {
     }
 
     func toDict() -> [String: Any] {
+        // Performance/biometric values (ftp, css, vo2max, lactate_threshold_hr,
+        // weight_kg, zones) intentionally omitted — they now live in the
+        // performance-metric time series (`PerformanceMetricRecord`).
         var d: [String: Any] = [
-            "goals": goals,
-            "zones": zones
+            "goals": goals
         ]
         if let v = name { d["name"] = v }
-        if let v = ftp { d["ftp"] = v }
         if let v = maxHR { d["max_hr"] = v }
-        if let v = cssPace { d["css_pace_per_100m"] = v }
-        if let v = vo2max { d["vo2max"] = v }
-        if let v = weightKg { d["weight_kg"] = v }
-        if let v = lactateThrHR { d["lactate_threshold_hr"] = v }
         if let c = coordinates { d["coordinates"] = ["lat": c.lat, "lon": c.lon] }
         return d
     }

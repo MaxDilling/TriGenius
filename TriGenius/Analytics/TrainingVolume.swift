@@ -13,6 +13,7 @@ import Foundation
 struct VolumeTotals: Sendable {
     var tss: Double = 0
     var distanceKm: Double = 0
+    var durationMinutes: Double = 0
     var sessions: Int = 0
 }
 
@@ -72,6 +73,7 @@ enum TrainingVolume {
             var totals = acc[ws]?[family] ?? VolumeTotals()
             totals.tss += TSS.value(for: record) ?? 0
             totals.distanceKm += record.distanceKm
+            totals.durationMinutes += record.durationMinutes
             totals.sessions += 1
             acc[ws]?[family] = totals
         }

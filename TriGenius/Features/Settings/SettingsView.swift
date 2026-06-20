@@ -4,8 +4,8 @@ import Combine
 // MARK: - Data Source
 
 enum DataSource: String, CaseIterable, Identifiable {
-    case appleHealth = "Apple Health"
     case garmin = "Garmin"
+    case appleHealth = "Apple Health"
 
     var id: String { rawValue }
     var displayName: String { rawValue }
@@ -80,6 +80,7 @@ struct SettingsView: View {
 
     @State private var showAPIKey = false
     @State private var showClearConfirm = false
+    @State private var showClearDataConfirm = false
 
     var body: some View {
         List {
@@ -122,9 +123,7 @@ struct SettingsView: View {
             // Athlete profile section
             Section("Athlete Profile") {
                 profileRow("Name", value: memory.userProfile.name)
-                profileRow("FTP", value: memory.userProfile.ftp.map { "\($0) W" })
                 profileRow("Max HR", value: memory.userProfile.maxHR.map { "\($0) bpm" })
-                profileRow("CSS", value: memory.userProfile.cssPace.map { "\($0)/100m" })
 
                 if !memory.userProfile.goals.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
@@ -156,6 +155,24 @@ struct SettingsView: View {
                 }
             }
 
+            // Performance metrics — auto-synced from the data source into the
+            // local time-series DB; read-only here.
+            Section {
+                let performance = TrainingDataStore.shared.latestSnapshot()
+                profileRow("FTP (cycling)", value: performance.cyclingFTP.map { "\($0) W" })
+                profileRow("Threshold power (run)", value: performance.runningFTP.map { "\($0) W" })
+                profileRow("CSS", value: performance.cssPaceFormatted.map { "\($0)/100m" })
+                profileRow("Lactate threshold HR", value: performance.lactateThrHR.map { "\($0) bpm" })
+                profileRow("Lactate threshold pace", value: performance.lactateThrPaceFormatted.map { "\($0)/km" })
+                profileRow("VO₂max (run)", value: performance.vo2maxRunning.map { String(format: "%.1f", $0) })
+                profileRow("VO₂max (cycling)", value: performance.vo2maxCycling.map { String(format: "%.1f", $0) })
+                profileRow("Weight", value: performance.weightKg.map { String(format: "%.1f kg", $0) })
+            } header: {
+                Text("Performance")
+            } footer: {
+                Text("Synced automatically from \(settings.dataSource == .garmin ? "Garmin" : "Apple Health"). History is kept in the local database.")
+            }
+
             // Training plan section
             if memory.trainingPlan.targetEvent != nil || memory.trainingPlan.currentPhase != nil {
                 Section("Training Plan") {
@@ -170,6 +187,23 @@ struct SettingsView: View {
             Section {
                 Toggle(isOn: $settings.debugMode) {
                     Label("Debug Mode", systemImage: "ladybug")
+                }
+                Button(role: .destructive) {
+                    showClearDataConfirm = true
+                } label: {
+                    Label("Clear local database", systemImage: "externaldrive.badge.xmark")
+                }
+                .confirmationDialog(
+                    "Clear local database?",
+                    isPresented: $showClearDataConfirm,
+                    titleVisibility: .visible
+                ) {
+                    Button("Clear", role: .destructive) {
+                        clearDatabase()
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Deletes all synced workouts, performance metrics and scheduled workouts from the local database and resets the sync state. Your profile and settings are kept; data re-syncs on next launch.")
                 }
             } header: {
                 Text("Developer")
@@ -280,6 +314,14 @@ struct SettingsView: View {
         memory.updateWeeklyStructure { $0 = WeeklyStructure() }
         memory.updatePreferences { $0 = AthletePreferences() }
         memory.updateTrainingPlan { $0 = TrainingPlan() }
+    }
+
+    /// Wipe the local time-series database (workouts, performance metrics,
+    /// scheduled workouts) and the last-sync watermarks. The coach profile and
+    /// app settings (`coach_memory.json`, UserDefaults UI prefs) are kept.
+    private func clearDatabase() {
+        TrainingDataStore.shared.deleteAllData()
+        DataSyncCoordinator.shared.resetSyncState()
     }
 }
 

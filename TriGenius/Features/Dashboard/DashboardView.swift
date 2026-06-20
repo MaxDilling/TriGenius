@@ -1,236 +1,477 @@
 import SwiftUI
-import Charts
+import Combine
 
 // MARK: - Dashboard View
 //
-// GOAL.md: visual weekly dashboard — PMC (CTL/ATL/TSB), per-discipline volume
-// (TSS + distance, this week + 6-week trend), and the recent-workout list
-// (tappable into a detail view). Reads from the local DB via DashboardViewModel.
+// The athlete's home screen. Card-based layout (see the design mockups):
+//   • Header: greeting + calendar shortcut.
+//   • Performance Insights: CTL / ATL / TSB stat cards → "Details" opens the
+//     full PMC chart (PerformanceInsightsView).
+//   • Weekly Target (Volume): per-discipline rings, actual vs. (dummy) target.
+//   • Agenda: today's workouts (future/scheduled workouts → see FEATURES.md).
+//
+// Everything reads from the local DB via DashboardViewModel (source-agnostic).
 
 struct DashboardView: View {
     let dataSource: DataSource
+    var athleteName: String?
+    let weeklyStructure: WeeklyStructure
+    let trainingPlan: TrainingPlan
+    let makeBackend: () -> LLMBackend
+
     @State private var viewModel = DashboardViewModel()
-    @State private var volumeMetric: VolumeMetric = .tss
+
+    private var context: DashboardContext {
+        DashboardContext(
+            dataSource: dataSource,
+            weeklyStructure: weeklyStructure,
+            trainingPlan: trainingPlan,
+            makeBackend: makeBackend
+        )
+    }
 
     var body: some View {
-        List {
-            if viewModel.isLoading && viewModel.recentWorkouts.isEmpty {
-                Section {
-                    HStack { Spacer(); ProgressView("Loading…"); Spacer() }
-                        .padding()
+        ScrollView {
+            VStack(spacing: 20) {
+                if viewModel.isLoading && viewModel.pmc == nil {
+                    ProgressView("Loading…").padding(.top, 60)
+                } else {
+                    header
+                    performanceInsights
+                    weeklyTarget
+                    agenda
+                }
+            }
+            .padding()
+        }
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
+        #endif
+        .refreshable { await viewModel.refresh(context: context) }
+        .task { await viewModel.loadInitialIfNeeded(context: context) }
+        // A reschedule/delete in the Calendar updates the local store but not
+        // this view's cached snapshot; reload (no network) when it changes.
+        .onReceive(NotificationCenter.default.publisher(for: .scheduledWorkoutsDidChange)) { _ in
+            Task { await viewModel.load(context: context) }
+        }
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Text(initials)
+                .font(.headline).foregroundStyle(.white)
+                .frame(width: 48, height: 48)
+                .background(Color.accentColor.gradient)
+                .clipShape(Circle())
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(Date.now.formatted(.dateTime.weekday(.wide).day().month(.wide).year())
+                    .uppercased())
+                    .font(.caption2).foregroundStyle(.secondary)
+                Text(greeting).font(.title2.bold())
+            }
+
+            Spacer()
+
+            NavigationLink {
+                CalendarView(dataSource: dataSource)
+            } label: {
+                Image(systemName: "calendar")
+                    .font(.title3)
+                    .frame(width: 44, height: 44)
+                    .background(Color.primary.opacity(0.06))
+                    .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var greeting: String {
+        if let name = athleteName, !name.isEmpty { return "Hi \(name)" }
+        return "Hi there"
+    }
+
+    private var initials: String {
+        guard let name = athleteName, !name.isEmpty else { return "🏃" }
+        let parts = name.split(separator: " ")
+        let letters = parts.prefix(2).compactMap { $0.first }
+        return String(letters).uppercased()
+    }
+
+    // MARK: Performance Insights
+
+    private var performanceInsights: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Performance Insights").font(.headline)
+                Spacer()
+                if let result = viewModel.pmc, result.snapshot != nil {
+                    NavigationLink {
+                        PerformanceInsightsView(result: result)
+                    } label: {
+                        HStack(spacing: 2) {
+                            Text("Details")
+                            Image(systemName: "chevron.right")
+                        }
+                        .font(.subheadline)
+                    }
+                }
+            }
+
+            if let s = viewModel.pmc?.snapshot {
+                HStack(spacing: 10) {
+                    PMCStatCard(title: "Fitness", caption: "CTL", dot: .blue,
+                                value: Int(s.ctl.rounded()), delta: viewModel.ctlDelta,
+                                status: fitnessStatus(delta: viewModel.ctlDelta))
+                    PMCStatCard(title: "Fatigue", caption: "ATL", dot: .pink,
+                                value: Int(s.atl.rounded()), delta: viewModel.atlDelta,
+                                status: fatigueStatus(atl: s.atl, ctl: s.ctl))
+                    PMCStatCard(title: "Form", caption: "TSB", dot: .orange,
+                                value: Int(s.tsb.rounded()), delta: viewModel.tsbDelta,
+                                status: formStatus(tsb: s.tsb))
                 }
             } else {
-                pmcSection
-                volumeSection
-                workoutsSection
-                healthSection
-            }
-        }
-        .navigationTitle("Dashboard")
-        .refreshable { await viewModel.refresh(dataSource: dataSource) }
-        .task { await viewModel.loadInitialIfNeeded(dataSource: dataSource) }
-    }
-
-    // MARK: PMC
-
-    @ViewBuilder
-    private var pmcSection: some View {
-        if let snapshot = viewModel.pmc?.snapshot {
-            Section("Fitness & Form (PMC)") {
-                HStack(spacing: 12) {
-                    pmcStat("Fitness", value: snapshot.ctl, caption: "CTL", color: .blue)
-                    pmcStat("Fatigue", value: snapshot.atl, caption: "ATL", color: .orange)
-                    pmcStat("Form", value: snapshot.tsb, caption: "TSB", color: snapshot.tsb < 0 ? .red : .green)
-                }
-                .padding(.vertical, 4)
-
-                if let points = viewModel.pmc?.points, points.count > 1 {
-                    Chart {
-                        ForEach(points) { p in
-                            LineMark(x: .value("Date", p.date), y: .value("CTL", p.ctl), series: .value("Series", "Fitness"))
-                                .foregroundStyle(Color.blue)
-                            LineMark(x: .value("Date", p.date), y: .value("ATL", p.atl), series: .value("Series", "Fatigue"))
-                                .foregroundStyle(Color.orange)
-                        }
-                    }
-                    .chartForegroundStyleScale(["Fitness": Color.blue, "Fatigue": Color.orange])
-                    .chartYScale(domain: .automatic(includesZero: true))
-                    .frame(height: 160)
-                    .padding(.top, 4)
-                }
+                Text("No training-load data yet. Sync your activities to see CTL / ATL / TSB.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .dashCard()
             }
         }
     }
 
-    private func pmcStat(_ title: String, value: Double, caption: String, color: Color) -> some View {
-        VStack(spacing: 2) {
-            Text("\(Int(value.rounded()))")
-                .font(.title2).fontWeight(.semibold)
-                .foregroundStyle(color)
-            Text(title).font(.caption)
-            Text(caption).font(.caption2).foregroundStyle(.secondary)
+    private func fitnessStatus(delta: Int) -> String {
+        if delta > 1 { return "Productive build" }
+        if delta < -1 { return "Declining" }
+        return "Maintaining"
+    }
+    private func fatigueStatus(atl: Double, ctl: Double) -> String {
+        atl > ctl ? "High load" : "Moderate load"
+    }
+    private func formStatus(tsb: Double) -> String {
+        switch tsb {
+        case ..<(-30):  return "Overreaching"
+        case ..<(-10):  return "Optimal training"
+        case ..<5:      return "Grey zone"
+        case ..<20:     return "Fresh"
+        default:        return "Very fresh"
         }
-        .frame(maxWidth: .infinity)
     }
 
-    // MARK: Volume per discipline
+    // MARK: Weekly Target (Volume)
 
-    private var volumeSection: some View {
-        Section {
-            Picker("Metric", selection: $volumeMetric) {
-                ForEach(VolumeMetric.allCases) { m in Text(m.label).tag(m) }
+    private var weeklyTarget: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Weekly Target (Volume)").font(.headline)
+                Spacer()
+                Text("This week").font(.caption).foregroundStyle(.secondary)
             }
-            .pickerStyle(.segmented)
 
-            // This-week summary per discipline.
-            if let week = viewModel.currentWeek {
+            HStack(alignment: .top, spacing: 8) {
                 ForEach(SportFamily.triathlon) { family in
-                    let t = week.totals(for: family)
-                    HStack {
-                        Label(family.displayName, systemImage: family.icon)
-                            .foregroundStyle(family.color)
-                        Spacer()
-                        Text(volumeMetric.format(t))
-                            .fontWeight(.medium)
-                            .foregroundStyle(.secondary)
-                    }
+                    let totals = viewModel.currentWeek?.totals(for: family) ?? VolumeTotals()
+                    let target = viewModel.target(for: family)
+                    VolumeRing(family: family,
+                               actualMinutes: totals.durationMinutes,
+                               targetMinutes: target.durationMinutes,
+                               tss: totals.tss)
                 }
             }
 
-            // 6-week trend, grouped bars per discipline.
-            if viewModel.weeklyBuckets.contains(where: { !$0.totals.isEmpty }) {
-                Chart {
-                    ForEach(viewModel.weeklyBuckets) { bucket in
-                        ForEach(SportFamily.triathlon) { family in
-                            BarMark(
-                                x: .value("Week", bucket.weekStart, unit: .weekOfYear),
-                                y: .value(volumeMetric.label, volumeMetric.value(bucket.totals(for: family)))
-                            )
-                            .foregroundStyle(by: .value("Sport", family.displayName))
-                            .position(by: .value("Sport", family.displayName))
-                        }
-                    }
-                }
-                .chartForegroundStyleScale([
-                    SportFamily.swim.displayName: SportFamily.swim.color,
-                    SportFamily.bike.displayName: SportFamily.bike.color,
-                    SportFamily.run.displayName: SportFamily.run.color
-                ])
-                .frame(height: 180)
-                .padding(.top, 4)
+            insightBox
+        }
+        .dashCard()
+    }
+
+    // AI-generated insight (FEATURES.md "AI-generated dashboard insight"), with a
+    // heuristic fallback surfaced instantly while the model line is generated.
+    @ViewBuilder private var insightBox: some View {
+        if let insight = viewModel.insight, !insight.isEmpty {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "sparkles")
+                    .foregroundStyle(.orange)
+                Text(insight)
+                    .font(.footnote)
             }
-        } header: {
-            Text("Volume per discipline")
-        } footer: {
-            Text("This week and the previous 5 weeks. TSS is currently sourced from Garmin; HealthKit activities have no TSS.")
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.04)))
         }
     }
 
-    // MARK: Recent workouts
+    // MARK: Agenda
 
-    @ViewBuilder
-    private var workoutsSection: some View {
-        if !viewModel.recentWorkouts.isEmpty {
-            Section("Recent workouts") {
-                ForEach(viewModel.recentWorkouts) { record in
+    private var agenda: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            Text("Agenda").font(.headline)
+
+            if viewModel.agendaDays.isEmpty {
+                Text("No workouts logged or planned.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .dashCard()
+            } else {
+                ForEach(viewModel.agendaDays) { day in
+                    agendaRow(day)
+                }
+            }
+        }
+    }
+
+    /// One agenda day: the date stacked on the left, its workout cards on the right.
+    @ViewBuilder private func agendaRow(_ day: AgendaDay) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            dateColumn(day.date)
+
+            VStack(spacing: 12) {
+                ForEach(day.completed) { record in
                     NavigationLink {
                         TrainingDetailView(record: record)
                     } label: {
-                        ActivityRow(record: record)
+                        AgendaCard(record: record)
                     }
+                    .buttonStyle(.plain)
+                }
+                ForEach(day.planned) { planned in
+                    PlannedAgendaCard(workout: planned)
                 }
             }
         }
     }
 
-    // MARK: HealthKit recovery metrics (optional)
-
-    @ViewBuilder
-    private var healthSection: some View {
-        if let metrics = viewModel.healthMetrics {
-            Section("Recovery (last 7 days)") {
-                metricRow("Steps (daily avg)", value: "\(Int(metrics.dailySteps))", icon: "figure.walk", color: .green)
-                if let hr = metrics.averageHRbpm {
-                    metricRow("Heart rate (avg)", value: "\(Int(hr)) bpm", icon: "heart", color: .red)
-                }
-                if let hrv = metrics.latestHRVms {
-                    metricRow("HRV (latest)", value: "\(Int(hrv)) ms", icon: "waveform.path.ecg", color: .blue)
-                }
-                metricRow("Sleep (daily avg)", value: String(format: "%.1f h", metrics.avgSleepHours), icon: "moon.fill", color: .indigo)
-                metricRow("Active energy (daily avg)", value: "\(Int(metrics.avgActiveEnergyKcal)) kcal", icon: "flame.fill", color: .orange)
-            }
+    private func dateColumn(_ date: Date) -> some View {
+        let isToday = Calendar.current.isDateInToday(date)
+        return VStack(spacing: 2) {
+            Text(date.formatted(.dateTime.weekday(.abbreviated)).uppercased())
+                .font(.caption).foregroundStyle(.secondary)
+            Text(date.formatted(.dateTime.day()))
+                .font(.title.bold())
+                .foregroundStyle(isToday ? Color.accentColor : .primary)
         }
-    }
-
-    private func metricRow(_ label: String, value: String, icon: String, color: Color) -> some View {
-        HStack {
-            Label(label, systemImage: icon).foregroundStyle(color)
-            Spacer()
-            Text(value).foregroundStyle(.secondary).fontWeight(.medium)
-        }
+        .frame(width: 40)
+        .padding(.top, 14)
     }
 }
 
-// MARK: - Volume Metric
+// MARK: - PMC Stat Card
 
-enum VolumeMetric: String, CaseIterable, Identifiable {
-    case tss
-    case distance
-
-    var id: String { rawValue }
-    var label: String { self == .tss ? "TSS" : "Distance" }
-
-    func value(_ totals: VolumeTotals) -> Double {
-        self == .tss ? totals.tss : totals.distanceKm
-    }
-
-    func format(_ totals: VolumeTotals) -> String {
-        switch self {
-        case .tss:
-            return totals.tss > 0 ? "\(Int(totals.tss.rounded())) TSS" : "—"
-        case .distance:
-            return totals.distanceKm > 0 ? String(format: "%.1f km", totals.distanceKm) : "—"
-        }
-    }
-}
-
-// MARK: - Activity Row
-
-private struct ActivityRow: View {
-    let record: ActivityRecord
+private struct PMCStatCard: View {
+    let title: String
+    let caption: String
+    let dot: Color
+    let value: Int
+    let delta: Int
+    let status: String
 
     var body: some View {
-        let family = SportFamily(sportKey: record.sport)
-        HStack(spacing: 12) {
-            Image(systemName: family.icon)
-                .font(.title3)
-                .foregroundStyle(.white)
-                .frame(width: 36, height: 36)
-                .background(family.color.gradient)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(record.name).font(.headline).lineLimit(1)
-                Text(record.date, style: .date)
-                    .font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 5) {
+                Circle().fill(dot).frame(width: 7, height: 7)
+                Text(title).font(.caption).foregroundStyle(.secondary)
+                Text("(\(caption))").font(.caption2).foregroundStyle(.tertiary)
             }
-
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("\(Int(record.durationMinutes)) min")
-                    .font(.subheadline).fontWeight(.medium)
-                if let tss = record.tss {
-                    Text("\(Int(tss.rounded())) TSS")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else if record.distanceKm > 0 {
-                    Text(String(format: "%.1f km", record.distanceKm))
-                        .font(.caption).foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("\(value)").font(.title.bold())
+                if delta != 0 {
+                    HStack(spacing: 1) {
+                        Image(systemName: delta > 0 ? "arrow.up" : "arrow.down")
+                        Text("\(abs(delta))")
+                    }
+                    .font(.caption2).foregroundStyle(dot)
                 }
             }
+            Text(status).font(.caption2).foregroundStyle(dot)
         }
-        .padding(.vertical, 2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .dashCard(padding: 12)
     }
+}
+
+// MARK: - Volume Ring
+
+private struct VolumeRing: View {
+    let family: SportFamily
+    let actualMinutes: Double
+    let targetMinutes: Double
+    let tss: Double
+
+    private var fraction: Double {
+        targetMinutes > 0 ? min(actualMinutes / targetMinutes, 1) : 0
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            ZStack {
+                Circle().stroke(Color.primary.opacity(0.10), lineWidth: 7)
+                Circle()
+                    .trim(from: 0, to: fraction)
+                    .stroke(family.color, style: StrokeStyle(lineWidth: 7, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                Image(systemName: family.icon).font(.title3).foregroundStyle(family.color)
+            }
+            .frame(width: 72, height: 72)
+
+            VStack(spacing: 1) {
+                Text(durationHM(actualMinutes)).font(.subheadline.weight(.semibold))
+                Text("/ \(durationHM(targetMinutes))").font(.caption2).foregroundStyle(.secondary)
+                Text("\(Int(tss.rounded())) TSS")
+                    .font(.caption.weight(.semibold)).foregroundStyle(family.color)
+                    .padding(.top, 2)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+// MARK: - Agenda Card
+
+private struct AgendaCard: View {
+    let record: ActivityRecord
+
+    private var family: SportFamily { SportFamily(sportKey: record.sport) }
+    private var details: [String: Any] {
+        guard let data = record.detailsJSON.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return [:] }
+        return obj
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            AgendaWorkoutHeader(icon: family.icon, color: family.color,
+                                title: record.name, summary: summaryLine)
+
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "checkmark")
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(.green)
+                    .frame(width: 28, height: 28)
+                    .background(Circle().fill(Color.green.opacity(0.15)))
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(timeLine).font(.subheadline).foregroundStyle(.secondary)
+                    if let metrics = metricsLine {
+                        Text(metrics).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+            }
+            .padding(.leading, 2)
+        }
+        .dashCard()
+    }
+
+    private var summaryLine: String {
+        var parts = [durationHM(record.durationMinutes).uppercased()]
+        if let tss = record.tss { parts.append("\(Int(tss.rounded())) TSS") }
+        return parts.joined(separator: "  •  ")
+    }
+
+    /// Start time and elapsed duration, e.g. "07:30  –  1h 15m".
+    private var timeLine: String {
+        let duration = durationHM(record.durationMinutes)
+        if let time = details["time"] as? String, !time.isEmpty {
+            return "\(time)  –  \(duration)"
+        }
+        return duration
+    }
+
+    /// Distance and the headline intensity metric (power, else HR).
+    private var metricsLine: String? {
+        var parts: [String] = []
+        if record.distanceKm > 0 { parts.append(String(format: "%.1f KM", record.distanceKm)) }
+        if let power = avgPower { parts.append("\(power)W") }
+        else if let hr = details["avg_hr"] as? Int { parts.append("\(hr) BPM") }
+        return parts.isEmpty ? nil : parts.joined(separator: "  |  ")
+    }
+
+    private var avgPower: Int? {
+        for key in ["cycling", "running"] {
+            if let sub = details[key] as? [String: Any], let p = sub["avg_power_w"] as? Int { return p }
+        }
+        return nil
+    }
+}
+
+// MARK: - Planned Agenda Card
+
+/// A planned (not-yet-completed) workout in the Agenda — shows its target rather
+/// than achieved metrics, the way TrainingPeaks previews a scheduled session.
+private struct PlannedAgendaCard: View {
+    let workout: ScheduledWorkoutRecord
+
+    private var family: SportFamily { SportFamily(sportKey: workout.sport) }
+    private var isEstimatedTSS: Bool { workout.targetTSS == nil }
+    private var targetTSS: Double {
+        workout.targetTSS ?? WeeklyTargets.estimatedTSS(family: family, minutes: workout.targetDurationMinutes)
+    }
+
+    var body: some View {
+        AgendaWorkoutHeader(icon: family.icon, color: family.color,
+                            title: workout.name, summary: summaryLine)
+            .dashCard()
+    }
+
+    private var summaryLine: String {
+        var parts: [String] = []
+        if workout.targetDurationMinutes > 0 { parts.append(durationHM(workout.targetDurationMinutes).uppercased()) }
+        if targetTSS > 0 {
+            // A "~" marks an estimated TSS (no explicit target from the source).
+            parts.append("\(isEstimatedTSS ? "~" : "")\(Int(targetTSS.rounded())) TSS")
+        }
+        return parts.isEmpty ? "Target not set" : parts.joined(separator: "  •  ")
+    }
+}
+
+// MARK: - Agenda Workout Header
+
+/// The shared top row of an Agenda card: sport icon, workout name, and a
+/// "duration • TSS" summary line. Used by both completed and planned cards.
+private struct AgendaWorkoutHeader: View {
+    let icon: String
+    let color: Color
+    let title: String
+    let summary: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon)
+                .font(.title3)
+                .foregroundStyle(color)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.headline).lineLimit(1)
+                Text(summary).font(.subheadline).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+    }
+}
+
+// MARK: - Helpers
+
+/// Format minutes as "1h 05m" (or "45m" under an hour).
+func durationHM(_ minutes: Double) -> String {
+    let total = Int(minutes.rounded())
+    let h = total / 60, m = total % 60
+    return h > 0 ? "\(h)h \(String(format: "%02d", m))m" : "\(m)m"
+}
+
+// MARK: - Card styling
+
+private struct DashCard: ViewModifier {
+    var padding: CGFloat = 16
+    func body(content: Content) -> some View {
+        content
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.05)))
+    }
+}
+
+extension View {
+    func dashCard(padding: CGFloat = 16) -> some View { modifier(DashCard(padding: padding)) }
 }
 
 // MARK: - SportFamily presentation
@@ -249,7 +490,7 @@ extension SportFamily {
     var color: Color {
         switch self {
         case .swim: return .cyan
-        case .bike: return .blue
+        case .bike: return .purple
         case .run: return .orange
         case .strength: return .gray
         case .other: return .green

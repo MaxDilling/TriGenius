@@ -117,8 +117,6 @@ final class ProfileToolHandler: CoachToolHandler {
                     "type": "object",
                     "properties": [
                         "name": ["type": "string", "description": "Athlete name."],
-                        "ftp": ["type": "integer", "description": "Cycling FTP in watts."],
-                        "max_hr": ["type": "integer", "description": "Maximum heart rate in bpm."],
                         "add_goal": ["type": "string", "description": "Goal to add."],
                         "remove_goal": ["type": "string", "description": "Goal to remove."],
                         "max_weekly_hours": ["type": "integer", "description": "Maximum training hours per week."],
@@ -180,7 +178,7 @@ final class ProfileToolHandler: CoachToolHandler {
         case "update_athlete_profile":
             return updateProfile(arguments: arguments)
         case "get_athlete_profile":
-            return memory.contextSummary
+            return memory.contextSummary(performance: TrainingDataStore.shared.latestSnapshot())
         case "read_knowledge":
             let topic = arguments["topic"] as? String ?? ""
             return knowledgeSummary(for: topic)
@@ -195,14 +193,6 @@ final class ProfileToolHandler: CoachToolHandler {
         if let name = arguments["name"] as? String {
             memory.updateProfile { $0.name = name }
             updates.append("name → \(name)")
-        }
-        if let ftp = arguments["ftp"] as? Int {
-            memory.updateProfile { $0.ftp = ftp }
-            updates.append("FTP → \(ftp)W")
-        }
-        if let maxHR = arguments["max_hr"] as? Int {
-            memory.updateProfile { $0.maxHR = maxHR }
-            updates.append("max HR → \(maxHR) bpm")
         }
         if let goal = arguments["add_goal"] as? String {
             memory.updateProfile { p in
@@ -300,19 +290,30 @@ final class ProfileToolHandler: CoachToolHandler {
         return "Profile updated: \(updates.joined(separator: ", "))"
     }
 
+    /// Maps a topic to its knowledge file (in `Assets/Knowledge/`) and the
+    /// embedded fallback used when the bundled file can't be loaded.
+    private static let knowledgeFiles: [String: (resource: String, ext: String, fallback: String)] = [
+        "cycling":  ("CYCLING",  "md", CoachKnowledge.cycling),
+        "running":  ("RUNNING",  "md", CoachKnowledge.running),
+        "swimming": ("SWIMMING", "md", CoachKnowledge.swimming),
+        "injuries": ("INJURIES", "MD", CoachKnowledge.injuries)
+    ]
+
     private func knowledgeSummary(for topic: String) -> String {
-        switch topic {
-        case "cycling":
-            return CoachKnowledge.cycling
-        case "running":
-            return CoachKnowledge.running
-        case "swimming":
-            return CoachKnowledge.swimming
-        case "injuries":
-            return CoachKnowledge.injuries
-        default:
-            return "Unknown topic: \(topic). Available: cycling, running, swimming, injuries."
+        guard let entry = Self.knowledgeFiles[topic] else {
+            let available = Self.knowledgeFiles.keys.sorted().joined(separator: ", ")
+            return "Unknown topic: \(topic). Available: \(available)."
         }
+
+        // Synchronized groups copy the .md files into the bundle's resource
+        // root (flattened), so look them up by name without a subdirectory.
+        if let url = Bundle.main.url(forResource: entry.resource, withExtension: entry.ext),
+           let contents = try? String(contentsOf: url, encoding: .utf8) {
+            return contents
+        }
+
+        // Fall back to the embedded constant if the file is missing.
+        return entry.fallback
     }
 }
 
@@ -512,18 +513,27 @@ final class GarminToolHandler: CoachToolHandler {
                 endDate: arguments["end_date"] as? String ?? ""
             )
         case "delete_workout":
-            return await service.deleteWorkout(workoutId: stringArg(arguments["workout_id"]) ?? "")
+            let workoutId = stringArg(arguments["workout_id"]) ?? ""
+            let result = await service.deleteWorkout(workoutId: workoutId)
+            if result.hasPrefix("✓") {
+                TrainingDataStore.shared.deleteScheduledWorkout(id: "garmin:\(workoutId)")
+            }
+            return result
         case "add_workout":
             guard let workoutData = arguments["workout_data"] as? [String: Any] else {
                 return "✗ Error: workout_data is missing or invalid."
             }
-            return await service.addWorkout(workoutData: workoutData, date: arguments["date"] as? String ?? "")
+            let result = await service.addWorkout(workoutData: workoutData, date: arguments["date"] as? String ?? "")
+            ingestAddedWorkout(result, workoutData: workoutData)
+            return result
         case "move_workout":
-            return await service.moveWorkout(
+            let result = await service.moveWorkout(
                 fromDate: arguments["from_date"] as? String ?? "",
                 toDate: arguments["to_date"] as? String ?? "",
                 workoutId: stringArg(arguments["workout_id"])
             )
+            applyMovedWorkout(result)
+            return result
         case "get_training_status":
             return await service.getTrainingStatus(targetDate: arguments["target_date"] as? String ?? "")
         case "sync_user_settings":
@@ -550,18 +560,61 @@ final class GarminToolHandler: CoachToolHandler {
         return nil
     }
 
+    // MARK: - Local scheduled-workout mirror
+    //
+    // Keep the local scheduled-workout store in step with the coach's Garmin
+    // scheduling actions so the dashboard/calendar update immediately, without
+    // waiting for the next full calendar sync.
+
+    /// The JSON payload embedded in a "✓ message\n<json>" tool result.
+    private func resultData(_ result: String) -> [String: Any]? {
+        guard result.hasPrefix("✓"), let brace = result.firstIndex(of: "{") else { return nil }
+        guard let data = String(result[brace...]).data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return obj
+    }
+
+    /// Ingest a just-created Garmin workout locally (needs the id Garmin assigned).
+    private func ingestAddedWorkout(_ result: String, workoutData: [String: Any]) {
+        guard let data = resultData(result),
+              let workoutId = data["workout_id"], !(workoutId is NSNull),
+              let dateStr = data["date"] as? String,
+              let date = DataSyncCoordinator.ymd.date(from: dateStr) else { return }
+        let minutes = (workoutData["duration_minutes"] as? NSNumber)?.doubleValue ?? 0
+        TrainingDataStore.shared.ingestScheduled([
+            IngestedScheduledWorkout(
+                id: "garmin:\(workoutId)",
+                source: "garmin",
+                date: date,
+                sport: data["sport"] as? String ?? "other",
+                name: data["name"] as? String ?? workoutData["name"] as? String ?? "Scheduled Workout",
+                targetDurationMinutes: minutes,
+                targetTSS: nil,
+                notes: workoutData["description"] as? String ?? ""
+            )
+        ])
+    }
+
+    /// Reflect a Garmin move locally by shifting the record to its new date.
+    private func applyMovedWorkout(_ result: String) {
+        guard let data = resultData(result),
+              let workoutId = data["workout_id"], !(workoutId is NSNull),
+              let toStr = data["to_date"] as? String,
+              let date = DataSyncCoordinator.ymd.date(from: toStr) else { return }
+        TrainingDataStore.shared.moveScheduledWorkout(id: "garmin:\(workoutId)", to: date)
+    }
+
     // MARK: - Persist synced settings
 
     private func applySettingsToMemory(_ settings: [String: Any]) {
-        memory.updateProfile { profile in
-            if let ftp = settings["cycling_ftp"] as? Int { profile.ftp = ftp }
-            if let maxHR = settings["max_hr"] as? Int { profile.maxHR = maxHR }
-            if let css = settings["css_pace_per_100m"] as? String { profile.cssPace = css }
-            if let lthr = settings["lactate_threshold_hr"] as? Int { profile.lactateThrHR = lthr }
-            if let vo2 = (settings["vo2max_running"] as? NSNumber)?.doubleValue { profile.vo2max = vo2 }
-            if let weight = (settings["weight_kg"] as? NSNumber)?.doubleValue { profile.weightKg = weight }
-            if let zones = settings["hr_zones"] { profile.zones["hr_zones"] = zones }
-            if let pz = settings["power_zones"] { profile.zones["power_zones"] = pz }
+        // Performance/biometric values (FTP, CSS, LTHR, VO2max, weight, HR/power
+        // zones) go into the DB time series. Only max HR — which the coach may
+        // also ask the athlete for — stays in memory.
+        TrainingDataStore.shared.ingestMetrics(
+            DataSyncCoordinator.metrics(fromGarminSettings: settings, date: Date())
+        )
+        if let maxHR = settings["max_hr"] as? Int {
+            memory.updateProfile { $0.maxHR = maxHR }
         }
     }
 }

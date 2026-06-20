@@ -453,11 +453,12 @@ final class CoachBrain {
         let time = Self.timeFormatter.string(from: now)
 
         let pmc = ProactiveCoach.promptSection(from: PMCEngine.current().snapshot)
+        let performance = TrainingDataStore.shared.latestSnapshot()
 
         return SYSTEM_PROMPT_TEMPLATE
             .replacingOccurrences(of: "{current_date}", with: date)
             .replacingOccurrences(of: "{current_time}", with: time)
-            .replacingOccurrences(of: "{athlete_context}", with: memory.contextSummary)
+            .replacingOccurrences(of: "{athlete_context}", with: memory.contextSummary(performance: performance))
             .replacingOccurrences(of: "{pmc_context}", with: pmc)
             .replacingOccurrences(of: "{data_source_section}", with: dataSourceSection)
     }

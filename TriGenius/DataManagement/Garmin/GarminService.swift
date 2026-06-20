@@ -523,29 +523,42 @@ actor GarminService {
         let source = GarminTransform.formatDate(fromDate)
         let target = GarminTransform.formatDate(toDate)
         do {
+            // Resolve the scheduled occurrence on the source date via the raw
+            // calendar service. We need BOTH the workout template id (to schedule
+            // it on the target date) and the calendar item's `id` — the schedule
+            // occurrence id — so we can delete the OLD occurrence. Garmin's
+            // POST /schedule is additive (it adds an occurrence, it does not move
+            // one), so without deleting the source-date schedule the workout
+            // lingers on both days and the next calendar sync snaps it back to the
+            // earlier date.
             var resolvedId = workoutId
+            var scheduleId: String?
             var workoutName = workoutId.map { "Workout \($0)" } ?? ""
-            if resolvedId == nil {
-                // Resolve a movable workout on the source date via the raw calendar service.
-                let parts = source.split(separator: "-")
-                var candidates: [[String: Any]] = []
-                if parts.count >= 2, let year = Int(parts[0]), let month = Int(parts[1]),
-                   let calData = try? await client.connectapi("/calendar-service/year/\(year)/month/\(month - 1)") as? [String: Any],
-                   let items = calData["calendarItems"] as? [[String: Any]] {
-                    candidates = items.filter {
-                        ($0["date"] as? String) == source && ($0["itemType"] as? String) == "workout" && $0["workoutId"] != nil
-                    }
+            let parts = source.split(separator: "-")
+            if parts.count >= 2, let year = Int(parts[0]), let month = Int(parts[1]),
+               let calData = try? await client.connectapi("/calendar-service/year/\(year)/month/\(month - 1)") as? [String: Any],
+               let items = calData["calendarItems"] as? [[String: Any]] {
+                let candidates = items.filter {
+                    ($0["date"] as? String) == source
+                        && ($0["itemType"] as? String) == "workout"
+                        && $0["workoutId"] != nil
+                        && (workoutId == nil || "\($0["workoutId"]!)" == workoutId)
                 }
-                guard let first = candidates.first, let wid = first["workoutId"] else {
-                    return resultString(success: false, data: nil, message: "No movable workouts found on \(source)")
+                if let first = candidates.first, let wid = first["workoutId"] {
+                    resolvedId = "\(wid)"
+                    scheduleId = first["id"].map { "\($0)" }
+                    workoutName = first["title"] as? String ?? workoutName
                 }
-                resolvedId = "\(wid)"
-                workoutName = first["title"] as? String ?? "Scheduled Workout"
             }
             guard let resolvedId else {
                 return resultString(success: false, data: nil, message: "No movable workouts found on \(source)")
             }
+            // Schedule on the new date first; only then drop the old occurrence,
+            // so a failure to schedule never leaves the workout unscheduled.
             try await client.scheduleWorkout(workoutId: resolvedId, date: target)
+            if let scheduleId {
+                try? await client.unscheduleWorkout(scheduleId: scheduleId)
+            }
             let data: [String: Any] = ["workout_id": resolvedId, "workout_name": workoutName, "from_date": source, "to_date": target]
             return resultString(success: true, data: data, message: "Moved '\(workoutName)' from \(source) to \(target)")
         } catch {
@@ -567,9 +580,15 @@ actor GarminService {
             }
 
             if let lactate = try? await client.getLactateThreshold() {
-                if let speedHR = lactate["speed_and_heart_rate"] as? [String: Any],
-                   let hr = (speedHR["heartRate"] as? NSNumber)?.intValue {
-                    settings["lactate_threshold_hr"] = hr
+                if let speedHR = lactate["speed_and_heart_rate"] as? [String: Any] {
+                    if let hr = (speedHR["heartRate"] as? NSNumber)?.intValue {
+                        settings["lactate_threshold_hr"] = hr
+                    }
+                    // Running threshold speed (m/s) → pace per km ("m:ss").
+                    if let speed = (speedHR["speed"] as? NSNumber)?.doubleValue,
+                       let pace = GarminTransform.speedToPace(speed, distanceM: 1000) {
+                        settings["lactate_threshold_pace"] = pace
+                    }
                 }
                 if let power = lactate["power"] as? [String: Any],
                    let runFtp = (power["functionalThresholdPower"] as? NSNumber)?.intValue {
@@ -618,6 +637,7 @@ actor GarminService {
             let message = "Retrieved settings from Garmin: "
                 + "FTP=\(settings["cycling_ftp"].map { "\($0)" } ?? "N/A")W, "
                 + "LTHR=\(settings["lactate_threshold_hr"].map { "\($0)" } ?? "N/A") bpm, "
+                + "LT pace=\(settings["lactate_threshold_pace"].map { "\($0)" } ?? "N/A")/km, "
                 + "VO2max=\(settings["vo2max_running"].map { "\($0)" } ?? "N/A"), "
                 + "CSS=\(settings["css_pace_per_100m"].map { "\($0)" } ?? "N/A")"
             return (resultString(success: true, data: settings, message: message), settings)

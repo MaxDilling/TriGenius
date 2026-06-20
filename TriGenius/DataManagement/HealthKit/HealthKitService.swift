@@ -31,6 +31,9 @@ final class HealthKitService {
             HKQuantityType(.distanceSwimming),
             HKQuantityType(.oxygenSaturation),
             HKQuantityType(.respiratoryRate),
+            HKQuantityType(.cyclingFunctionalThresholdPower),
+            HKQuantityType(.vo2Max),
+            HKQuantityType(.bodyMass),
             HKCategoryType(.sleepAnalysis)
         ]
 
@@ -53,11 +56,26 @@ final class HealthKitService {
                 sortDescriptors: [sort]
             ) { _, samples, error in
                 if let error { continuation.resume(throwing: error); return }
-                let workouts = (samples as? [HKWorkout] ?? []).map(WorkoutSummary.init)
+                let workouts = (samples as? [HKWorkout] ?? [])
+                    .filter { !HealthKitService.isGarmin($0) }
+                    .map(WorkoutSummary.init)
                 continuation.resume(returning: workouts)
             }
             store.execute(query)
         }
+    }
+
+    // MARK: - Garmin source filtering
+
+    /// Garmin Connect mirrors every workout it records into Apple Health, so when
+    /// Apple Health is the active source those sessions show up as duplicates of
+    /// the ones the Garmin integration already provides. Drop anything authored by
+    /// the Garmin Connect app on import. Matches by source name ("Connect") and by
+    /// bundle identifier ("com.garmin.connect.mobile") to be robust to either.
+    private static func isGarmin(_ w: HKWorkout) -> Bool {
+        let source = w.sourceRevision.source
+        return source.bundleIdentifier.lowercased().contains("garmin")
+            || source.name.caseInsensitiveCompare("Connect") == .orderedSame
     }
 
     // MARK: - Daily Health Metrics
@@ -213,6 +231,43 @@ final class HealthKitService {
                 if let error { continuation.resume(throwing: error); return }
                 let value = (samples?.first as? HKQuantitySample)
                     .map { $0.quantity.doubleValue(for: HKUnit.secondUnit(with: .milli)) }
+                continuation.resume(returning: value)
+            }
+            store.execute(query)
+        }
+    }
+
+    // MARK: - Performance metrics
+
+    /// Fetch the latest performance values Apple Health exposes (FTP, VO2max).
+    /// CSS is not available in HealthKit, so it is simply omitted.
+    func fetchPerformanceMetrics() async throws -> [IngestedMetric] {
+        var out: [IngestedMetric] = []
+        let now = Date()
+        if let ftp = try await fetchLatestQuantity(
+            HKQuantityType(.cyclingFunctionalThresholdPower), unit: .watt()
+        ), ftp > 0 {
+            out.append(IngestedMetric(metricKey: "cycling_ftp", value: ftp, unit: "watts", source: "healthkit", date: now))
+        }
+        let vo2Unit = HKUnit.literUnit(with: .milli).unitDivided(by: .gramUnit(with: .kilo).unitMultiplied(by: .minute()))
+        if let vo2 = try await fetchLatestQuantity(HKQuantityType(.vo2Max), unit: vo2Unit), vo2 > 0 {
+            out.append(IngestedMetric(metricKey: "vo2max_running", value: vo2, unit: "ml_kg_min", source: "healthkit", date: now))
+        }
+        if let weight = try await fetchLatestQuantity(HKQuantityType(.bodyMass), unit: .gramUnit(with: .kilo)), weight > 0 {
+            out.append(IngestedMetric(metricKey: "weight_kg", value: weight, unit: "kg", source: "healthkit", date: now))
+        }
+        return out
+    }
+
+    /// Most recent sample for `type`, in `unit`, or nil if none.
+    private func fetchLatestQuantity(_ type: HKQuantityType, unit: HKUnit) async throws -> Double? {
+        let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: type, predicate: nil, limit: 1, sortDescriptors: [sort]
+            ) { _, samples, error in
+                if let error { continuation.resume(throwing: error); return }
+                let value = (samples?.first as? HKQuantitySample)?.quantity.doubleValue(for: unit)
                 continuation.resume(returning: value)
             }
             store.execute(query)

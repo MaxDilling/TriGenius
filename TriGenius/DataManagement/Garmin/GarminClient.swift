@@ -147,18 +147,32 @@ actor GarminClient {
 
     /// Best-effort port of get_lactate_threshold(latest=True): returns the
     /// combined speed/heart-rate and power dictionaries the service expects.
+    ///
+    /// Garmin's `/latestLactateThreshold` returns a *list* of near-identical
+    /// dicts — one carries `speed`, one the heart rate — so we merge them. The HR
+    /// field also appears under Garmin's historical typo key `hearRate` (missing
+    /// "t"); reading only `heartRate` is why LTHR previously never updated.
     func getLactateThreshold() async throws -> [String: Any]? {
-        let speedHR = try await connectapi("/biometric-service/biometric/latestLactateThreshold")
+        let response = try await connectapi("/biometric-service/biometric/latestLactateThreshold")
         var heartRate: Int?
-        if let entries = speedHR as? [[String: Any]] {
-            for entry in entries {
-                if let hr = (entry["heartRate"] as? NSNumber)?.intValue { heartRate = hr }
+        var speed: Double?
+        func absorb(_ entry: [String: Any]) {
+            // Prefer the correct key; fall back to Garmin's typo ("hearRate").
+            if let hr = ((entry["heartRate"] as? NSNumber) ?? (entry["hearRate"] as? NSNumber))?.intValue {
+                heartRate = hr
             }
-        } else if let dict = speedHR as? [String: Any] {
-            heartRate = (dict["heartRate"] as? NSNumber)?.intValue
+            if let s = (entry["speed"] as? NSNumber)?.doubleValue, s > 0 { speed = s }
         }
-        guard heartRate != nil else { return nil }
-        return ["speed_and_heart_rate": ["heartRate": heartRate as Any], "power": [:]]
+        if let entries = response as? [[String: Any]] {
+            for entry in entries { absorb(entry) }
+        } else if let dict = response as? [String: Any] {
+            absorb(dict)
+        }
+        guard heartRate != nil || speed != nil else { return nil }
+        var speedHR: [String: Any] = [:]
+        if let heartRate { speedHR["heartRate"] = heartRate }
+        if let speed { speedHR["speed"] = speed }
+        return ["speed_and_heart_rate": speedHR, "power": [:]]
     }
 
     func getUserProfile() async throws -> [String: Any]? {
@@ -173,6 +187,13 @@ actor GarminClient {
 
     func scheduleWorkout(workoutId: String, date: String) async throws {
         _ = try await connectapi("/workout-service/schedule/\(workoutId)", method: "POST", jsonBody: ["date": date])
+    }
+
+    /// Remove a single scheduled occurrence by its schedule id (the calendar
+    /// item's `id`, distinct from the workout template's `workoutId`). Scheduling
+    /// is additive, so a true "move" must delete the old occurrence with this.
+    func unscheduleWorkout(scheduleId: String) async throws {
+        _ = try await connectapi("/workout-service/schedule/\(scheduleId)", method: "DELETE")
     }
 
     func deleteWorkout(workoutId: String) async throws {

@@ -36,6 +36,14 @@ final class DataSyncCoordinator {
         UserDefaults.standard.set(date.timeIntervalSince1970, forKey: lastSyncKey(source))
     }
 
+    /// Forget the last-sync watermark for every source so the next sync does a
+    /// full backfill. Pairs with wiping the local database.
+    func resetSyncState() {
+        for source in DataSource.allCases {
+            UserDefaults.standard.removeObject(forKey: lastSyncKey(source))
+        }
+    }
+
     // MARK: - Sync
 
     /// Pull activities from `source` into the local database. Incremental: only
@@ -57,20 +65,154 @@ final class DataSyncCoordinator {
             // Only advance the watermark on success, else a network failure would
             // skip the failed window on the next (now smaller) incremental sync.
             guard !result.hasPrefix("✗") else { return nil }
+            // Pull performance metrics (FTP, CSS, LTHR, VO2max…) into the DB time
+            // series alongside activities. Failure here is non-fatal to the sync.
+            let (_, settings) = await GarminService.shared.syncUserSettings()
+            if let settings {
+                store.ingestMetrics(Self.metrics(fromGarminSettings: settings, date: Date()))
+            }
+            // Mirror planned calendar workouts into the local scheduled store so
+            // the dashboard Agenda, calendar screen and weekly targets reflect them.
+            await syncScheduledWorkouts(source: .garmin)
             markSynced(source)
             return store.count
         case .appleHealth:
             do {
                 try await HealthKitService.shared.requestAuthorization()
                 let since = days.map { Calendar.current.date(byAdding: .day, value: -$0, to: Calendar.current.startOfDay(for: Date()))! }
-                let workouts = try await HealthKitService.shared.fetchRecentWorkouts(count: syncCount, since: since)
-                store.ingest(workouts.compactMap(Self.ingestDTO(from:)))
+                // On a full backfill, fetch generously so the reconcile below has
+                // the complete keep-set and doesn't drop legitimate older records.
+                let count = since == nil ? max(syncCount, 1000) : syncCount
+                let workouts = try await HealthKitService.shared.fetchRecentWorkouts(count: count, since: since)
+                let dtos = workouts.compactMap(Self.ingestDTO(from:))
+                store.ingest(dtos)
+                // Reconcile: remove HealthKit records no longer returned within the
+                // synced window — chiefly Garmin Connect workouts now filtered out
+                // at the source, which previously duplicated the Garmin data.
+                store.pruneActivities(source: "healthkit", from: since ?? .distantPast, keeping: Set(dtos.map(\.id)))
+                let metrics = (try? await HealthKitService.shared.fetchPerformanceMetrics()) ?? []
+                store.ingestMetrics(metrics)
                 markSynced(source)
                 return store.count
             } catch {
                 return nil
             }
         }
+    }
+
+    // MARK: - Scheduled-workout sync (planned calendar items)
+
+    /// Window the scheduled-workout mirror covers: a week back through four weeks
+    /// ahead of today. A week back keeps recently-passed planned sessions visible.
+    private static let scheduledLookbackDays = 7
+    private static let scheduledLookaheadDays = 28
+
+    /// Pull PLANNED workouts from the active source's calendar into the local
+    /// scheduled-workout store, replacing that source's items in the window so
+    /// device-side deletions are reflected. Best-effort: a no-op for sources
+    /// without a calendar (Apple Health) or when Garmin isn't authenticated.
+    func syncScheduledWorkouts(source: DataSource) async {
+        guard source == .garmin, await GarminAuth.shared.isAuthenticated else { return }
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        guard let from = cal.date(byAdding: .day, value: -Self.scheduledLookbackDays, to: today),
+              let to = cal.date(byAdding: .day, value: Self.scheduledLookaheadDays, to: today) else { return }
+        let result = await GarminService.shared.getCalendar(
+            startDate: Self.ymd.string(from: from),
+            endDate: Self.ymd.string(from: to)
+        )
+        guard let workouts = Self.parseCalendarWorkouts(result) else { return }
+        let planned = workouts.compactMap(Self.scheduledDTO(from:))
+        store.replaceScheduled(source: "garmin", from: from, to: to, with: planned)
+    }
+
+    /// `yyyy-MM-dd` formatter for calendar item dates (POSIX, stable).
+    static let ymd: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    /// Extract the `workouts` array from `getCalendar`'s "✓ …\n<json>" output.
+    private static func parseCalendarWorkouts(_ result: String) -> [[String: Any]]? {
+        guard let brace = result.firstIndex(of: "{") else { return nil }
+        let json = String(result[brace...])
+        guard let data = json.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let workouts = obj["workouts"] as? [[String: Any]] else { return nil }
+        return workouts
+    }
+
+    /// Map a planned calendar item to a scheduled-workout DTO. Completed
+    /// activities and non-planned items are dropped (they live in ActivityRecord).
+    private static func scheduledDTO(from item: [String: Any]) -> IngestedScheduledWorkout? {
+        if item["completed"] as? Bool == true { return nil }
+        let src = item["source"] as? String ?? ""
+        guard src == "scheduled" || src == "garmin_coach" else { return nil }
+        guard let dateStr = item["date"] as? String, let date = ymd.date(from: dateStr) else { return nil }
+        let id = item["id"].map { "garmin:\($0)" } ?? "garmin:\(dateStr)"
+        return IngestedScheduledWorkout(
+            id: id,
+            source: "garmin",
+            date: date,
+            sport: item["sport"] as? String ?? "other",
+            name: item["name"] as? String ?? "Scheduled Workout",
+            targetDurationMinutes: (item["duration_minutes"] as? NSNumber)?.doubleValue ?? 0,
+            targetTSS: nil,
+            notes: item["description"] as? String ?? ""
+        )
+    }
+
+    // MARK: - Garmin settings → performance metrics
+
+    /// Map the dict returned by `GarminService.syncUserSettings()` into time-series
+    /// metric records. Shared by the launch/dashboard sync and the
+    /// `sync_user_settings` coach tool so both ingest the same way.
+    static func metrics(fromGarminSettings settings: [String: Any], date: Date) -> [IngestedMetric] {
+        var out: [IngestedMetric] = []
+        func add(_ key: String, _ value: Double?, _ unit: String) {
+            guard let value, value > 0 else { return }
+            out.append(IngestedMetric(metricKey: key, value: value, unit: unit, source: "garmin", date: date))
+        }
+        add("cycling_ftp", (settings["cycling_ftp"] as? NSNumber)?.doubleValue, "watts")
+        add("running_ftp", (settings["running_ftp"] as? NSNumber)?.doubleValue, "watts")
+        add("lactate_threshold_hr", (settings["lactate_threshold_hr"] as? NSNumber)?.doubleValue, "bpm")
+        add("vo2max_running", (settings["vo2max_running"] as? NSNumber)?.doubleValue, "ml_kg_min")
+        add("vo2max_cycling", (settings["vo2max_cycling"] as? NSNumber)?.doubleValue, "ml_kg_min")
+        add("weight_kg", (settings["weight_kg"] as? NSNumber)?.doubleValue, "kg")
+        if let css = settings["css_pace_per_100m"] as? String, let secs = paceSeconds(from: css) {
+            add("swim_css_pace", secs, "sec_per_100m")
+        }
+        if let pace = settings["lactate_threshold_pace"] as? String, let secs = paceSeconds(from: pace) {
+            add("lactate_threshold_pace", secs, "sec_per_km")
+        }
+        out += zoneMetrics(settings["hr_zones"], prefix: "hr_zone", unit: "bpm", source: "garmin", date: date)
+        out += zoneMetrics(settings["power_zones"], prefix: "power_zone", unit: "watts", source: "garmin", date: date)
+        return out
+    }
+
+    /// Parse a "m:ss" pace string into seconds (inverse of `GarminTransform.speedToPace`).
+    static func paceSeconds(from pace: String) -> Double? {
+        let parts = pace.split(separator: ":")
+        guard parts.count == 2, let m = Int(parts[0]), let s = Int(parts[1]) else { return nil }
+        return Double(m * 60 + s)
+    }
+
+    /// Decompose a zone dict (`["z1": [lo, hi], … "z5": [lo, hi]]`) into one
+    /// numeric metric per zone upper bound (`<prefix>1_upper` … `<prefix>5_upper`),
+    /// so each boundary becomes a chartable time series. The lower bound of zone N
+    /// equals the upper of zone N-1 (zone 1's lower is 0), so storing uppers is
+    /// lossless. Shared by Garmin sync and the one-time migration.
+    static func zoneMetrics(_ zones: Any?, prefix: String, unit: String, source: String, date: Date) -> [IngestedMetric] {
+        guard let zones = zones as? [String: Any] else { return [] }
+        var out: [IngestedMetric] = []
+        for n in 1...5 {
+            guard let bounds = zones["z\(n)"] as? [Any], bounds.count >= 2,
+                  let upper = (bounds[1] as? NSNumber)?.doubleValue, upper > 0 else { continue }
+            out.append(IngestedMetric(metricKey: "\(prefix)\(n)_upper", value: upper, unit: unit, source: source, date: date))
+        }
+        return out
     }
 
     /// Calendar days from the last sync's start-of-day to today, or nil if never
