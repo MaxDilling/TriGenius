@@ -22,6 +22,19 @@ struct PerformanceInsightsView: View {
         return result.points.filter { $0.date >= cutoff }
     }
 
+    /// The forward projection (always future, so always within the trailing range).
+    private var forecastPoints: [PMCPoint] { result.forecast }
+
+    /// Forecast line series prefixed with the last historic point so the dashed
+    /// continuation visually joins the solid curve at "today".
+    private var forecastLine: [PMCPoint] {
+        guard !forecastPoints.isEmpty, let connector = points.last else { return [] }
+        return [connector] + forecastPoints
+    }
+
+    /// Every point the chart draws — used so the axes leave room for the forecast.
+    private var allPoints: [PMCPoint] { points + forecastPoints }
+
     // MARK: Dual-axis scaling
     //
     // Swift Charts has no native secondary Y-axis, so Form (TSB) is plotted in the
@@ -31,13 +44,13 @@ struct PerformanceInsightsView: View {
 
     /// Top of the CTL/ATL (left) axis, with a little headroom.
     private var lineMax: Double {
-        let m = points.flatMap { [$0.ctl, $0.atl] }.max() ?? 1
+        let m = allPoints.flatMap { [$0.ctl, $0.atl] }.max() ?? 1
         return max((m * 1.1 / 10).rounded(.up) * 10, 10)
     }
 
     /// Symmetric half-range of the Form (right) axis, rounded to a nice value.
     private var tsbMax: Double {
-        let m = points.map { abs($0.tsb) }.max() ?? 10
+        let m = allPoints.map { abs($0.tsb) }.max() ?? 10
         return max((m * 1.1 / 10).rounded(.up) * 10, 10)
     }
 
@@ -89,6 +102,72 @@ struct PerformanceInsightsView: View {
         #endif
     }
 
+    // MARK: Chart marks
+    //
+    // Split into per-series @ChartContentBuilder properties: a single Chart {} with
+    // this many marks overwhelms the type-checker (Swift Charts builders infer deep
+    // generic types), so the historic and projected layers are built separately.
+
+    @ChartContentBuilder private var historicMarks: some ChartContent {
+        // Form (TSB) bars, drawn from the centered zero baseline.
+        ForEach(points) { p in
+            BarMark(
+                x: .value("Date", p.date),
+                yStart: .value("Form", tsbZero),
+                yEnd: .value("Form", scaleTSB(p.tsb))
+            )
+            .foregroundStyle(p.tsb >= 0 ? Color.green.opacity(0.6) : Color.orange.opacity(0.6))
+        }
+        // Dashed baseline marking Form = 0 in the vertical middle.
+        RuleMark(y: .value("Form zero", tsbZero))
+            .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+            .foregroundStyle(.secondary.opacity(0.4))
+
+        ForEach(points) { p in
+            LineMark(
+                x: .value("Date", p.date),
+                y: .value("Fitness", p.ctl),
+                series: .value("Series", "Fitness")
+            )
+            .foregroundStyle(.blue)
+            LineMark(
+                x: .value("Date", p.date),
+                y: .value("Fatigue", p.atl),
+                series: .value("Series", "Fatigue")
+            )
+            .foregroundStyle(.pink)
+        }
+    }
+
+    /// Forward projection (planned-but-not-yet-completed workouts), drawn as a
+    /// faded dashed continuation joined to the historic curve at "today".
+    @ChartContentBuilder private var forecastMarks: some ChartContent {
+        ForEach(forecastPoints) { p in
+            BarMark(
+                x: .value("Date", p.date),
+                yStart: .value("Form", tsbZero),
+                yEnd: .value("Form", scaleTSB(p.tsb))
+            )
+            .foregroundStyle((p.tsb >= 0 ? Color.green : Color.orange).opacity(0.22))
+        }
+        ForEach(forecastLine) { p in
+            LineMark(
+                x: .value("Date", p.date),
+                y: .value("Fitness", p.ctl),
+                series: .value("Series", "Fitness (proj)")
+            )
+            .foregroundStyle(.blue.opacity(0.45))
+            .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+            LineMark(
+                x: .value("Date", p.date),
+                y: .value("Fatigue", p.atl),
+                series: .value("Series", "Fatigue (proj)")
+            )
+            .foregroundStyle(.pink.opacity(0.45))
+            .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+        }
+    }
+
     // MARK: Chart
 
     private var chartCard: some View {
@@ -104,34 +183,8 @@ struct PerformanceInsightsView: View {
             }
 
             Chart {
-                // Form (TSB) bars, drawn from the centered zero baseline.
-                ForEach(points) { p in
-                    BarMark(
-                        x: .value("Date", p.date),
-                        yStart: .value("Form", tsbZero),
-                        yEnd: .value("Form", scaleTSB(p.tsb))
-                    )
-                    .foregroundStyle(p.tsb >= 0 ? Color.green.opacity(0.6) : Color.orange.opacity(0.6))
-                }
-                // Dashed baseline marking Form = 0 in the vertical middle.
-                RuleMark(y: .value("Form zero", tsbZero))
-                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                    .foregroundStyle(.secondary.opacity(0.4))
-
-                ForEach(points) { p in
-                    LineMark(
-                        x: .value("Date", p.date),
-                        y: .value("Fitness", p.ctl),
-                        series: .value("Series", "Fitness")
-                    )
-                    .foregroundStyle(.blue)
-                    LineMark(
-                        x: .value("Date", p.date),
-                        y: .value("Fatigue", p.atl),
-                        series: .value("Series", "Fatigue")
-                    )
-                    .foregroundStyle(.pink)
-                }
+                historicMarks
+                forecastMarks
             }
             .chartYScale(domain: 0...lineMax)
             .chartYAxis {
@@ -158,6 +211,12 @@ struct PerformanceInsightsView: View {
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
+
+            if !forecastPoints.isEmpty {
+                Label("Dashed = projected from planned workouts", systemImage: "chart.line.flattrend.xyaxis")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Theme.Spacing.l)

@@ -34,6 +34,11 @@ struct PMCResult: Sendable {
     /// The full computed history, ascending — callers slice the range they need
     /// (the dashboard shows the last weeks; the detail view offers 30D/90D/1Y).
     let points: [PMCPoint]
+    /// TrainingPeaks-style forward projection: CTL / ATL / TSB continued past
+    /// today from planned-but-not-yet-completed workouts, ascending (one point per
+    /// day after today). Empty when nothing is scheduled ahead. Rendered as a
+    /// faded/dashed continuation of the historic curve.
+    let forecast: [PMCPoint]
     /// Most recent day's values.
     let snapshot: PMCSnapshot?
 
@@ -66,7 +71,7 @@ enum PMCEngine {
         }
 
         guard let firstActivityDay = byDay.keys.min() else {
-            return PMCResult(points: [], snapshot: nil)
+            return PMCResult(points: [], forecast: [], snapshot: nil)
         }
         // Start at least the CTL warm-up window before the first activity so the
         // EWMA settles, but never after the first activity day.
@@ -94,21 +99,95 @@ enum PMCEngine {
         let snapshot = points.last.map {
             PMCSnapshot(date: $0.date, ctl: $0.ctl, atl: $0.atl, tsb: $0.tsb)
         }
-        return PMCResult(points: points, snapshot: snapshot)
+        return PMCResult(points: points, forecast: [], snapshot: snapshot)
     }
 
-    /// Convenience: read the local store and compute the current PMC.
+    // MARK: - Forward projection
+
+    /// How far ahead the forecast runs by default (6 weeks — beyond that the EWMA
+    /// of a static plan is no longer informative and most plans aren't scheduled).
+    static let forecastDays = 42
+
+    /// Continue the PMC forward from the last historic point using the planned
+    /// (not-yet-completed) TSS per future day. Pure. Returns one point per day
+    /// from today+1 through the last planned day (capped at `maxHorizonDays`);
+    /// empty when nothing is planned ahead. Today itself stays in the historic
+    /// series (it already carries actual TSS), so projection starts at today+1 to
+    /// avoid double-counting a session that is both planned and partly done.
+    static func project(
+        history points: [PMCPoint],
+        plannedByDay: [Date: Double],
+        today: Date = Date(),
+        maxHorizonDays: Int = forecastDays
+    ) -> [PMCPoint] {
+        guard let last = points.last else { return [] }
+        let cal = Calendar.current
+        let startDay = cal.startOfDay(for: today)
+        let futurePlanned = plannedByDay.filter { $0.key > startDay && $0.value > 0 }
+        guard let lastPlanned = futurePlanned.keys.max() else { return [] }
+        let horizonCap = cal.date(byAdding: .day, value: maxHorizonDays, to: startDay) ?? lastPlanned
+        let endDay = min(lastPlanned, horizonCap)
+
+        let aCTL = 1 - exp(-1 / ctlTimeConstant)
+        let aATL = 1 - exp(-1 / atlTimeConstant)
+        var ctl = last.ctl
+        var atl = last.atl
+        var forecast: [PMCPoint] = []
+
+        guard var day = cal.date(byAdding: .day, value: 1, to: startDay) else { return [] }
+        while day <= endDay {
+            let tss = plannedByDay[day] ?? 0
+            let tsb = ctl - atl
+            ctl += (tss - ctl) * aCTL
+            atl += (tss - atl) * aATL
+            forecast.append(PMCPoint(date: day, ctl: ctl, atl: atl, tsb: tsb))
+            guard let next = cal.date(byAdding: .day, value: 1, to: day) else { break }
+            day = next
+        }
+        return forecast
+    }
+
+    /// Total planned TSS per future day, derived from scheduled workouts. TSS is
+    /// taken verbatim when the source set it, else estimated from the planned
+    /// duration (same rule the weekly targets use).
+    @MainActor
+    static func plannedTSSByDay(_ scheduled: [ScheduledWorkoutRecord]) -> [Date: Double] {
+        let cal = Calendar.current
+        var byDay: [Date: Double] = [:]
+        for w in scheduled {
+            let family = SportFamily(sportKey: w.sport)
+            let tss = w.targetTSS ?? WeeklyTargets.estimatedTSS(family: family, minutes: w.targetDurationMinutes)
+            byDay[cal.startOfDay(for: w.date), default: 0] += tss
+        }
+        return byDay
+    }
+
+    /// Convenience: read the local store and compute the current PMC, including
+    /// the forward projection from upcoming planned workouts. Pass
+    /// `forecastDays: 0` to skip the (slightly more expensive) projection.
     @MainActor
     static func current(
         store: TrainingDataStore? = nil,
         today: Date = Date(),
-        historyDays: Int = 365
+        historyDays: Int = 365,
+        forecastDays: Int = forecastDays
     ) -> PMCResult {
         let store = store ?? .shared
         let cal = Calendar.current
-        let to = today
         let from = cal.date(byAdding: .day, value: -historyDays, to: today) ?? today
-        let daily = store.dailyTSS(from: from, to: to)
-        return compute(dailyTSS: daily, today: today)
+        let daily = store.dailyTSS(from: from, to: today)
+        let result = compute(dailyTSS: daily, today: today)
+
+        guard forecastDays > 0 else { return result }
+        let startDay = cal.startOfDay(for: today)
+        let to = cal.date(byAdding: .day, value: forecastDays, to: startDay) ?? startDay
+        let scheduled = store.scheduledWorkouts(from: startDay, to: to)
+        let forecast = project(
+            history: result.points,
+            plannedByDay: plannedTSSByDay(scheduled),
+            today: today,
+            maxHorizonDays: forecastDays
+        )
+        return PMCResult(points: result.points, forecast: forecast, snapshot: result.snapshot)
     }
 }

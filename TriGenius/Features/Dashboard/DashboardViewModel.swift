@@ -30,6 +30,9 @@ final class DashboardViewModel {
     var pmc: PMCResult?
     var weeklyBuckets: [TrainingVolume.WeekBucket] = []
     var targets: [SportFamily: WeeklyTarget] = [:]
+    /// Per-discipline expected week close (completed + still-planned) — the faded
+    /// projection arc on the weekly rings.
+    var projections: [SportFamily: WeeklyProjection] = [:]
     var agendaDays: [AgendaDay] = []
     var insight: String?
     var isLoading = false
@@ -43,6 +46,10 @@ final class DashboardViewModel {
 
     func target(for family: SportFamily) -> WeeklyTarget {
         targets[family] ?? WeeklyTarget(durationMinutes: 0, tss: 0)
+    }
+
+    func projection(for family: SportFamily) -> WeeklyProjection {
+        projections[family] ?? WeeklyProjection()
     }
 
     func loadInitialIfNeeded(context: DashboardContext) async {
@@ -75,6 +82,7 @@ final class DashboardViewModel {
             weeklyStructure: context.weeklyStructure,
             plan: context.trainingPlan
         )
+        projections = WeeklyTargets.projection(store: store)
 
         agendaDays = Self.buildAgenda(records: records, store: store)
 

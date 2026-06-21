@@ -50,6 +50,9 @@ struct TriGeniusApp: App {
         // before revealing the UI, so the coach reads 100% fresh data.
         launchStatus = "Synchronisiere Aktivitäten…"
         await DataSyncCoordinator.shared.sync(source: settings.dataSource)
+        // Re-register OS-scheduled reminders — pending requests are cleared on
+        // reboot / app update, so reconcile on every launch.
+        await ReminderScheduler.shared.reconcile()
         brain = b
     }
 

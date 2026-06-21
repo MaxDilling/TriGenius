@@ -3,16 +3,16 @@ import Foundation
 // MARK: - Weekly Target (Volume)
 //
 // The per-discipline weekly volume goal ("Wochensoll") the dashboard rings fill
-// against. Derived — in priority order — from:
-//   1. the athlete's PLANNED workouts for the current week (the scheduled-workout
-//      store), summing target duration + TSS per discipline; falling back to
-//   2. the current training-plan phase's per-sport weekly TSS target; falling back to
-//   3. a heuristic from the athlete's weekly hour budget (`weeklyStructure`)
+// against. The base goal is the athlete's PLAN:
+//   1. the current training-plan phase's per-sport weekly TSS target; falling back to
+//   2. a heuristic from the athlete's weekly hour budget (`weeklyStructure`)
 //      shaped by the current periodisation phase (`trainingPlan`).
+// PLANNED workouts for the week (the scheduled-workout store) then only *raise*
+// the goal — a week scheduled beyond the plan targets the larger volume — but a
+// partially-scheduled week never pulls it below the plan.
 //
-// This keeps the rings honest: once the coach/Garmin has scheduled the week, the
-// goal IS the plan; before that, it's the phase's stated target; and only without
-// any plan does it fall back to a heuristic estimate.
+// This keeps the rings honest: the goal is the plan, scheduling more commits to
+// more, and planning a single light session doesn't shrink the weekly target.
 
 struct WeeklyTarget: Sendable {
     /// Target training time for the week, in minutes.
@@ -21,6 +21,21 @@ struct WeeklyTarget: Sendable {
     var tss: Double
     /// Target distance for the week, in km (0 = not applicable, e.g. strength).
     var distanceKm: Double = 0
+}
+
+/// How a discipline's week is expected to close: what's already completed plus
+/// what's still planned for the remaining days. The dashboard ring renders the
+/// projection as a faded continuation of the actual arc; the proactive coach
+/// compares it against the target to flag an at-risk week.
+struct WeeklyProjection: Sendable {
+    /// Completed so far this week.
+    var actualTSS: Double = 0
+    var actualKm: Double = 0
+    /// Completed + still-planned for the remaining days (today excluded — today's
+    /// load is already in `actual`, matching the PMC forecast which starts at
+    /// tomorrow). Equals `actual` when nothing remains planned.
+    var projectedTSS: Double = 0
+    var projectedKm: Double = 0
 }
 
 enum WeeklyTargets {
@@ -123,11 +138,14 @@ enum WeeklyTargets {
 
     // MARK: Public API
 
-    /// Per-discipline weekly targets for the current week. `scheduled` are the
-    /// planned workouts whose date falls in the displayed week; when a discipline
-    /// has any, its target is the sum of those (TSS estimated from duration where
-    /// missing). Disciplines with no scheduled work use the current plan phase's
-    /// stated target, then fall back to the heuristic.
+    /// Per-discipline weekly targets for the current week. The base goal is the
+    /// athlete's plan: the current phase's stated weekly target, falling back to a
+    /// heuristic off the weekly hour budget. `scheduled` are the planned workouts
+    /// whose date falls in the displayed week; they only *raise* the goal — a week
+    /// scheduled beyond the plan targets the larger volume. A partially-scheduled
+    /// week must NOT pull the goal below the plan, so the target is the per-metric
+    /// max of (scheduled sum, plan target). This keeps the ring honest: planning a
+    /// single 53-TSS run doesn't shrink a 90-TSS weekly goal down to 53.
     @MainActor
     static func targets(
         scheduled: [ScheduledWorkoutRecord],
@@ -148,17 +166,75 @@ enum WeeklyTargets {
 
         var out: [SportFamily: WeeklyTarget] = [:]
         for family in SportFamily.allCases {
-            if let p = planned[family], p.durationMinutes > 0 || p.tss > 0 {
-                // Scheduled workouts carry no distance — take the phase's stated
-                // weekly distance if any, else estimate from the planned duration.
-                let km = phaseTarget(for: family, phase: currentPhase)?.distanceKm
-                    ?? estimatedDistanceKm(family: family, minutes: p.durationMinutes).rounded()
-                out[family] = WeeklyTarget(durationMinutes: p.durationMinutes, tss: p.tss.rounded(), distanceKm: km)
-            } else if let pt = phaseTarget(for: family, phase: currentPhase) {
-                out[family] = pt
-            } else {
-                out[family] = heuristicTarget(for: family, weeklyStructure: weeklyStructure, plan: plan)
+            // The plan's goal for the week: phase target, else heuristic estimate.
+            let base = phaseTarget(for: family, phase: currentPhase)
+                ?? heuristicTarget(for: family, weeklyStructure: weeklyStructure, plan: plan)
+
+            guard let p = planned[family], p.durationMinutes > 0 || p.tss > 0 else {
+                out[family] = base
+                continue
             }
+            // Scheduling raises the goal but never lowers it below the plan.
+            let minutes = max(p.durationMinutes, base.durationMinutes)
+            let tss = max(p.tss, base.tss).rounded()
+            // Scheduled workouts carry no distance — keep the plan's stated
+            // weekly distance, else estimate from the (larger) duration.
+            let km = max(base.distanceKm, estimatedDistanceKm(family: family, minutes: minutes).rounded())
+            out[family] = WeeklyTarget(durationMinutes: minutes, tss: tss, distanceKm: km)
+        }
+        return out
+    }
+
+    // MARK: Projection (expected week close)
+
+    /// Per-discipline projection for the current week: what's been completed plus
+    /// what's still planned for the days that remain (today included). Reads the
+    /// store directly so both the dashboard ring and the background proactive
+    /// check share one rule. Planned workouts on PAST days are excluded (they can
+    /// no longer be done as scheduled — a skipped session must not inflate the
+    /// projection); a workout planned for today is excluded only if a session of
+    /// the same discipline was already completed today, to avoid double-counting
+    /// the same effort once it's been logged.
+    @MainActor
+    static func projection(
+        store: TrainingDataStore,
+        today: Date = Date()
+    ) -> [SportFamily: WeeklyProjection] {
+        let cal = Calendar.current
+        let weekStart = TrainingVolume.weekStart(of: today)
+        let weekEnd = cal.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
+        let todayStart = cal.startOfDay(for: today)
+
+        var out: [SportFamily: WeeklyProjection] = [:]
+
+        // Completed so far this week.
+        var completedTodayFamilies: Set<SportFamily> = []
+        for record in store.activities(from: weekStart, to: weekEnd) {
+            let family = SportFamily(sportKey: record.sport)
+            var p = out[family] ?? WeeklyProjection()
+            p.actualTSS += record.tss ?? 0
+            p.actualKm += record.distanceKm
+            out[family] = p
+            if cal.isDate(record.date, inSameDayAs: todayStart) { completedTodayFamilies.insert(family) }
+        }
+
+        // Still-planned for today + the remaining days.
+        for w in store.scheduledWorkouts(from: weekStart, to: weekEnd) {
+            let day = cal.startOfDay(for: w.date)
+            let family = SportFamily(sportKey: w.sport)
+            if day < todayStart { continue }                                   // past: can't still be done
+            if day == todayStart && completedTodayFamilies.contains(family) { continue } // already logged today
+            var p = out[family] ?? WeeklyProjection()
+            p.projectedTSS += w.targetTSS ?? estimatedTSS(family: family, minutes: w.targetDurationMinutes)
+            p.projectedKm += estimatedDistanceKm(family: family, minutes: w.targetDurationMinutes)
+            out[family] = p
+        }
+
+        // Fold the completed actuals into the projected totals.
+        for (family, var p) in out {
+            p.projectedTSS += p.actualTSS
+            p.projectedKm += p.actualKm
+            out[family] = p
         }
         return out
     }

@@ -96,8 +96,125 @@ final class BackgroundCoordinator {
             ?? .appleHealth
         _ = await DataSyncCoordinator.shared.sync(source: source)
 
-        let snapshot = PMCEngine.current().snapshot
-        let signals = ProactiveCoach.signals(from: snapshot)
+        // The snapshot doesn't need the forward projection (only the weekly-target
+        // check below uses planned workouts), so skip it here.
+        let snapshot = PMCEngine.current(forecastDays: 0).snapshot
+        var signals = ProactiveCoach.signals(from: snapshot)
+
+        // Weekly-target-at-risk warning (FEATURES.md "TSS / TSB forecast"): compare
+        // this week's per-discipline target against the projected close (completed
+        // + still-planned). The targets need the athlete's plan/structure; a fresh
+        // CoachMemory reads the persisted coach_memory.json on init.
+        let memory = CoachMemory()
+        let cal = Calendar.current
+        let weekStart = TrainingVolume.weekStart(of: Date())
+        let weekEnd = cal.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
+        let weekScheduled = TrainingDataStore.shared.scheduledWorkouts(from: weekStart, to: weekEnd)
+        let targets = WeeklyTargets.targets(
+            scheduled: weekScheduled,
+            weeklyStructure: memory.weeklyStructure,
+            plan: memory.trainingPlan
+        )
+        let projection = WeeklyTargets.projection(store: TrainingDataStore.shared)
+        signals += ProactiveCoach.weeklyTargetSignals(targets: targets, projection: projection)
+
+        // Refresh the Home Screen widget's snapshot from the same numbers, so it
+        // stays current even when the app is only woken in the background.
+        WeeklyTargetSnapshotWriter.write(targets: targets, projections: projection, weekStart: weekStart)
+
         await NotificationCenterService.shared.postDailyDigest(signals)
+
+        await deliverDueDynamicReminders()
+    }
+
+    // MARK: - Dynamic reminders
+    //
+    // "Erweiterte Reminder": dynamic reminders compose their body from fresh data,
+    // so they can't be a fixed OS calendar trigger — they're delivered from this
+    // refresh when due (configured time passed today, not in quiet hours, not
+    // already sent today). Static reminders fire directly via the OS (see
+    // ReminderScheduler) and don't need the background path.
+
+    /// Post any dynamic reminders that have come due. The store already filters by
+    /// time-of-day, weekday and quiet hours; the scheduler guards per-day dedup.
+    private func deliverDueDynamicReminders() async {
+        for rule in ReminderStore.shared.dueDynamicRules()
+        where !ReminderScheduler.shared.dynamicDeliveredToday(rule.id) {
+            guard let body = await composeDynamicBody(for: rule.kind) else { continue }
+            let posted = await NotificationCenterService.shared.post(
+                title: "TriGenius",
+                body: body,
+                identifier: "trigenius.reminder.dyn.\(rule.id)"
+            )
+            if posted { ReminderScheduler.shared.markDynamicDelivered(rule.id) }
+        }
+    }
+
+    /// Developer/testing: compose and immediately deliver a dynamic reminder,
+    /// bypassing the per-day dedup. Returns the delivered body, or nil when there
+    /// was nothing worth saying for that kind right now.
+    @discardableResult
+    func sendDynamicReminderTest(_ kind: ReminderKind) async -> String? {
+        guard let body = await composeDynamicBody(for: kind) else { return nil }
+        await NotificationCenterService.shared.post(
+            title: "TriGenius",
+            body: body,
+            identifier: "trigenius.reminder.test.\(UUID().uuidString)"
+        )
+        return body
+    }
+
+    /// Build the notification body for a dynamic reminder from current data.
+    /// Returns nil to skip delivery (nothing worth saying).
+    func composeDynamicBody(for kind: ReminderKind) async -> String? {
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: Date())
+        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart) ?? dayStart
+        let todays = TrainingDataStore.shared.scheduledWorkouts(from: dayStart, to: dayEnd)
+
+        switch kind {
+        case .todaysWorkout:
+            guard !todays.isEmpty else { return "No workout planned today — enjoy the rest day." }
+            let parts = todays.map { w -> String in
+                let family = SportFamily(sportKey: w.sport).displayName
+                let mins = Int(w.targetDurationMinutes.rounded())
+                var s = family
+                if mins > 0 { s += " · \(mins)min" }
+                if let start = w.startMinute { s += " @ \(Self.clockString(start))" }
+                return s
+            }
+            return "Today's training: " + parts.joined(separator: ", ")
+
+        case .sleepAdvice:
+            let plannedTSS = PMCEngine.plannedTSSByDay(todays).values.reduce(0, +)
+            let sleep = await recentSleepHours()
+            let demanding = plannedTSS >= 80
+            if let sleep, sleep < 6.5 {
+                return demanding
+                    ? "You slept ~\(String(format: "%.1f", sleep))h and have a demanding day planned (TSS ~\(Int(plannedTSS.rounded()))). Consider easing the intensity or shifting the hard session."
+                    : "You slept ~\(String(format: "%.1f", sleep))h — keep today easy and prioritise recovery."
+            }
+            if demanding {
+                return "Demanding session planned today (TSS ~\(Int(plannedTSS.rounded()))). Make sure you're well recovered before going hard."
+            }
+            return nil
+
+        default:
+            return nil
+        }
+    }
+
+    /// Best-effort recent sleep duration. Only Apple Health exposes it cheaply
+    /// here; for other sources we return nil and fall back to load-only advice.
+    private func recentSleepHours() async -> Double? {
+        let source = DataSource(rawValue: UserDefaults.standard.string(forKey: "data_source") ?? "")
+            ?? .appleHealth
+        guard source == .appleHealth else { return nil }
+        let hours = (try? await HealthKitService.shared.fetchHealthMetrics(days: 2).avgSleepHours) ?? 0
+        return hours > 0 ? hours : nil
+    }
+
+    private static func clockString(_ minutesAfterMidnight: Int) -> String {
+        String(format: "%02d:%02d", minutesAfterMidnight / 60, minutesAfterMidnight % 60)
     }
 }

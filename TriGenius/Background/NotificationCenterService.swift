@@ -47,6 +47,8 @@ final class NotificationCenterService {
     @discardableResult
     func postDailyDigest(_ signals: [ProactiveSignal], now: Date = Date()) async -> Bool {
         guard await isAuthorized else { return false }
+        // Respect the athlete's quiet hours — don't surface the digest at bad times.
+        if ReminderStore.shared.isWithinQuietHours(now) { return false }
         // Prefer warnings; fall back to the first info signal.
         guard let signal = signals.first(where: { $0.severity == .warning }) ?? signals.first else { return false }
 
@@ -69,6 +71,53 @@ final class NotificationCenterService {
         do {
             try await center.add(request)
             setLastPostedDay(today)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Post an immediate notification with explicit content. Used for dynamic
+    /// reminders whose body is composed at delivery time. Per-reminder dedup is
+    /// the caller's responsibility (see `ReminderScheduler.dynamicDeliveredToday`).
+    /// Returns whether the notification was scheduled.
+    @discardableResult
+    func post(title: String, body: String, identifier: String) async -> Bool {
+        guard await isAuthorized else { return false }
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
+        do {
+            try await center.add(request)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    // MARK: - Developer / testing
+
+    /// Schedule a one-off test notification after a short delay, so the developer
+    /// can background the app and confirm OS-side delivery works. Uses a time-
+    /// interval trigger (a stand-in for the real calendar trigger). Returns whether
+    /// it was scheduled.
+    @discardableResult
+    func scheduleTest(after seconds: TimeInterval) async -> Bool {
+        guard await isAuthorized else { return false }
+        let content = UNMutableNotificationContent()
+        content.title = "TriGenius — test reminder"
+        content.body = "This is a scheduled test reminder."
+        content.sound = .default
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, seconds), repeats: false)
+        let request = UNNotificationRequest(
+            identifier: "trigenius.reminder.test.\(UUID().uuidString)",
+            content: content,
+            trigger: trigger
+        )
+        do {
+            try await center.add(request)
             return true
         } catch {
             return false

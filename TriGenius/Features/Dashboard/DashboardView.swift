@@ -192,12 +192,15 @@ struct DashboardView: View {
                 ForEach(SportFamily.triathlon) { family in
                     let totals = viewModel.currentWeek?.totals(for: family) ?? VolumeTotals()
                     let target = viewModel.target(for: family)
+                    let projection = viewModel.projection(for: family)
                     VolumeRing(family: family,
                                metric: volumeMetric,
                                actualTSS: totals.tss,
                                targetTSS: target.tss,
                                actualKm: totals.distanceKm,
-                               targetKm: target.distanceKm)
+                               targetKm: target.distanceKm,
+                               projectedTSS: projection.projectedTSS,
+                               projectedKm: projection.projectedKm)
                 }
             }
 
@@ -373,19 +376,44 @@ private struct VolumeRing: View {
     let targetTSS: Double
     let actualKm: Double
     let targetKm: Double
+    /// Expected week close (completed + still-planned) for the active metric —
+    /// rendered as a faded arc continuing past the solid "actual" fill.
+    let projectedTSS: Double
+    let projectedKm: Double
 
     private var actual: Double { metric == .tss ? actualTSS : actualKm }
     private var target: Double { metric == .tss ? targetTSS : targetKm }
+    private var projected: Double { max(metric == .tss ? projectedTSS : projectedKm, actual) }
 
     // The ring fills against the active metric's weekly target.
     private var fraction: Double {
         target > 0 ? min(actual / target, 1) : 0
     }
 
+    /// Where the projected close lands on the ring (always ≥ the actual fill).
+    private var projectedFraction: Double {
+        target > 0 ? min(projected / target, 1) : 0
+    }
+
+    /// True once the projected close still falls short of the target — the visible
+    /// gap that signals an at-risk week.
+    private var fallsShort: Bool { target > 0 && projectedFraction < 0.999 }
+
     var body: some View {
         VStack(spacing: 8) {
             ZStack {
                 Circle().stroke(Color.primary.opacity(0.10), lineWidth: 7)
+                // Projection: the still-planned continuation beyond the completed
+                // (solid) arc, up to the weekly target. Same 7pt radius as the
+                // solid arc but dashed + lighter so it reads as "planned, not yet
+                // done" rather than "done".
+                if projectedFraction > fraction {
+                    Circle()
+                        .trim(from: fraction, to: projectedFraction)
+                        .stroke(family.color.opacity(0.40),
+                                style: StrokeStyle(lineWidth: 7, lineCap: .butt, dash: [4, 4]))
+                        .rotationEffect(.degrees(-90))
+                }
                 Circle()
                     .trim(from: 0, to: fraction)
                     .stroke(family.color, style: StrokeStyle(lineWidth: 7, lineCap: .round))
@@ -398,6 +426,14 @@ private struct VolumeRing: View {
                 Text(label(metric, actual)).font(.subheadline.weight(.semibold))
                 if target > 0 {
                     Text("/ \(label(metric, target))").font(.caption2).foregroundStyle(.secondary)
+                }
+                if projected > actual {
+                    // The expected close given what is still planned this week —
+                    // tertiary (lighter) when on track, amber only when at risk.
+                    Text("→ \(label(metric, projected))")
+                        .font(.caption2)
+                        .foregroundStyle(fallsShort ? Theme.Palette.warning : Color.secondary.opacity(0.6))
+                        .padding(.top, 1)
                 }
                 if secondaryActual > 0 {
                     Text(label(secondaryMetric, secondaryActual))

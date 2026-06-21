@@ -51,6 +51,38 @@ enum ProactiveCoach {
         return out
     }
 
+    // MARK: - Weekly target at risk
+
+    // A discipline is "at risk" when, even counting everything still planned, the
+    // week is projected to close meaningfully below its target — e.g. a session
+    // was skipped and the remaining days can't make up the volume.
+    private static let weeklyAtRiskFraction = 0.85   // projected < 85% of target
+    private static let weeklyAtRiskMinGap = 30.0     // and short by ≥ 30 TSS
+
+    /// Flag disciplines whose weekly TSS target is at risk given the projected
+    /// close (completed + still-planned). One aggregate warning so the athlete
+    /// isn't hit with a signal per discipline.
+    static func weeklyTargetSignals(
+        targets: [SportFamily: WeeklyTarget],
+        projection: [SportFamily: WeeklyProjection]
+    ) -> [ProactiveSignal] {
+        let atRisk = SportFamily.triathlon.compactMap { family -> (SportFamily, Double)? in
+            guard let target = targets[family]?.tss, target > 0 else { return nil }
+            let projected = projection[family]?.projectedTSS ?? 0
+            let gap = target - projected
+            guard projected < target * weeklyAtRiskFraction, gap >= weeklyAtRiskMinGap else { return nil }
+            return (family, gap)
+        }
+        guard !atRisk.isEmpty else { return [] }
+
+        let names = atRisk.map { $0.0.displayName.lowercased() }.joined(separator: ", ")
+        let totalGap = Int(atRisk.reduce(0) { $0 + $1.1 }.rounded())
+        return [ProactiveSignal(
+            severity: .warning,
+            message: "This week's \(names) target is at risk — even with everything still planned you're projected ~\(totalGap) TSS short. Add or extend a session in the remaining days to stay on track."
+        )]
+    }
+
     /// The system-prompt section describing the current PMC state + any signals.
     /// Returns "" when there is no PMC data yet (keeps the prompt clean).
     static func promptSection(from snapshot: PMCSnapshot?) -> String {

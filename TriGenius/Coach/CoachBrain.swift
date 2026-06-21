@@ -232,6 +232,8 @@ final class CoachBrain {
         registry.register(ProfileToolHandler(memory: memory))
         // Always-on, source-independent: real-world schedule awareness.
         registry.register(CalendarToolHandler())
+        // Always-on: configurable push reminders ("Erweiterte Reminder").
+        registry.register(ReminderToolHandler())
         toolRegistry = registry
     }
 
