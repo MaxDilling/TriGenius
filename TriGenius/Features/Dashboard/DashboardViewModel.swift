@@ -84,6 +84,10 @@ final class DashboardViewModel {
         )
         projections = WeeklyTargets.projection(store: store)
 
+        // Keep the Home Screen widget's snapshot in sync with what the dashboard
+        // is showing.
+        WeeklyTargetSnapshotWriter.write(targets: targets, projections: projections, weekStart: weekStart)
+
         agendaDays = Self.buildAgenda(records: records, store: store)
 
         hasLoaded = true
