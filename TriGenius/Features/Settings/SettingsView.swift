@@ -30,6 +30,14 @@ final class AppSettings: ObservableObject {
     @Published var garminEmail: String {
         didSet { UserDefaults.standard.set(garminEmail, forKey: "garmin_email") }
     }
+    /// LM Studio server URL (OpenAI-compatible, must include the `/v1` suffix).
+    @Published var lmStudioBaseURL: String {
+        didSet { UserDefaults.standard.set(lmStudioBaseURL, forKey: "lmstudio_base_url") }
+    }
+    /// The model id loaded in LM Studio (shown in its "Local Server" panel).
+    @Published var lmStudioModel: String {
+        didSet { UserDefaults.standard.set(lmStudioModel, forKey: "lmstudio_model") }
+    }
     /// Developer toggle: surface hidden tool calls in the chat and log prompts to
     /// the console. Read live by `CoachBrain.isDebugEnabled`.
     @Published var debugMode: Bool {
@@ -59,6 +67,8 @@ final class AppSettings: ObservableObject {
         let savedSource = UserDefaults.standard.string(forKey: "data_source") ?? ""
         dataSource = DataSource(rawValue: savedSource) ?? .appleHealth
         garminEmail = UserDefaults.standard.string(forKey: "garmin_email") ?? ""
+        lmStudioBaseURL = UserDefaults.standard.string(forKey: "lmstudio_base_url") ?? "http://localhost:1234/v1"
+        lmStudioModel = UserDefaults.standard.string(forKey: "lmstudio_model") ?? "local-model"
         debugMode = UserDefaults.standard.bool(forKey: "debug_mode")
         proactiveNotifications = UserDefaults.standard.bool(forKey: Self.proactiveNotificationsKey)
     }
@@ -67,6 +77,7 @@ final class AppSettings: ObservableObject {
         switch selectedBackend {
         case .gemini: return !geminiAPIKey.isEmpty
         case .appleIntelligence: return true
+        case .lmStudio: return !lmStudioBaseURL.isEmpty
         }
     }
 
@@ -76,6 +87,8 @@ final class AppSettings: ObservableObject {
             return GeminiBackend(apiKey: geminiAPIKey, model: geminiModel)
         case .appleIntelligence:
             return FoundationModelBackendFactory.make()
+        case .lmStudio:
+            return LMStudioBackend(baseURL: lmStudioBaseURL, model: lmStudioModel)
         }
     }
 }
@@ -104,10 +117,13 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
                 .onChange(of: settings.selectedBackend) { onBackendChanged() }
 
-                if settings.selectedBackend == .gemini {
+                switch settings.selectedBackend {
+                case .gemini:
                     geminiSection
-                } else {
+                case .appleIntelligence:
                     appleIntelligenceSection
+                case .lmStudio:
+                    lmStudioSection
                 }
             }
 
@@ -328,6 +344,37 @@ struct SettingsView: View {
             } else {
                 Label("Requires iOS 18 / macOS 15", systemImage: "xmark.circle.fill")
                     .foregroundStyle(.red)
+                    .font(.caption)
+            }
+        }
+    }
+
+    // MARK: - LM Studio section
+
+    private var lmStudioSection: some View {
+        Group {
+            TextField("Server URL", text: $settings.lmStudioBaseURL)
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+                #endif
+                .disableAutocorrection(true)
+                .onChange(of: settings.lmStudioBaseURL) { onBackendChanged() }
+
+            TextField("Model id", text: $settings.lmStudioModel)
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
+                .disableAutocorrection(true)
+                .onChange(of: settings.lmStudioModel) { onBackendChanged() }
+
+            if settings.lmStudioBaseURL.isEmpty {
+                Label("Server URL required for LM Studio", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
+            } else {
+                Label("Start LM Studio's local server, then pick the loaded model id.", systemImage: "desktopcomputer")
+                    .foregroundStyle(.secondary)
                     .font(.caption)
             }
         }

@@ -509,6 +509,7 @@ final class CoachBrain {
 enum BackendType: String, CaseIterable, Identifiable {
     case gemini = "Gemini"
     case appleIntelligence = "Apple Intelligence"
+    case lmStudio = "LM Studio"
 
     var id: String { rawValue }
     var displayName: String { rawValue }
@@ -521,6 +522,8 @@ enum BackendFactory {
             return GeminiBackend(apiKey: apiKey)
         case .appleIntelligence:
             return FoundationModelBackendFactory.make()
+        case .lmStudio:
+            return LMStudioBackend()
         }
     }
 }
