@@ -113,8 +113,8 @@ final class DataSyncCoordinator {
         let today = cal.startOfDay(for: Date())
         guard let from = cal.date(byAdding: .day, value: -days, to: today) else { return nil }
         let count = await GarminService.shared.backfillActivities(
-            startDate: Self.ymd.string(from: from),
-            endDate: Self.ymd.string(from: today)
+            startDate: DateFormatter.ymd.string(from: from),
+            endDate: DateFormatter.ymd.string(from: today)
         )
         if count != nil { markSynced(source) }
         return count
@@ -138,21 +138,13 @@ final class DataSyncCoordinator {
         guard let from = cal.date(byAdding: .day, value: -Self.scheduledLookbackDays, to: today),
               let to = cal.date(byAdding: .day, value: Self.scheduledLookaheadDays, to: today) else { return }
         let result = await GarminService.shared.getCalendar(
-            startDate: Self.ymd.string(from: from),
-            endDate: Self.ymd.string(from: to)
+            startDate: DateFormatter.ymd.string(from: from),
+            endDate: DateFormatter.ymd.string(from: to)
         )
         guard let workouts = Self.parseCalendarWorkouts(result) else { return }
         let planned = workouts.compactMap(Self.scheduledDTO(from:))
         store.replaceScheduled(source: "garmin", from: from, to: to, with: planned)
     }
-
-    /// `yyyy-MM-dd` formatter for calendar item dates (POSIX, stable).
-    static let ymd: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
 
     /// Extract the `workouts` array from `getCalendar`'s "✓ …\n<json>" output.
     private static func parseCalendarWorkouts(_ result: String) -> [[String: Any]]? {
@@ -170,7 +162,7 @@ final class DataSyncCoordinator {
         if item["completed"] as? Bool == true { return nil }
         let src = item["source"] as? String ?? ""
         guard src == "scheduled" || src == "garmin_coach" else { return nil }
-        guard let dateStr = item["date"] as? String, let date = ymd.date(from: dateStr) else { return nil }
+        guard let dateStr = item["date"] as? String, let date = DateFormatter.ymd.date(from: dateStr) else { return nil }
         let id = item["id"].map { "garmin:\($0)" } ?? "garmin:\(dateStr)"
         return IngestedScheduledWorkout(
             id: id,
@@ -319,10 +311,7 @@ final class DataSyncCoordinator {
         ]
         data["filter"] = (sport != nil || days != nil) ? ["sport": sport as Any, "days": days as Any] : NSNull()
 
-        var json = ""
-        if let d = try? JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys]) {
-            json = String(data: d, encoding: .utf8) ?? ""
-        }
+        let json = String(prettyJSON: data)
         return "✓ Retrieved \(formatted.count) \(sport ?? "all") activities (local)\n\(json)"
     }
 

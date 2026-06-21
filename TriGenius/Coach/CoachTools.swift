@@ -458,14 +458,14 @@ final class CalendarToolHandler: CoachToolHandler {
 
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
-        let start = (arguments["start_date"] as? String).flatMap(DataSyncCoordinator.ymd.date(from:)) ?? today
+        let start = (arguments["start_date"] as? String).flatMap(DateFormatter.ymd.date(from:)) ?? today
         let defaultEnd = cal.date(byAdding: .day, value: 7, to: start) ?? start
-        let end = (arguments["end_date"] as? String).flatMap(DataSyncCoordinator.ymd.date(from:)) ?? defaultEnd
+        let end = (arguments["end_date"] as? String).flatMap(DateFormatter.ymd.date(from:)) ?? defaultEnd
 
         let days = calendar.availability(from: start, to: max(start, end))
         let payload: [[String: Any]] = days.map { day in
             [
-                "date": DataSyncCoordinator.ymd.string(from: day.date),
+                "date": DateFormatter.ymd.string(from: day.date),
                 "busy_minutes": day.busyMinutes,
                 "all_day_event": day.allDay,
                 "events": day.windows.map { w -> [String: Any] in
@@ -482,10 +482,9 @@ final class CalendarToolHandler: CoachToolHandler {
         let data: [String: Any] = [
             "days": payload,
             "count": payload.count,
-            "range": ["start": DataSyncCoordinator.ymd.string(from: start), "end": DataSyncCoordinator.ymd.string(from: max(start, end))]
+            "range": ["start": DateFormatter.ymd.string(from: start), "end": DateFormatter.ymd.string(from: max(start, end))]
         ]
-        let json = (try? JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys]))
-            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        let json = String(prettyJSON: data)
         return "✓ Calendar availability for \(payload.count) day(s)\n\(json)"
     }
 
@@ -759,7 +758,7 @@ final class GarminToolHandler: CoachToolHandler {
         guard let data = resultData(result),
               let workoutId = data["workout_id"], !(workoutId is NSNull),
               let dateStr = data["date"] as? String,
-              let date = DataSyncCoordinator.ymd.date(from: dateStr) else { return }
+              let date = DateFormatter.ymd.date(from: dateStr) else { return }
         let minutes = (workoutData["duration_minutes"] as? NSNumber)?.doubleValue ?? 0
         TrainingDataStore.shared.ingestScheduled([
             IngestedScheduledWorkout(
@@ -780,7 +779,7 @@ final class GarminToolHandler: CoachToolHandler {
         guard let data = resultData(result),
               let workoutId = data["workout_id"], !(workoutId is NSNull),
               let toStr = data["to_date"] as? String,
-              let date = DataSyncCoordinator.ymd.date(from: toStr) else { return }
+              let date = DateFormatter.ymd.date(from: toStr) else { return }
         TrainingDataStore.shared.moveScheduledWorkout(id: "garmin:\(workoutId)", to: date)
     }
 

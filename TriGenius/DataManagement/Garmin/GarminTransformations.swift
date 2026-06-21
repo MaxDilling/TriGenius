@@ -10,32 +10,23 @@ nonisolated enum GarminTransform {
     /// Convert a supported date input into YYYY-MM-DD format.
     static func formatDate(_ input: String) -> String {
         let formats = ["yyyy-MM-dd", "dd/MM/yyyy", "MM/dd/yyyy", "dd-MM-yyyy"]
-        let out = DateFormatter()
-        out.locale = Locale(identifier: "en_US_POSIX")
-        out.dateFormat = "yyyy-MM-dd"
         for fmt in formats {
             let parser = DateFormatter()
             parser.locale = Locale(identifier: "en_US_POSIX")
             parser.dateFormat = fmt
             if let date = parser.date(from: input) {
-                return out.string(from: date)
+                return DateFormatter.ymd.string(from: date)
             }
         }
         return input
     }
 
     static func date(from ymd: String) -> Date? {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f.date(from: ymd)
+        DateFormatter.ymd.date(from: ymd)
     }
 
     static func ymd(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f.string(from: date)
+        DateFormatter.ymd.string(from: date)
     }
 
     /// Convert speed in m/s into pace (mm:ss) for the requested reference distance.

@@ -490,13 +490,6 @@ final class TrainingDataStore {
 
     // MARK: - Performance metrics
 
-    private static let dayFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
-
     /// Upsert a batch of performance metrics. Same (metric, source, day) updates
     /// in place; a new day appends, building the time series.
     func ingestMetrics(_ metrics: [IngestedMetric]) {
@@ -504,7 +497,7 @@ final class TrainingDataStore {
         let cal = Calendar.current
         for m in metrics {
             let day = cal.startOfDay(for: m.date)
-            let id = "\(m.metricKey):\(m.source):\(Self.dayFormatter.string(from: day))"
+            let id = "\(m.metricKey):\(m.source):\(DateFormatter.ymd.string(from: day))"
             let existing = try? context.fetch(
                 FetchDescriptor<PerformanceMetricRecord>(predicate: #Predicate { $0.id == id })
             ).first
@@ -557,14 +550,5 @@ final class TrainingDataStore {
         snap.vo2maxCycling = latest["vo2max_cycling"]?.value
         snap.weightKg = latest["weight_kg"]?.value
         return snap
-    }
-
-    /// Records for one metric over `[from, to]`, ascending — for history charts.
-    func metricSeries(key: String, from: Date, to: Date) -> [PerformanceMetricRecord] {
-        let descriptor = FetchDescriptor<PerformanceMetricRecord>(
-            predicate: #Predicate { $0.metricKey == key && $0.date >= from && $0.date <= to },
-            sortBy: [SortDescriptor(\.date, order: .forward)]
-        )
-        return (try? context.fetch(descriptor)) ?? []
     }
 }

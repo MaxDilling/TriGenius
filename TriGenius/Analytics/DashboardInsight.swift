@@ -36,10 +36,7 @@ enum DashboardInsight {
 
     /// Today's `yyyy-MM-dd` in POSIX form (cache bucket).
     private static var todayKey: String {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "yyyy-MM-dd"
-        return f.string(from: Date())
+        DateFormatter.ymd.string(from: Date())
     }
 
     /// Cached insight for today iff the inputs (`signature`) are unchanged.

@@ -23,10 +23,7 @@ actor GarminService {
 
     private func resultString(success: Bool, data: Any?, message: String) -> String {
         if !success { return "✗ Error: \(message)" }
-        var json = ""
-        if let data, let d = try? JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys]) {
-            json = String(data: d, encoding: .utf8) ?? ""
-        }
+        let json = data.map { String(prettyJSON: $0) } ?? ""
         return "✓ \(message)\n\(json)"
     }
 

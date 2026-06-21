@@ -101,10 +101,6 @@ final class CalendarViewModel {
         completedByDay[cal.startOfDay(for: day)] ?? []
     }
 
-    func hasCompleted(on day: Date) -> Bool {
-        !(completedByDay[cal.startOfDay(for: day)] ?? []).isEmpty
-    }
-
     func busyWindows(on day: Date) -> [BusyWindow] {
         (busyByDay[cal.startOfDay(for: day)]?.windows ?? []).filter { !$0.isAllDay }
     }
@@ -246,8 +242,8 @@ final class CalendarViewModel {
         load()
 
         if dayChanged, dataSource == .garmin, source == "garmin", let garminID {
-            let from = DataSyncCoordinator.ymd.string(from: fromDay)
-            let to = DataSyncCoordinator.ymd.string(from: target)
+            let from = DateFormatter.ymd.string(from: fromDay)
+            let to = DateFormatter.ymd.string(from: target)
             Task { _ = await GarminService.shared.moveWorkout(fromDate: from, toDate: to, workoutId: garminID) }
         }
     }

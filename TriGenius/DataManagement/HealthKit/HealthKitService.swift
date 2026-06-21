@@ -348,9 +348,7 @@ nonisolated struct WorkoutSummary: Codable {
         id = workout.uuid.uuidString
         sport = WorkoutSummary.sportName(for: workout.workoutActivityType)
         name = sport
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd"
-        date = formatter.string(from: workout.startDate)
+        date = DateFormatter.ymd.string(from: workout.startDate)
         durationMin = workout.duration / 60
         distanceKm = workout.totalDistance.map { $0.doubleValue(for: .meter()) / 1000 }
         avgHRbpm = nil  // HR requires a separate query

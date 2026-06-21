@@ -177,9 +177,7 @@ struct ToolRunnerView: View {
     // MARK: - JSON helpers
 
     private func prettyJSON(_ object: [String: Any]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]),
-              let string = String(data: data, encoding: .utf8) else { return "{}" }
-        return string
+        String(prettyJSON: object)
     }
 
     private func copyToClipboard(_ text: String) {
@@ -194,11 +192,7 @@ struct ToolRunnerView: View {
     /// Build an editable JSON skeleton from a tool's JSON-Schema parameters, with
     /// a placeholder value per property so nested/required fields are obvious.
     static func skeleton(for schema: [String: Any]) -> String {
-        let value = sampleValue(for: schema)
-        guard JSONSerialization.isValidJSONObject(value),
-              let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]),
-              let string = String(data: data, encoding: .utf8) else { return "{}" }
-        return string
+        String(prettyJSON: sampleValue(for: schema))
     }
 
     /// Recursively produce a placeholder value for a JSON-Schema node.
