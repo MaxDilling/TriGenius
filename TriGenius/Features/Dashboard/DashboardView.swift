@@ -21,6 +21,7 @@ struct DashboardView: View {
     let makeBackend: () -> LLMBackend
 
     @State private var viewModel = DashboardViewModel()
+    @State private var volumeMetric: VolumeMetric = .tss
 
     private var context: DashboardContext {
         DashboardContext(
@@ -181,7 +182,7 @@ struct DashboardView: View {
             HStack {
                 Text("Weekly Target").font(.headline)
                 Spacer()
-                Text("This week").font(.caption).foregroundStyle(.secondary)
+                VolumeMetricToggle(metric: $volumeMetric)
             }
 
             HStack(alignment: .top, spacing: 8) {
@@ -189,9 +190,11 @@ struct DashboardView: View {
                     let totals = viewModel.currentWeek?.totals(for: family) ?? VolumeTotals()
                     let target = viewModel.target(for: family)
                     VolumeRing(family: family,
+                               metric: volumeMetric,
                                actualTSS: totals.tss,
                                targetTSS: target.tss,
-                               distanceKm: totals.distanceKm)
+                               actualKm: totals.distanceKm,
+                               targetKm: target.distanceKm)
                 }
             }
 
@@ -303,17 +306,72 @@ private struct PMCStatCard: View {
     }
 }
 
+// MARK: - Volume metric (TSS vs. distance)
+
+/// Which metric the Weekly Target rings fill against and show on top. The other
+/// metric drops to the secondary line below.
+enum VolumeMetric: CaseIterable {
+    case tss, distance
+
+    var icon: String {
+        switch self {
+        case .tss:      return "bolt.fill"
+        case .distance: return "ruler.fill"
+        }
+    }
+}
+
+/// The swap toggle in the Weekly Target header: two metric icons flanking a
+/// swap glyph, the active one highlighted. Tapping flips the primary metric.
+private struct VolumeMetricToggle: View {
+    @Binding var metric: VolumeMetric
+
+    var body: some View {
+        Button {
+            withAnimation(.snappy(duration: 0.2)) {
+                metric = metric == .tss ? .distance : .tss
+            }
+        } label: {
+            HStack(spacing: 6) {
+                segment(.tss)
+                Image(systemName: "arrow.left.arrow.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                segment(.distance)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 4)
+            .background(Capsule().fill(Color.primary.opacity(0.06)))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func segment(_ m: VolumeMetric) -> some View {
+        let active = metric == m
+        return Image(systemName: m.icon)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(active ? Color.white : Color.secondary)
+            .frame(width: 26, height: 26)
+            .background(Circle().fill(active ? Color.accentColor : Color.clear))
+    }
+}
+
 // MARK: - Volume Ring
 
 private struct VolumeRing: View {
     let family: SportFamily
+    let metric: VolumeMetric
     let actualTSS: Double
     let targetTSS: Double
-    let distanceKm: Double
+    let actualKm: Double
+    let targetKm: Double
 
-    // The ring fills against the weekly TSS target (training load), not duration.
+    private var actual: Double { metric == .tss ? actualTSS : actualKm }
+    private var target: Double { metric == .tss ? targetTSS : targetKm }
+
+    // The ring fills against the active metric's weekly target.
     private var fraction: Double {
-        targetTSS > 0 ? min(actualTSS / targetTSS, 1) : 0
+        target > 0 ? min(actual / target, 1) : 0
     }
 
     var body: some View {
@@ -329,12 +387,13 @@ private struct VolumeRing: View {
             .frame(width: 72, height: 72)
 
             VStack(spacing: 1) {
-                Text("\(Int(actualTSS.rounded())) TSS").font(.subheadline.weight(.semibold))
-                if targetTSS > 0 {
-                    Text("/ \(Int(targetTSS.rounded())) TSS").font(.caption2).foregroundStyle(.secondary)
+                Text(label(metric, actual)).font(.subheadline.weight(.semibold))
+                if target > 0 {
+                    Text("/ \(label(metric, target))").font(.caption2).foregroundStyle(.secondary)
                 }
-                if distanceKm > 0 {
-                    Text(distanceLabel).font(.caption.weight(.semibold)).foregroundStyle(family.color)
+                if secondaryActual > 0 {
+                    Text(label(secondaryMetric, secondaryActual))
+                        .font(.caption.weight(.semibold)).foregroundStyle(family.color)
                         .padding(.top, 2)
                 }
             }
@@ -342,10 +401,18 @@ private struct VolumeRing: View {
         .frame(maxWidth: .infinity)
     }
 
-    private var distanceLabel: String {
-        distanceKm >= 10
-            ? "\(Int(distanceKm.rounded())) km"
-            : String(format: "%.1f km", distanceKm)
+    private var secondaryMetric: VolumeMetric { metric == .tss ? .distance : .tss }
+    private var secondaryActual: Double { metric == .tss ? actualKm : actualTSS }
+
+    private func label(_ m: VolumeMetric, _ value: Double) -> String {
+        switch m {
+        case .tss:
+            return "\(Int(value.rounded())) TSS"
+        case .distance:
+            return value >= 10
+                ? "\(Int(value.rounded())) km"
+                : String(format: "%.1f km", value)
+        }
     }
 }
 

@@ -10,7 +10,7 @@ UI strings are **English**; code comments, the system prompt, and tool descripti
 
 ## Build & run
 
-Single Xcode project, single target/scheme (`TriGenius`), no test target. Requires **Xcode-beta** (deployment targets are iOS 27+/macOS 27+; the Apple Intelligence backend needs the iOS/macOS 26 FoundationModels framework).
+Single Xcode project, single target/scheme (`TriGenius`), no test target. Requires **Xcode-beta** (deployment targets are iOS 27+/macOS 27+; the Apple Intelligence backend with tool calls needs the iOS/macOS 27 FoundationModels framework).
 
 ```bash
 # Build for a simulator

@@ -78,7 +78,7 @@ When an athlete is plateauing or asks "what's the lever?" — work through the f
 
 If three or more factors are flagged simultaneously, the answer is almost always base work — not intensity sophistication.
 
-**Polarized training is NOT a universal answer.** It is well-evidenced for trained athletes with adequate volume (Stöggl & Sperlich 2014; Rosenblat meta-analyses; Muñoz 2014). For low-volume recreational athletes (< 4 h/week cycling, < 25 km/week running, 2–3 sessions), volume and consistency dominate. Recommending polarization to such an athlete is technically defensible but practically misallocated effort.
+**Polarized training is NOT a universal answer.** It is well-evidenced for trained athletes with adequate volume. For low-volume recreational athletes (< 4 h/week cycling, < 25 km/week running, 2–3 sessions), volume and consistency dominate. Recommending polarization to such an athlete is technically defensible but practically misallocated effort.
 
 === CLINICAL ESCALATION — NON-NEGOTIABLE ===
 

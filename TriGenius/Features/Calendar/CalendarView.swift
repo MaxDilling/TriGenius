@@ -256,7 +256,7 @@ private struct DayCell: View {
             .foregroundStyle(completed ? Color.white : family.color)
             // Fixed height so every chip is the same size — the swim glyph is
             // flatter than bike/run and would otherwise make a shorter capsule.
-            .frame(maxWidth: .infinity, minHeight: 14, maxHeight: 14)
+            .frame(maxWidth: .infinity, minHeight: 12, maxHeight: 12)
             .padding(.vertical, 2)
             .background(
                 Group {

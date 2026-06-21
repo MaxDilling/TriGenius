@@ -9,7 +9,7 @@ import Foundation
 
 extension DateFormatter {
     /// `yyyy-MM-dd`, POSIX locale — the canonical calendar-date format.
-    static let ymd: DateFormatter = {
+    nonisolated static let ymd: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd"

@@ -78,11 +78,11 @@ final class CoachMemory: ObservableObject {
         let object = try JSONSerialization.jsonObject(with: data)
         guard let raw = object as? [String: Any] else { throw MemoryImportError.invalidFormat }
 
-        userProfile = (raw["user_profile"] as? [String: Any]).map(UserProfile.init(from:)) ?? UserProfile()
-        weeklyStructure = (raw["weekly_structure"] as? [String: Any]).map(WeeklyStructure.init(from:)) ?? WeeklyStructure()
-        preferences = (raw["preferences"] as? [String: Any]).map(AthletePreferences.init(from:)) ?? AthletePreferences()
-        trainingPlan = (raw["training_plan"] as? [String: Any]).map(TrainingPlan.init(from:)) ?? TrainingPlan()
-        sportProgress = (raw["sport_progress"] as? [String: Any]).map(SportProgressMap.init(from:)) ?? SportProgressMap()
+        userProfile = (raw["user_profile"] as? [String: Any]).map { UserProfile(from: $0) } ?? UserProfile()
+        weeklyStructure = (raw["weekly_structure"] as? [String: Any]).map { WeeklyStructure(from: $0) } ?? WeeklyStructure()
+        preferences = (raw["preferences"] as? [String: Any]).map { AthletePreferences(from: $0) } ?? AthletePreferences()
+        trainingPlan = (raw["training_plan"] as? [String: Any]).map { TrainingPlan(from: $0) } ?? TrainingPlan()
+        sportProgress = (raw["sport_progress"] as? [String: Any]).map { SportProgressMap(from: $0) } ?? SportProgressMap()
         feedbackHistory = (raw["feedback_history"] as? [[String: Any]] ?? []).compactMap(FeedbackEntry.init(from:))
         onboardingComplete = raw["onboarding_complete"] as? Bool ?? false
         save()
@@ -508,7 +508,7 @@ struct TrainingPlan {
         monthlyFocus = d["monthly_focus"] as? String
         notes = d["notes"] as? String
         if let raw = d["phases"] as? [[String: Any]] {
-            phases = raw.compactMap(Phase.init(from:)).sorted { ($0.start() ?? .distantPast) < ($1.start() ?? .distantPast) }
+            phases = raw.compactMap { Phase(from: $0) }.sorted { ($0.start() ?? .distantPast) < ($1.start() ?? .distantPast) }
         }
     }
 

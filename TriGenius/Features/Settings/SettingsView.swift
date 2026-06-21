@@ -47,8 +47,8 @@ final class AppSettings: ObservableObject {
         "gemini-2.5-flash",
         "gemini-3.5-flash",
         "gemini-3.1-pro-preview",
-        "gemini-3-flash-preview",
-        "gemma-3-27b-it"
+        "gemma-3-27b-it",
+        "google/gemma-4-26b-a4b-qat"
     ]
 
     init() {

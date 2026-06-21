@@ -192,17 +192,12 @@ private struct PhaseCard: View {
 
                 let targets = orderedTargets(phase)
                 if !targets.isEmpty {
-                    HStack(spacing: 8) {
-                        ForEach(targets, id: \.0) { sport, label in
-                            HStack(spacing: 4) {
-                                Image(systemName: SportFamily(sportKey: sport).icon)
-                                Text(label)
-                            }
-                            .font(.caption)
-                            .padding(.horizontal, 8).padding(.vertical, 4)
-                            .background(Capsule().fill(Color.primary.opacity(0.06)))
+                    HStack(alignment: .top, spacing: 8) {
+                        ForEach(targets, id: \.0) { sport, target in
+                            PhaseTargetTile(sport: sport, target: target)
                         }
                     }
+                    .padding(.top, 2)
                 }
             }
         }
@@ -210,20 +205,42 @@ private struct PhaseCard: View {
         .dashCard()
     }
 
-    private func orderedTargets(_ phase: Phase) -> [(String, String)] {
+    private func orderedTargets(_ phase: Phase) -> [(String, SportTarget)] {
         planSports.compactMap { sport in
             guard let t = phase.sportTargets[sport.key], t.hasData else { return nil }
-            return (sport.key, targetLabel(t))
+            return (sport.key, t)
         }
     }
 }
 
-/// "200 km · 350 TSS" / "200 km" / "350 TSS" for a sport target.
-private func targetLabel(_ t: SportTarget) -> String {
-    var parts: [String] = []
-    if let km = t.weeklyDistanceKm { parts.append("\(formatKm(km)) km") }
-    if let tss = t.weeklyTSS { parts.append("\(tss) TSS") }
-    return parts.joined(separator: " · ")
+// MARK: - Phase target tile
+
+/// A single per-sport target in a phase card: the sport icon stacked above its
+/// weekly values, no border. Strength carries no distance (only a TSS load).
+private struct PhaseTargetTile: View {
+    let sport: String
+    let target: SportTarget
+
+    private var family: SportFamily { SportFamily(sportKey: sport) }
+    private var showsDistance: Bool { family != .strength }
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(systemName: family.icon)
+                .font(.subheadline)
+                .foregroundStyle(family.color)
+            if showsDistance, let km = target.weeklyDistanceKm {
+                Text("\(formatKm(km)) km")
+                    .font(.caption.weight(.medium))
+            }
+            if let tss = target.weeklyTSS {
+                Text("\(tss) TSS")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
 }
 
 private func formatKm(_ km: Double) -> String {
