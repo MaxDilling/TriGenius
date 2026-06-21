@@ -157,6 +157,15 @@ final class ProfileToolHandler: CoachToolHandler {
                 ]
             ),
             ToolDefinition(
+                name: "complete_onboarding",
+                description: "Mark onboarding as finished. Call this once the key athlete info (name, goals, weekly hours, max HR) has been gathered and saved via update_athlete_profile. After this the onboarding flow is no longer shown.",
+                parameters: [
+                    "type": "object",
+                    "properties": [:],
+                    "required": []
+                ]
+            ),
+            ToolDefinition(
                 name: "read_knowledge",
                 description: "Read coaching knowledge files on specific topics: cycling, running, swimming, or injuries. Always call this FIRST when answering sport-specific training questions.",
                 parameters: [
@@ -170,9 +179,58 @@ final class ProfileToolHandler: CoachToolHandler {
                     ],
                     "required": ["topic"]
                 ]
+            ),
+            ToolDefinition(
+                name: "set_training_plan",
+                description: "Build or replace the athlete's complete periodized training plan in one call: the target event, its date, and an ordered list of phases (e.g. base → build → peak → taper) leading up to the event. Each phase has a date range, a focus, and per-sport weekly targets (distance and/or TSS). Use this to generate a full plan end-to-end; for single-field tweaks use update_athlete_profile. Replaces any existing phases.",
+                parameters: [
+                    "type": "object",
+                    "properties": [
+                        "target_event": ["type": "string", "description": "Primary target race or event."],
+                        "event_date": ["type": "string", "description": "Event date in YYYY-MM-DD format."],
+                        "phases": [
+                            "type": "array",
+                            "description": "Ordered training phases from now until the event.",
+                            "items": [
+                                "type": "object",
+                                "properties": [
+                                    "name": [
+                                        "type": "string",
+                                        "enum": ["Prep", "Base", "Build", "Peak", "Taper", "Race", "Recovery", "Transition"],
+                                        "description": "Phase type."
+                                    ],
+                                    "start_date": ["type": "string", "description": "Phase start in YYYY-MM-DD format."],
+                                    "end_date": ["type": "string", "description": "Phase end in YYYY-MM-DD format."],
+                                    "focus": ["type": "string", "description": "Main training focus of this phase."],
+                                    "sport_targets": [
+                                        "type": "object",
+                                        "description": "Per-sport weekly targets for this phase.",
+                                        "properties": [
+                                            "swimming": Self.sportTargetSchema,
+                                            "cycling": Self.sportTargetSchema,
+                                            "running": Self.sportTargetSchema,
+                                            "strength": Self.sportTargetSchema
+                                        ]
+                                    ]
+                                ],
+                                "required": ["name", "start_date", "end_date"]
+                            ]
+                        ]
+                    ],
+                    "required": ["phases"]
+                ]
             )
         ]
     }
+
+    /// Reusable JSON-Schema fragment for a single sport's weekly target.
+    private static let sportTargetSchema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "weekly_distance_km": ["type": "number", "description": "Target weekly distance in kilometers."],
+            "weekly_tss": ["type": "integer", "description": "Target weekly TSS (training stress) for this sport."]
+        ]
+    ]
 
     func execute(name: String, arguments: [String: Any]) async throws -> String {
         switch name {
@@ -180,12 +238,46 @@ final class ProfileToolHandler: CoachToolHandler {
             return updateProfile(arguments: arguments)
         case "get_athlete_profile":
             return memory.contextSummary(performance: TrainingDataStore.shared.latestSnapshot())
+        case "complete_onboarding":
+            memory.markOnboardingComplete()
+            return "Onboarding marked complete."
         case "read_knowledge":
             let topic = arguments["topic"] as? String ?? ""
             return knowledgeSummary(for: topic)
+        case "set_training_plan":
+            return setTrainingPlan(arguments: arguments)
         default:
             return "Unknown profile tool: \(name)"
         }
+    }
+
+    private func setTrainingPlan(arguments: [String: Any]) -> String {
+        let rawPhases = arguments["phases"] as? [[String: Any]] ?? []
+        let phases = rawPhases.compactMap(Phase.init(from:))
+        let dropped = rawPhases.count - phases.count
+
+        memory.updateTrainingPlan { plan in
+            if let ev = arguments["target_event"] as? String, !ev.isEmpty { plan.targetEvent = ev }
+            if let dt = arguments["event_date"] as? String, !dt.isEmpty { plan.eventDate = dt }
+            if !phases.isEmpty {
+                plan.phases = phases.sorted {
+                    ($0.start() ?? .distantPast) < ($1.start() ?? .distantPast)
+                }
+                // Keep the legacy flat current_phase in sync with the new array.
+                if let current = plan.phase() {
+                    plan.currentPhase = current.name.rawValue
+                    plan.phaseStartDate = current.startDate
+                    plan.phaseEndDate = current.endDate
+                }
+            }
+        }
+
+        var msg = "Training plan saved with \(phases.count) phase(s)."
+        if dropped > 0 {
+            msg += " \(dropped) phase(s) were ignored because of an invalid name "
+            msg += "(use exactly one of: Prep, Base, Build, Peak, Taper, Race, Recovery, Transition)."
+        }
+        return msg
     }
 
     private func updateProfile(arguments: [String: Any]) -> String {

@@ -93,7 +93,7 @@ actor GarminClient {
     func getActivitiesByDate(start: String, end: String) async throws -> [[String: Any]] {
         var activities: [[String: Any]] = []
         var offset = 0
-        let pageSize = 20
+        let pageSize = 50
         while true {
             let page = try await connectapi(
                 "/activitylist-service/activities/search/activities",
@@ -101,8 +101,12 @@ actor GarminClient {
             ) as? [[String: Any]] ?? []
             if page.isEmpty { break }
             activities.append(contentsOf: page)
+            // Advance by the requested window, not by `page.count`: Garmin can
+            // return a *short* page mid-range when the date filter trims items
+            // that the `limit` already counted, while older activities still
+            // remain. Stopping on a short page (page.count < pageSize) would end
+            // the backfill early — only an empty page means we're past the range.
             offset += pageSize
-            if page.count < pageSize { break }
         }
         return activities
     }

@@ -63,29 +63,7 @@ struct TriGeniusApp: App {
         // v3: also migrates max HR (was the last performance value still in the profile).
         let key = "trigenius.perfMetricsSeeded.v3"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
-        let p = memory.userProfile
-        let now = Date()
-        var metrics: [IngestedMetric] = []
-        if let ftp = p.ftp {
-            metrics.append(IngestedMetric(metricKey: "cycling_ftp", value: Double(ftp), unit: "watts", source: "manual", date: now))
-        }
-        if let css = p.cssPace, let secs = DataSyncCoordinator.paceSeconds(from: css) {
-            metrics.append(IngestedMetric(metricKey: "swim_css_pace", value: secs, unit: "sec_per_100m", source: "manual", date: now))
-        }
-        if let vo2 = p.vo2max {
-            metrics.append(IngestedMetric(metricKey: "vo2max_running", value: vo2, unit: "ml_kg_min", source: "manual", date: now))
-        }
-        if let lthr = p.lactateThrHR {
-            metrics.append(IngestedMetric(metricKey: "lactate_threshold_hr", value: Double(lthr), unit: "bpm", source: "manual", date: now))
-        }
-        if let maxHR = p.maxHR {
-            metrics.append(IngestedMetric(metricKey: "max_hr", value: Double(maxHR), unit: "bpm", source: "manual", date: now))
-        }
-        if let weight = p.weightKg {
-            metrics.append(IngestedMetric(metricKey: "weight_kg", value: weight, unit: "kg", source: "manual", date: now))
-        }
-        metrics += DataSyncCoordinator.zoneMetrics(p.zones["hr_zones"], prefix: "hr_zone", unit: "bpm", source: "manual", date: now)
-        metrics += DataSyncCoordinator.zoneMetrics(p.zones["power_zones"], prefix: "power_zone", unit: "watts", source: "manual", date: now)
+        let metrics = DataSyncCoordinator.metrics(fromProfile: memory.userProfile, date: Date())
         TrainingDataStore.shared.ingestMetrics(metrics)
         UserDefaults.standard.set(true, forKey: key)
     }
@@ -112,6 +90,7 @@ struct RootTabView: View {
                     athleteName: memory.userProfile.name,
                     weeklyStructure: memory.weeklyStructure,
                     trainingPlan: memory.trainingPlan,
+                    memory: memory,
                     makeBackend: { settings.makeBackend() }
                 )
             }
@@ -127,6 +106,7 @@ struct RootTabView: View {
             }
             NavigationStack {
                 SettingsView(
+                    brain: brain,
                     settings: settings,
                     memory: memory,
                     onBackendChanged: onBackendChanged

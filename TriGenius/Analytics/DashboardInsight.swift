@@ -24,6 +24,14 @@ enum DashboardInsight {
     reply with ONE short, encouraging, specific sentence (max ~25 words). \
     No greeting, no preamble, no markdown, no quotes — just the sentence. \
     Respond in the athlete's language (default to English).
+
+    Interpret Form (TSB) with these reference ranges — a negative TSB is normal \
+    while building fitness and is NOT "too much training":
+    - above +15: very fresh / tapered (race-ready, or detraining if fitness is also low)
+    - +5 to +15: fresh
+    - -10 to +5: neutral / maintenance
+    - -30 to -10: the productive training zone — expected and desirable while building
+    - below -30: high fatigue / overreaching — the only range that warrants caution
     """
 
     /// Today's `yyyy-MM-dd` in POSIX form (cache bucket).

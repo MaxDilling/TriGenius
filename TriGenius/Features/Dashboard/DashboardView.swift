@@ -17,6 +17,7 @@ struct DashboardView: View {
     var athleteName: String?
     let weeklyStructure: WeeklyStructure
     let trainingPlan: TrainingPlan
+    @ObservedObject var memory: CoachMemory
     let makeBackend: () -> LLMBackend
 
     @State private var viewModel = DashboardViewModel()
@@ -37,6 +38,7 @@ struct DashboardView: View {
                     ProgressView("Loading…").padding(.top, 60)
                 } else {
                     header
+                    planBanner
                     performanceInsights
                     weeklyTarget
                     agenda
@@ -84,6 +86,19 @@ struct DashboardView: View {
                     .frame(width: 44, height: 44)
                     .background(Color.primary.opacity(0.06))
                     .clipShape(Circle())
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    // MARK: Training-plan banner
+
+    @ViewBuilder private var planBanner: some View {
+        if TrainingPlanBanner.hasData(memory.trainingPlan) {
+            NavigationLink {
+                PlanView(memory: memory)
+            } label: {
+                TrainingPlanBanner(plan: memory.trainingPlan)
             }
             .buttonStyle(.plain)
         }
@@ -164,7 +179,7 @@ struct DashboardView: View {
     private var weeklyTarget: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
-                Text("Weekly Target (Volume)").font(.headline)
+                Text("Weekly Target").font(.headline)
                 Spacer()
                 Text("This week").font(.caption).foregroundStyle(.secondary)
             }
@@ -174,9 +189,9 @@ struct DashboardView: View {
                     let totals = viewModel.currentWeek?.totals(for: family) ?? VolumeTotals()
                     let target = viewModel.target(for: family)
                     VolumeRing(family: family,
-                               actualMinutes: totals.durationMinutes,
-                               targetMinutes: target.durationMinutes,
-                               tss: totals.tss)
+                               actualTSS: totals.tss,
+                               targetTSS: target.tss,
+                               distanceKm: totals.distanceKm)
                 }
             }
 
@@ -292,12 +307,13 @@ private struct PMCStatCard: View {
 
 private struct VolumeRing: View {
     let family: SportFamily
-    let actualMinutes: Double
-    let targetMinutes: Double
-    let tss: Double
+    let actualTSS: Double
+    let targetTSS: Double
+    let distanceKm: Double
 
+    // The ring fills against the weekly TSS target (training load), not duration.
     private var fraction: Double {
-        targetMinutes > 0 ? min(actualMinutes / targetMinutes, 1) : 0
+        targetTSS > 0 ? min(actualTSS / targetTSS, 1) : 0
     }
 
     var body: some View {
@@ -313,14 +329,23 @@ private struct VolumeRing: View {
             .frame(width: 72, height: 72)
 
             VStack(spacing: 1) {
-                Text(durationHM(actualMinutes)).font(.subheadline.weight(.semibold))
-                Text("/ \(durationHM(targetMinutes))").font(.caption2).foregroundStyle(.secondary)
-                Text("\(Int(tss.rounded())) TSS")
-                    .font(.caption.weight(.semibold)).foregroundStyle(family.color)
-                    .padding(.top, 2)
+                Text("\(Int(actualTSS.rounded())) TSS").font(.subheadline.weight(.semibold))
+                if targetTSS > 0 {
+                    Text("/ \(Int(targetTSS.rounded())) TSS").font(.caption2).foregroundStyle(.secondary)
+                }
+                if distanceKm > 0 {
+                    Text(distanceLabel).font(.caption.weight(.semibold)).foregroundStyle(family.color)
+                        .padding(.top, 2)
+                }
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private var distanceLabel: String {
+        distanceKm >= 10
+            ? "\(Int(distanceKm.rounded())) km"
+            : String(format: "%.1f km", distanceKm)
     }
 }
 

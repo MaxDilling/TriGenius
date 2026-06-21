@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import UniformTypeIdentifiers
 
 // MARK: - Data Source
 
@@ -82,6 +83,7 @@ final class AppSettings: ObservableObject {
 // MARK: - Settings View
 
 struct SettingsView: View {
+    let brain: CoachBrain
     @ObservedObject var settings: AppSettings
     @ObservedObject var memory: CoachMemory
     let onBackendChanged: () -> Void
@@ -214,6 +216,13 @@ struct SettingsView: View {
             Section {
                 Toggle(isOn: $settings.debugMode) {
                     Label("Debug Mode", systemImage: "ladybug")
+                }
+                if settings.debugMode {
+                    NavigationLink {
+                        ToolDebugView(brain: brain)
+                    } label: {
+                        Label("Tool Runner", systemImage: "wrench.and.screwdriver")
+                    }
                 }
                 Button(role: .destructive) {
                     showClearDataConfirm = true
@@ -491,6 +500,9 @@ struct GarminLoginSection: View {
 struct MemoryDebugView: View {
     @ObservedObject var memory: CoachMemory
     @State private var didCopy = false
+    @State private var showImporter = false
+    @State private var importStatus: String?
+    @State private var importFailed = false
 
     var body: some View {
         ScrollView {
@@ -501,6 +513,12 @@ struct MemoryDebugView: View {
                 Text(memory.storageFilePath)
                     .font(.system(.caption, design: .monospaced))
                     .textSelection(.enabled)
+
+                if let importStatus {
+                    Label(importStatus, systemImage: importFailed ? "exclamationmark.triangle.fill" : "checkmark.circle")
+                        .foregroundStyle(importFailed ? .orange : .green)
+                        .font(.caption)
+                }
 
                 Divider()
 
@@ -517,6 +535,11 @@ struct MemoryDebugView: View {
         #endif
         .toolbar {
             Button {
+                showImporter = true
+            } label: {
+                Label("Import", systemImage: "square.and.arrow.down")
+            }
+            Button {
                 #if os(iOS)
                 UIPasteboard.general.string = memory.prettyPrintedJSON
                 #elseif os(macOS)
@@ -528,6 +551,34 @@ struct MemoryDebugView: View {
                 Label(didCopy ? "Copied" : "Copy",
                       systemImage: didCopy ? "checkmark" : "doc.on.doc")
             }
+        }
+        .fileImporter(isPresented: $showImporter, allowedContentTypes: [.json]) { result in
+            handleImport(result)
+        }
+    }
+
+    /// Replace the whole profile from a picked `coach_memory.json`, then seed any
+    /// performance scalars it carries (FTP, CSS, …) into the metric time series —
+    /// `UserProfile.toDict()` no longer persists those, so they'd be lost otherwise.
+    private func handleImport(_ result: Result<URL, Error>) {
+        switch result {
+        case .success(let url):
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let data = try Data(contentsOf: url)
+                try memory.importJSON(data)
+                let metrics = DataSyncCoordinator.metrics(fromProfile: memory.userProfile, date: Date())
+                TrainingDataStore.shared.ingestMetrics(metrics)
+                importFailed = false
+                importStatus = "Imported \(url.lastPathComponent)."
+            } catch {
+                importFailed = true
+                importStatus = error.localizedDescription
+            }
+        case .failure(let error):
+            importFailed = true
+            importStatus = error.localizedDescription
         }
     }
 }
@@ -626,7 +677,8 @@ struct GarminBackfillSection: View {
     @State private var statusMessage: String?
     @State private var isError = false
 
-    /// How far back to pull. ~4 months comfortably covers the >42-day CTL warm-up.
+    /// How far back to pull. ~8 months comfortably covers the >42-day CTL warm-up
+    /// plus several months of history for trend context.
     private let backfillDays = 240
 
     var body: some View {

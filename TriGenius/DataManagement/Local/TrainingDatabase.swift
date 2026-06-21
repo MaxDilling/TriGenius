@@ -138,6 +138,11 @@ final class ScheduledWorkoutRecord {
     var targetTSS: Double?
     /// Optional free-text description of the planned session.
     var notes: String
+    /// Local-only planned start time as minutes after midnight (e.g. 420 = 07:00).
+    /// Nil → no specific time-of-day. Stored day-independent so a day-move keeps
+    /// the time-of-day. Set by dragging onto a calendar segment; lost if the
+    /// workout is (re)created in Garmin.
+    var startMinute: Int?
 
     init(
         id: String,
@@ -147,7 +152,8 @@ final class ScheduledWorkoutRecord {
         name: String,
         targetDurationMinutes: Double,
         targetTSS: Double?,
-        notes: String = ""
+        notes: String = "",
+        startMinute: Int? = nil
     ) {
         self.id = id
         self.source = source
@@ -157,6 +163,7 @@ final class ScheduledWorkoutRecord {
         self.targetDurationMinutes = targetDurationMinutes
         self.targetTSS = targetTSS
         self.notes = notes
+        self.startMinute = startMinute
     }
 }
 
@@ -336,6 +343,19 @@ final class TrainingDataStore {
         return (try? context.fetch(descriptor)) ?? []
     }
 
+    /// Activities within `[from, to]` (start-of-day inclusive), newest first —
+    /// for the calendar, which needs the sessions per day, not just a flag.
+    func activities(from: Date, to: Date) -> [ActivityRecord] {
+        let cal = Calendar.current
+        let lo = cal.startOfDay(for: from)
+        let hi = cal.startOfDay(for: to)
+        let descriptor = FetchDescriptor<ActivityRecord>(
+            predicate: #Predicate { $0.date >= lo && $0.date <= hi },
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
+        )
+        return (try? context.fetch(descriptor)) ?? []
+    }
+
     /// Total number of stored activities.
     var count: Int {
         (try? context.fetchCount(FetchDescriptor<ActivityRecord>())) ?? 0
@@ -415,6 +435,21 @@ final class TrainingDataStore {
         return record
     }
 
+    /// Set (or clear) a planned workout's local time-of-day, in minutes after
+    /// midnight. Used when dragging a workout onto a calendar segment. Returns
+    /// the updated record.
+    @discardableResult
+    func setScheduledStartMinute(id: String, minute: Int?) -> ScheduledWorkoutRecord? {
+        let record = try? context.fetch(
+            FetchDescriptor<ScheduledWorkoutRecord>(predicate: #Predicate { $0.id == id })
+        ).first
+        guard let record else { return nil }
+        record.startMinute = minute
+        try? context.save()
+        NotificationCenter.default.post(name: .scheduledWorkoutsDidChange, object: nil)
+        return record
+    }
+
     /// Remove a planned workout by id.
     func deleteScheduledWorkout(id: String) {
         guard let record = try? context.fetch(
@@ -437,9 +472,20 @@ final class TrainingDataStore {
                 predicate: #Predicate { $0.source == source && $0.date >= lo && $0.date <= hi }
             )
         )) ?? []
+        // Carry over any locally-set time-of-day so it survives the resync.
+        let preservedStart = Dictionary(uniqueKeysWithValues:
+            stale.compactMap { r in r.startMinute.map { (r.id, $0) } })
         for r in stale { context.delete(r) }
         try? context.save()
         ingestScheduled(workouts)
+        for (id, minute) in preservedStart {
+            if let r = try? context.fetch(
+                FetchDescriptor<ScheduledWorkoutRecord>(predicate: #Predicate { $0.id == id })
+            ).first {
+                r.startMinute = minute
+            }
+        }
+        if !preservedStart.isEmpty { try? context.save() }
     }
 
     // MARK: - Performance metrics

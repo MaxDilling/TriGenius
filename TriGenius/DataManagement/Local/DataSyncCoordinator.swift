@@ -213,6 +213,35 @@ final class DataSyncCoordinator {
         return out
     }
 
+    /// Map the legacy/exported profile scalars (FTP, CSS, VO2max, lactate-threshold
+    /// HR, max HR, weight, HR/power zones) into time-series metric records. Shared by
+    /// the one-time `coach_memory.json` migration (`TriGeniusApp.seedPerformanceMetricsIfNeeded`)
+    /// and the manual JSON import. Marked `source: "manual"` — these are athlete-supplied.
+    static func metrics(fromProfile p: UserProfile, date: Date) -> [IngestedMetric] {
+        var out: [IngestedMetric] = []
+        if let ftp = p.ftp {
+            out.append(IngestedMetric(metricKey: "cycling_ftp", value: Double(ftp), unit: "watts", source: "manual", date: date))
+        }
+        if let css = p.cssPace, let secs = paceSeconds(from: css) {
+            out.append(IngestedMetric(metricKey: "swim_css_pace", value: secs, unit: "sec_per_100m", source: "manual", date: date))
+        }
+        if let vo2 = p.vo2max {
+            out.append(IngestedMetric(metricKey: "vo2max_running", value: vo2, unit: "ml_kg_min", source: "manual", date: date))
+        }
+        if let lthr = p.lactateThrHR {
+            out.append(IngestedMetric(metricKey: "lactate_threshold_hr", value: Double(lthr), unit: "bpm", source: "manual", date: date))
+        }
+        if let maxHR = p.maxHR {
+            out.append(IngestedMetric(metricKey: "max_hr", value: Double(maxHR), unit: "bpm", source: "manual", date: date))
+        }
+        if let weight = p.weightKg {
+            out.append(IngestedMetric(metricKey: "weight_kg", value: weight, unit: "kg", source: "manual", date: date))
+        }
+        out += zoneMetrics(p.zones["hr_zones"], prefix: "hr_zone", unit: "bpm", source: "manual", date: date)
+        out += zoneMetrics(p.zones["power_zones"], prefix: "power_zone", unit: "watts", source: "manual", date: date)
+        return out
+    }
+
     /// Parse a "m:ss" pace string into seconds (inverse of `GarminTransform.speedToPace`).
     static func paceSeconds(from pace: String) -> Double? {
         let parts = pace.split(separator: ":")

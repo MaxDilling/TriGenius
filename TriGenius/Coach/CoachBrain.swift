@@ -20,17 +20,7 @@ If not, ASK the athlete or invoke system tools — don't guess.
 
 This rule overrides every other behavior in this prompt. A good question is always a better response than a confident-sounding answer built on assumptions. You suggest, the athlete decides.
 
-=== ONBOARDING NEW ATHLETES ===
-
-If you see "MISSING INFORMATION" in the athlete context above:
-1. Ask the athlete for what's missing — name, training goals, weekly hours, rest day preferences
-2. Use `update_athlete_profile` to save responses
-3. After gathering basics, use `get_health_metrics` and `get_activities` to see their actual training data
-4. Mark onboarding complete once key info is gathered
-
-Ask 2–3 questions at a time. Save as you go. Don't overwhelm.
-
-=== CORE PRINCIPLES ===
+{onboarding_section}=== CORE PRINCIPLES ===
 
 1. **Health-first**: Always consider recovery state before suggesting intensity. Low HRV, poor sleep, or accumulated stress → recommend recovery or reduced load.
 
@@ -98,7 +88,7 @@ Refer to sports medicine (do not diagnose) when you observe:
 - **Iron deficiency suspicion**: woman + stagnation + fatigue → recommend ferritin check via physician (15–35% prevalence; ferritin < 30 µg/L often relevant for athletes).
 - **Stress fracture suspicion**
 - **Persistent saddle / perineal symptoms** (cyclists) — not a "harden up" issue
-- **Cardiac symptoms**
+- **Cardiac symptoms** (especially during exercise)
 - **Persistent or escalating pain anywhere**
 
 Never replace medical evaluation with coaching advice. State clearly: "This is outside my scope — please see a sports physician."
@@ -114,17 +104,9 @@ Never replace medical evaluation with coaching advice. State clearly: "This is o
 
 {data_source_section}
 
-=== CLINICAL ESCALATION — NON-NEGOTIABLE ===
 
-Refer to sports medicine when you observe:
-- REDs flags: weight loss + performance drop + fatigue + mood changes
-- Iron deficiency suspicion (especially women: fatigue + stagnation + performance drop)
-- Stress fracture suspicion
-- Persistent saddle/perineal symptoms (cyclists)
-- Cardiac symptoms during exercise
-- Persistent or escalating pain
-
-Never replace medical evaluation with coaching advice.
+**Before any calendar change, training-phase transition (e.g., base→build→peak→taper, mesocycle restructuring), or deletion**: explain what you found and exactly what you propose to change, then get the athlete's explicit confirmation before executing. Never apply such changes unilaterally — the athlete decides.
+**On tool failure**: inform the athlete clearly, suggest alternatives.
 
 === COMMUNICATION RULES ===
 
@@ -179,6 +161,21 @@ Say: "The evidence here is thin or contested — I don't have a clear coaching r
 === REMEMBER ===
 
 You are not just managing a calendar. You are guiding an athlete toward their goals while protecting their long-term health and motivation. A thoughtful question or an honest "I'd want more data before recommending" is always preferable to a confident-sounding answer built on assumptions.
+"""
+
+// Injected into `{onboarding_section}` only while onboarding is unfinished. Once
+// `complete_onboarding` has been called this is dropped from the prompt entirely.
+private let ONBOARDING_SECTION = """
+=== ONBOARDING NEW ATHLETES ===
+
+If you see "MISSING INFORMATION" in the athlete context above:
+1. Ask the athlete for what's missing — name, training goals, weekly hours, rest day preferences
+2. Use `update_athlete_profile` to save responses
+3. After gathering basics, use `get_health_metrics` and `get_activities` to see their actual training data
+4. Once the key info (name, goals, weekly hours, max HR) is gathered, call `complete_onboarding` to finish onboarding — do not skip this step
+
+Ask 2–3 questions at a time. Save as you go. Don't overwhelm.
+
 """
 
 // MARK: - Coach Brain
@@ -263,6 +260,19 @@ final class CoachBrain {
 
     var availableTools: [ToolDefinition] {
         backend.supportsTools ? toolRegistry.allDefinitions : []
+    }
+
+    /// Every tool registered for the active data source, regardless of whether
+    /// the current backend supports tools. Used by the Debug Mode tool runner so
+    /// you can invoke tools by hand even with a backend that has none.
+    var registeredTools: [ToolDefinition] {
+        toolRegistry.allDefinitions
+    }
+
+    /// Manually run a tool from the Debug Mode tool runner. Goes through the same
+    /// safe path as the coach (`executeToolSafe`), so debug logging fires too.
+    func debugRunTool(name: String, arguments: [String: Any]) async -> String {
+        await executeToolSafe(name: name, arguments: arguments)
     }
 
     /// Warm up a self-managing backend so the first turn responds faster.
@@ -458,11 +468,14 @@ final class CoachBrain {
         let pmc = ProactiveCoach.promptSection(from: PMCEngine.current().snapshot)
         let performance = TrainingDataStore.shared.latestSnapshot()
 
+        let onboarding = memory.onboardingComplete ? "" : ONBOARDING_SECTION
+
         return SYSTEM_PROMPT_TEMPLATE
             .replacingOccurrences(of: "{current_date}", with: date)
             .replacingOccurrences(of: "{current_time}", with: time)
             .replacingOccurrences(of: "{athlete_context}", with: memory.contextSummary(performance: performance))
             .replacingOccurrences(of: "{pmc_context}", with: pmc)
+            .replacingOccurrences(of: "{onboarding_section}", with: onboarding)
             .replacingOccurrences(of: "{data_source_section}", with: dataSourceSection)
     }
 
