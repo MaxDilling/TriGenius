@@ -100,6 +100,26 @@ final class DataSyncCoordinator {
         }
     }
 
+    // MARK: - Deep history backfill (CTL warm-up)
+
+    /// Pull a deep slice of history into the local database so the PMC engine's
+    /// CTL (Fitness, 42-day EWMA) has a proper >42-day warm-up. Garmin only — the
+    /// Apple Health sync already backfills generously on its first run. Returns
+    /// the number of activities ingested, or nil if unavailable / failed.
+    @discardableResult
+    func deepBackfill(source: DataSource, days: Int = 240) async -> Int? {
+        guard source == .garmin, await GarminAuth.shared.isAuthenticated else { return nil }
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        guard let from = cal.date(byAdding: .day, value: -days, to: today) else { return nil }
+        let count = await GarminService.shared.backfillActivities(
+            startDate: Self.ymd.string(from: from),
+            endDate: Self.ymd.string(from: today)
+        )
+        if count != nil { markSynced(source) }
+        return count
+    }
+
     // MARK: - Scheduled-workout sync (planned calendar items)
 
     /// Window the scheduled-workout mirror covers: a week back through four weeks
@@ -178,6 +198,7 @@ final class DataSyncCoordinator {
         add("cycling_ftp", (settings["cycling_ftp"] as? NSNumber)?.doubleValue, "watts")
         add("running_ftp", (settings["running_ftp"] as? NSNumber)?.doubleValue, "watts")
         add("lactate_threshold_hr", (settings["lactate_threshold_hr"] as? NSNumber)?.doubleValue, "bpm")
+        add("max_hr", (settings["max_hr"] as? NSNumber)?.doubleValue, "bpm")
         add("vo2max_running", (settings["vo2max_running"] as? NSNumber)?.doubleValue, "ml_kg_min")
         add("vo2max_cycling", (settings["vo2max_cycling"] as? NSNumber)?.doubleValue, "ml_kg_min")
         add("weight_kg", (settings["weight_kg"] as? NSNumber)?.doubleValue, "kg")

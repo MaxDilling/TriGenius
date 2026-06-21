@@ -34,6 +34,13 @@ final class AppSettings: ObservableObject {
     @Published var debugMode: Bool {
         didSet { UserDefaults.standard.set(debugMode, forKey: "debug_mode") }
     }
+    /// Whether the athlete opted into proactive background notifications. Read by
+    /// `BackgroundCoordinator` (which runs outside the SwiftUI environment) via
+    /// `proactiveNotificationsKey`.
+    @Published var proactiveNotifications: Bool {
+        didSet { UserDefaults.standard.set(proactiveNotifications, forKey: Self.proactiveNotificationsKey) }
+    }
+    static let proactiveNotificationsKey = "proactive_notifications"
 
     static let availableGeminiModels = [
         "gemini-2.5-flash",
@@ -52,6 +59,7 @@ final class AppSettings: ObservableObject {
         dataSource = DataSource(rawValue: savedSource) ?? .appleHealth
         garminEmail = UserDefaults.standard.string(forKey: "garmin_email") ?? ""
         debugMode = UserDefaults.standard.bool(forKey: "debug_mode")
+        proactiveNotifications = UserDefaults.standard.bool(forKey: Self.proactiveNotificationsKey)
     }
 
     var isConfigured: Bool {
@@ -113,6 +121,7 @@ struct SettingsView: View {
 
                 if settings.dataSource == .garmin {
                     GarminLoginSection(settings: settings)
+                    GarminBackfillSection()
                 } else {
                     Text("Training and health data comes from Apple Health.")
                         .font(.caption)
@@ -120,10 +129,27 @@ struct SettingsView: View {
                 }
             }
 
+            // Schedule (calendar) section — gives the coach awareness of busy days.
+            Section {
+                CalendarAccessSection()
+            } header: {
+                Text("Schedule")
+            } footer: {
+                Text("Lets the coach read your calendar's busy/free windows to plan workouts around busy days. Read-only — TriGenius never changes your events.")
+            }
+
+            // Notifications section — proactive background coaching.
+            Section {
+                NotificationSettingsSection(settings: settings)
+            } header: {
+                Text("Notifications")
+            } footer: {
+                Text("Proactive alerts when your form (TSB) signals high fatigue or detraining. Evaluated on a background refresh.")
+            }
+
             // Athlete profile section
             Section("Athlete Profile") {
                 profileRow("Name", value: memory.userProfile.name)
-                profileRow("Max HR", value: memory.userProfile.maxHR.map { "\($0) bpm" })
 
                 if !memory.userProfile.goals.isEmpty {
                     VStack(alignment: .leading, spacing: 4) {
@@ -166,6 +192,7 @@ struct SettingsView: View {
                 profileRow("Lactate threshold pace", value: performance.lactateThrPaceFormatted.map { "\($0)/km" })
                 profileRow("VO₂max (run)", value: performance.vo2maxRunning.map { String(format: "%.1f", $0) })
                 profileRow("VO₂max (cycling)", value: performance.vo2maxCycling.map { String(format: "%.1f", $0) })
+                profileRow("Max HR", value: performance.maxHR.map { "\($0) bpm" })
                 profileRow("Weight", value: performance.weightKg.map { String(format: "%.1f kg", $0) })
             } header: {
                 Text("Performance")
@@ -501,6 +528,144 @@ struct MemoryDebugView: View {
                 Label(didCopy ? "Copied" : "Copy",
                       systemImage: didCopy ? "checkmark" : "doc.on.doc")
             }
+        }
+    }
+}
+
+// MARK: - Calendar Access Section
+
+/// Shows the device-calendar access state and a button to grant it. The coach's
+/// `read_calendar_availability` tool also requests access on first use; this just
+/// lets the athlete opt in up front.
+struct CalendarAccessSection: View {
+    @State private var state = CalendarService.shared.accessState
+    @State private var isWorking = false
+
+    var body: some View {
+        Group {
+            switch state {
+            case .authorized:
+                Label("Calendar access granted", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .font(.caption)
+            case .notDetermined:
+                Button {
+                    Task {
+                        isWorking = true
+                        _ = await CalendarService.shared.requestAccess()
+                        state = CalendarService.shared.accessState
+                        isWorking = false
+                    }
+                } label: {
+                    if isWorking { ProgressView() }
+                    else { Label("Grant calendar access", systemImage: "calendar.badge.plus") }
+                }
+                .disabled(isWorking)
+            case .denied:
+                Label("Calendar access denied — enable it in the Settings app.", systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .font(.caption)
+            }
+        }
+        .task { state = CalendarService.shared.accessState }
+    }
+}
+
+// MARK: - Notification Settings Section
+
+/// Toggle for proactive background notifications. Enabling it requests
+/// notification authorization and schedules the background refresh.
+struct NotificationSettingsSection: View {
+    @ObservedObject var settings: AppSettings
+    @State private var statusMessage: String?
+
+    var body: some View {
+        Group {
+            Toggle(isOn: Binding(
+                get: { settings.proactiveNotifications },
+                set: { newValue in
+                    settings.proactiveNotifications = newValue
+                    Task { await apply(newValue) }
+                }
+            )) {
+                Label("Proactive notifications", systemImage: "bell.badge")
+            }
+
+            if let statusMessage {
+                Text(statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func apply(_ enabled: Bool) async {
+        guard enabled else {
+            BackgroundCoordinator.shared.cancel()
+            statusMessage = nil
+            return
+        }
+        let granted = await NotificationCenterService.shared.requestAuthorization()
+        if granted {
+            BackgroundCoordinator.shared.schedule()
+            statusMessage = "You'll get a proactive heads-up after the next background refresh."
+        } else {
+            settings.proactiveNotifications = false
+            statusMessage = "Notifications are turned off for TriGenius — enable them in the Settings app."
+        }
+    }
+}
+
+// MARK: - Garmin Backfill Section
+
+/// Pulls a deeper slice of Garmin history into the local database so the PMC
+/// engine's CTL (Fitness, 42-day) has a proper warm-up window. Garmin only —
+/// Apple Health already backfills generously on its first sync.
+struct GarminBackfillSection: View {
+    @State private var isWorking = false
+    @State private var statusMessage: String?
+    @State private var isError = false
+
+    /// How far back to pull. ~4 months comfortably covers the >42-day CTL warm-up.
+    private let backfillDays = 240
+
+    var body: some View {
+        Group {
+            Button {
+                Task { await runBackfill() }
+            } label: {
+                if isWorking {
+                    HStack { ProgressView(); Text("Backfilling…") }
+                } else {
+                    Label("Backfill \(backfillDays) days of history", systemImage: "clock.arrow.circlepath")
+                }
+            }
+            .disabled(isWorking)
+
+            if let statusMessage {
+                Label(statusMessage, systemImage: isError ? "exclamationmark.triangle.fill" : "checkmark.circle")
+                    .foregroundStyle(isError ? .orange : .secondary)
+                    .font(.caption)
+            }
+        }
+    }
+
+    private func runBackfill() async {
+        isWorking = true
+        statusMessage = nil
+        defer { isWorking = false }
+        guard await GarminAuth.shared.isAuthenticated else {
+            statusMessage = "Connect to Garmin first."
+            isError = true
+            return
+        }
+        let count = await DataSyncCoordinator.shared.deepBackfill(source: .garmin, days: backfillDays)
+        if let count {
+            isError = false
+            statusMessage = "Imported \(count) activities. CTL warm-up is now more accurate."
+        } else {
+            isError = true
+            statusMessage = "Backfill failed — check your Garmin connection."
         }
     }
 }

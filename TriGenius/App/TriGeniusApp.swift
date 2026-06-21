@@ -9,6 +9,13 @@ struct TriGeniusApp: App {
     @StateObject private var settings = AppSettings()
     @State private var brain: CoachBrain?
     @State private var launchStatus = "Initialisiere…"
+    @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        // Register the background-refresh handler before launch completes, as
+        // BGTaskScheduler requires. No-op on macOS.
+        BackgroundCoordinator.shared.register()
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -22,6 +29,13 @@ struct TriGeniusApp: App {
             }
         }
         .modelContainer(TrainingDataStore.shared.container)
+        .onChange(of: scenePhase) { _, phase in
+            // Queue a background refresh when leaving the foreground, so proactive
+            // signals can be evaluated while the app is suspended.
+            if phase == .background, settings.proactiveNotifications {
+                BackgroundCoordinator.shared.schedule()
+            }
+        }
     }
 
     private func setupBrain() async {
@@ -46,7 +60,8 @@ struct TriGeniusApp: App {
     @MainActor
     private func seedPerformanceMetricsIfNeeded() {
         // v2: also migrates weight and HR/power zones (added after v1 shipped).
-        let key = "trigenius.perfMetricsSeeded.v2"
+        // v3: also migrates max HR (was the last performance value still in the profile).
+        let key = "trigenius.perfMetricsSeeded.v3"
         guard !UserDefaults.standard.bool(forKey: key) else { return }
         let p = memory.userProfile
         let now = Date()
@@ -62,6 +77,9 @@ struct TriGeniusApp: App {
         }
         if let lthr = p.lactateThrHR {
             metrics.append(IngestedMetric(metricKey: "lactate_threshold_hr", value: Double(lthr), unit: "bpm", source: "manual", date: now))
+        }
+        if let maxHR = p.maxHR {
+            metrics.append(IngestedMetric(metricKey: "max_hr", value: Double(maxHR), unit: "bpm", source: "manual", date: now))
         }
         if let weight = p.weightKg {
             metrics.append(IngestedMetric(metricKey: "weight_kg", value: weight, unit: "kg", source: "manual", date: now))

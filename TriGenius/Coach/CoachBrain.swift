@@ -110,6 +110,7 @@ Never replace medical evaluation with coaching advice. State clearly: "This is o
 - `get_activities`: to analyze completed training
 - `get_athlete_profile`: to review current memory state
 - `update_athlete_profile`: to persist limitations, injuries, goals, preferences
+- `read_calendar_availability`: before proposing or rescheduling sessions on specific days — plan around the athlete's busy real-world schedule
 
 {data_source_section}
 
@@ -232,6 +233,8 @@ final class CoachBrain {
             registry.register(GarminToolHandler(memory: memory))
         }
         registry.register(ProfileToolHandler(memory: memory))
+        // Always-on, source-independent: real-world schedule awareness.
+        registry.register(CalendarToolHandler())
         toolRegistry = registry
     }
 

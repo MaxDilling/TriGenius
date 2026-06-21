@@ -196,6 +196,28 @@ actor GarminService {
         }
     }
 
+    // MARK: - Deep history backfill
+    //
+    // CTL (Fitness, 42-day EWMA) needs a long warm-up to be reliable; the regular
+    // incremental sync only keeps recently-synced activities. This pulls a whole
+    // date range (paginated, not capped at 100) into the local database to give
+    // the PMC engine a proper warm-up. Returns the number of activities ingested,
+    // or nil on failure. FEATURES.md "Deeper Garmin history backfill".
+    func backfillActivities(startDate: String, endDate: String) async -> Int? {
+        do {
+            let raw = try await client.getActivitiesByDate(start: startDate, end: endDate)
+            var toIngest: [IngestedActivity] = []
+            for activity in raw {
+                let rec = await formatActivityRecord(activity)
+                if let dto = ingestDTO(from: rec) { toIngest.append(dto) }
+            }
+            await TrainingDataStore.shared.ingest(toIngest)
+            return toIngest.count
+        } catch {
+            return nil
+        }
+    }
+
     // MARK: - get_power_curve
 
     func getPowerCurve(startDate: String, endDate: String, sport: String = "cycling", durationsSeconds: [Int]?) async -> String {

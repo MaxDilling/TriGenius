@@ -218,6 +218,8 @@ struct PerformanceSnapshot: Sendable {
     /// Swim critical-swim-speed pace, in seconds per 100 m.
     var cssPaceSeconds: Double?
     var lactateThrHR: Int?
+    /// Maximum heart rate, in bpm.
+    var maxHR: Int?
     /// Running lactate-threshold pace, in seconds per km.
     var lactateThrPaceSeconds: Double?
     var vo2maxRunning: Double?
@@ -503,6 +505,7 @@ final class TrainingDataStore {
         snap.runningFTP = latest["running_ftp"].map { Int($0.value.rounded()) }
         snap.cssPaceSeconds = latest["swim_css_pace"]?.value
         snap.lactateThrHR = latest["lactate_threshold_hr"].map { Int($0.value.rounded()) }
+        snap.maxHR = latest["max_hr"].map { Int($0.value.rounded()) }
         snap.lactateThrPaceSeconds = latest["lactate_threshold_pace"]?.value
         snap.vo2maxRunning = latest["vo2max_running"]?.value
         snap.vo2maxCycling = latest["vo2max_cycling"]?.value

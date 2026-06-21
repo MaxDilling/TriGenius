@@ -120,6 +120,7 @@ final class ProfileToolHandler: CoachToolHandler {
                         "add_goal": ["type": "string", "description": "Goal to add."],
                         "remove_goal": ["type": "string", "description": "Goal to remove."],
                         "max_weekly_hours": ["type": "integer", "description": "Maximum training hours per week."],
+                        "max_hr": ["type": "integer", "description": "Maximum heart rate in bpm."],
                         "preferred_rest_day": ["type": "string", "description": "Preferred rest day."],
                         "morning_workouts": ["type": "boolean", "description": "Whether morning workouts are preferred."],
                         "indoor_trainer_available": ["type": "boolean", "description": "Whether an indoor trainer is available."],
@@ -207,6 +208,14 @@ final class ProfileToolHandler: CoachToolHandler {
         if let hours = arguments["max_weekly_hours"] as? Int {
             memory.updateWeeklyStructure { $0.maxHours = hours }
             updates.append("max weekly hours → \(hours)")
+        }
+        if let maxHR = arguments["max_hr"] as? Int {
+            // Max HR is a performance value: store it in the DB time series
+            // alongside FTP/CSS/etc., not in the profile JSON.
+            TrainingDataStore.shared.ingestMetrics([
+                IngestedMetric(metricKey: "max_hr", value: Double(maxHR), unit: "bpm", source: "manual", date: Date())
+            ])
+            updates.append("max HR → \(maxHR)")
         }
         if let day = arguments["preferred_rest_day"] as? String {
             memory.updateWeeklyStructure { $0.preferredRestDay = day }
@@ -315,6 +324,85 @@ final class ProfileToolHandler: CoachToolHandler {
         // Fall back to the embedded constant if the file is missing.
         return entry.fallback
     }
+}
+
+// MARK: - Calendar Tool Handler
+//
+// Always registered (like ProfileToolHandler), independent of the active data
+// source. Exposes the athlete's real-world schedule so the coach can plan
+// workouts around busy days. As a JSON-Schema tool it works for both backends
+// automatically — no backend-specific code.
+
+@MainActor
+final class CalendarToolHandler: CoachToolHandler {
+    private let calendar = CalendarService.shared
+
+    var definitions: [ToolDefinition] {
+        [
+            ToolDefinition(
+                name: "read_calendar_availability",
+                description: "Read the athlete's real-world schedule (busy/free windows) from their device calendar for a date range, so workouts can be planned around busy days. Returns per-day busy minutes and the events on each day. Use this before proposing or rescheduling sessions on specific days.",
+                parameters: [
+                    "type": "object",
+                    "properties": [
+                        "start_date": ["type": "string", "description": "Start date in YYYY-MM-DD format. Defaults to today."],
+                        "end_date": ["type": "string", "description": "End date in YYYY-MM-DD format. Defaults to 7 days after the start."]
+                    ],
+                    "required": []
+                ]
+            )
+        ]
+    }
+
+    func execute(name: String, arguments: [String: Any]) async throws -> String {
+        guard name == "read_calendar_availability" else {
+            return "Unknown calendar tool: \(name)"
+        }
+
+        let granted = await calendar.requestAccess()
+        guard granted else {
+            return "Calendar access is not granted. Ask the athlete to enable 'Calendar' for TriGenius in Settings to plan around their schedule."
+        }
+
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let start = (arguments["start_date"] as? String).flatMap(DataSyncCoordinator.ymd.date(from:)) ?? today
+        let defaultEnd = cal.date(byAdding: .day, value: 7, to: start) ?? start
+        let end = (arguments["end_date"] as? String).flatMap(DataSyncCoordinator.ymd.date(from:)) ?? defaultEnd
+
+        let days = calendar.availability(from: start, to: max(start, end))
+        let payload: [[String: Any]] = days.map { day in
+            [
+                "date": DataSyncCoordinator.ymd.string(from: day.date),
+                "busy_minutes": day.busyMinutes,
+                "all_day_event": day.allDay,
+                "events": day.windows.map { w -> [String: Any] in
+                    [
+                        "title": w.title,
+                        "all_day": w.isAllDay,
+                        "start": Self.timeFormatter.string(from: w.start),
+                        "end": Self.timeFormatter.string(from: w.end),
+                        "duration_minutes": w.durationMinutes
+                    ]
+                }
+            ]
+        }
+        let data: [String: Any] = [
+            "days": payload,
+            "count": payload.count,
+            "range": ["start": DataSyncCoordinator.ymd.string(from: start), "end": DataSyncCoordinator.ymd.string(from: max(start, end))]
+        ]
+        let json = (try? JSONSerialization.data(withJSONObject: data, options: [.prettyPrinted, .sortedKeys]))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        return "✓ Calendar availability for \(payload.count) day(s)\n\(json)"
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f
+    }()
 }
 
 // MARK: - Garmin Tool Handler
@@ -607,15 +695,11 @@ final class GarminToolHandler: CoachToolHandler {
     // MARK: - Persist synced settings
 
     private func applySettingsToMemory(_ settings: [String: Any]) {
-        // Performance/biometric values (FTP, CSS, LTHR, VO2max, weight, HR/power
-        // zones) go into the DB time series. Only max HR — which the coach may
-        // also ask the athlete for — stays in memory.
+        // All performance/biometric values (FTP, CSS, LTHR, max HR, VO2max,
+        // weight, HR/power zones) go into the DB time series.
         TrainingDataStore.shared.ingestMetrics(
             DataSyncCoordinator.metrics(fromGarminSettings: settings, date: Date())
         )
-        if let maxHR = settings["max_hr"] as? Int {
-            memory.updateProfile { $0.maxHR = maxHR }
-        }
     }
 }
 

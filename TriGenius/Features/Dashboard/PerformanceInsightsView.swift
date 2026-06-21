@@ -11,7 +11,7 @@ import Charts
 struct PerformanceInsightsView: View {
     let result: PMCResult
 
-    @State private var range: PMCRange = .ninety
+    @State private var range: PMCRange = .thirty
 
     private var points: [PMCPoint] {
         guard let last = result.points.last else { return [] }
@@ -20,6 +20,43 @@ struct PerformanceInsightsView: View {
             return result.points
         }
         return result.points.filter { $0.date >= cutoff }
+    }
+
+    // MARK: Dual-axis scaling
+    //
+    // Swift Charts has no native secondary Y-axis, so Form (TSB) is plotted in the
+    // CTL/ATL coordinate space: its symmetric domain [-tsbMax, tsbMax] is mapped onto
+    // the line domain [0, lineMax] so that TSB = 0 lands exactly in the vertical
+    // middle. A trailing axis re-labels those positions with the real TSB values.
+
+    /// Top of the CTL/ATL (left) axis, with a little headroom.
+    private var lineMax: Double {
+        let m = points.flatMap { [$0.ctl, $0.atl] }.max() ?? 1
+        return max((m * 1.1 / 10).rounded(.up) * 10, 10)
+    }
+
+    /// Symmetric half-range of the Form (right) axis, rounded to a nice value.
+    private var tsbMax: Double {
+        let m = points.map { abs($0.tsb) }.max() ?? 10
+        return max((m * 1.1 / 10).rounded(.up) * 10, 10)
+    }
+
+    /// Maps a TSB value into the line coordinate space (0 → middle of the chart).
+    private func scaleTSB(_ tsb: Double) -> Double {
+        (tsb + tsbMax) / (2 * tsbMax) * lineMax
+    }
+
+    /// Inverse of `scaleTSB`, used to label the trailing axis with real TSB values.
+    private func unscaleTSB(_ scaled: Double) -> Double {
+        scaled / lineMax * 2 * tsbMax - tsbMax
+    }
+
+    /// Scaled Y position of the Form = 0 baseline (the vertical middle).
+    private var tsbZero: Double { lineMax / 2 }
+
+    /// Symmetric TSB tick values for the trailing axis.
+    private var tsbTicks: [Double] {
+        [-tsbMax, -tsbMax / 2, 0, tsbMax / 2, tsbMax]
     }
 
     var body: some View {
@@ -61,13 +98,20 @@ struct PerformanceInsightsView: View {
             }
 
             Chart {
+                // Form (TSB) bars, drawn from the centered zero baseline.
                 ForEach(points) { p in
                     BarMark(
                         x: .value("Date", p.date),
-                        y: .value("Form", p.tsb)
+                        yStart: .value("Form", tsbZero),
+                        yEnd: .value("Form", scaleTSB(p.tsb))
                     )
                     .foregroundStyle(p.tsb >= 0 ? Color.green.opacity(0.6) : Color.orange.opacity(0.6))
                 }
+                // Dashed baseline marking Form = 0 in the vertical middle.
+                RuleMark(y: .value("Form zero", tsbZero))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    .foregroundStyle(.secondary.opacity(0.4))
+
                 ForEach(points) { p in
                     LineMark(
                         x: .value("Date", p.date),
@@ -83,13 +127,28 @@ struct PerformanceInsightsView: View {
                     .foregroundStyle(.pink)
                 }
             }
+            .chartYScale(domain: 0...lineMax)
+            .chartYAxis {
+                // Left axis: CTL / ATL.
+                AxisMarks(position: .leading)
+                // Right axis: Form (TSB), re-labeled with real values, 0 centered.
+                AxisMarks(position: .trailing, values: tsbTicks.map(scaleTSB)) { value in
+                    AxisTick()
+                    AxisValueLabel {
+                        if let scaled = value.as(Double.self) {
+                            Text("\(Int(unscaleTSB(scaled).rounded()))")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                }
+            }
             .frame(height: 260)
             .chartLegend(.hidden)
 
             HStack(spacing: 16) {
                 legend(.blue, "Fitness (CTL)")
                 legend(.pink, "Fatigue (ATL)")
-                legend(.green, "Form (TSB)")
+                legend(.green, "Form (TSB, right)")
             }
             .font(.caption2)
             .foregroundStyle(.secondary)

@@ -145,10 +145,10 @@ final class CoachMemory: ObservableObject {
     /// Performance metrics (FTP, CSS, …) are auto-synced from the data source and
     /// are deliberately NOT requested here — the coach neither asks for nor edits
     /// them. Only profile facts the athlete must supply are listed.
-    var missingInfo: [String] {
+    func missingInfo(performance: PerformanceSnapshot) -> [String] {
         var items: [String] = []
         if userProfile.name == nil { items.append("athlete name") }
-        if userProfile.maxHR == nil { items.append("maximum heart rate") }
+        if performance.maxHR == nil { items.append("maximum heart rate") }
         if userProfile.goals.isEmpty { items.append("training goals (e.g. triathlon, marathon)") }
         if weeklyStructure.maxHours == nil { items.append("maximum training hours per week") }
         return items
@@ -159,7 +159,7 @@ final class CoachMemory: ObservableObject {
     func contextSummary(performance: PerformanceSnapshot) -> String {
         var parts = ["=== ATHLETE CONTEXT ==="]
 
-        let missing = missingInfo
+        let missing = missingInfo(performance: performance)
         if !missing.isEmpty {
             parts.append("\n⚠️ MISSING INFORMATION (please ask the athlete):")
             missing.forEach { parts.append("  - \($0)") }
@@ -169,7 +169,7 @@ final class CoachMemory: ObservableObject {
         if let name = userProfile.name { parts.append("Name: \(name)") }
         if let ftp = performance.cyclingFTP { parts.append("FTP: \(ftp) W") }
         if let runFTP = performance.runningFTP { parts.append("Running threshold power: \(runFTP) W") }
-        if let maxHR = userProfile.maxHR { parts.append("Max HR: \(maxHR) bpm") }
+        if let maxHR = performance.maxHR { parts.append("Max HR: \(maxHR) bpm") }
         if let lthr = performance.lactateThrHR { parts.append("Lactate threshold HR: \(lthr) bpm") }
         if let ltPace = performance.lactateThrPaceFormatted { parts.append("Lactate threshold pace: \(ltPace)/km") }
         if let css = performance.cssPaceFormatted { parts.append("CSS: \(css)/100m") }
@@ -235,19 +235,19 @@ final class CoachMemory: ObservableObject {
 
 struct UserProfile {
     var name: String?
-    var maxHR: Int?
     var goals: [String] = []
     var coordinates: (lat: Double, lon: Double)?
 
     // Legacy performance/biometric values. Performance metrics (FTP, CSS, VO2max,
-    // lactate-threshold HR, weight and HR/power zones) now live in the SwiftData
-    // time series (`PerformanceMetricRecord`); these are parsed from an existing
-    // `coach_memory.json` only so the one-time seed can migrate them into the DB,
-    // and are no longer written back (see `toDict()`).
+    // lactate-threshold HR, max HR, weight and HR/power zones) now live in the
+    // SwiftData time series (`PerformanceMetricRecord`); these are parsed from an
+    // existing `coach_memory.json` only so the one-time seed can migrate them into
+    // the DB, and are no longer written back (see `toDict()`).
     var ftp: Int?
     var cssPace: String?
     var vo2max: Double?
     var lactateThrHR: Int?
+    var maxHR: Int?
     var weightKg: Double?
     var zones: [String: Any] = [:]
 
@@ -272,13 +272,12 @@ struct UserProfile {
 
     func toDict() -> [String: Any] {
         // Performance/biometric values (ftp, css, vo2max, lactate_threshold_hr,
-        // weight_kg, zones) intentionally omitted — they now live in the
+        // max_hr, weight_kg, zones) intentionally omitted — they now live in the
         // performance-metric time series (`PerformanceMetricRecord`).
         var d: [String: Any] = [
             "goals": goals
         ]
         if let v = name { d["name"] = v }
-        if let v = maxHR { d["max_hr"] = v }
         if let c = coordinates { d["coordinates"] = ["lat": c.lat, "lon": c.lon] }
         return d
     }
