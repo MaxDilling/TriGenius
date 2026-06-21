@@ -441,14 +441,19 @@ actor GarminService {
                             if seen.contains(id) { continue }
                             seen.insert(id)
                             var durationMinutes: Any = NSNull()
-                            if let details = try? await client.getWorkoutDetails(workoutId: id),
-                               let est = num(details["estimatedDurationInSecs"]) {
-                                durationMinutes = Int((est / 60).rounded())
+                            var steps: [[String: Any]] = []
+                            let sportKey = item["sportTypeKey"] as? String ?? "other"
+                            if let details = try? await client.getWorkoutDetails(workoutId: id) {
+                                if let est = num(details["estimatedDurationInSecs"]) {
+                                    durationMinutes = Int((est / 60).rounded())
+                                }
+                                steps = compactSteps(fromDetails: details, sport: sportKey)
                             }
                             workouts.append([
                                 "id": id, "name": item["title"] as? String ?? "Scheduled Workout",
-                                "date": itemDate, "sport": item["sportTypeKey"] as? String ?? "other",
+                                "date": itemDate, "sport": sportKey,
                                 "duration_minutes": durationMinutes, "description": "",
+                                "steps": steps,
                                 "completed": false, "source": "scheduled"
                             ])
                         } else if itemType == "activity" {
@@ -502,6 +507,58 @@ actor GarminService {
             let data: [String: Any] = ["period": ["start": start, "end": end], "workouts": workouts, "count": workouts.count]
             return resultString(success: true, data: data, message: "Found \(workouts.count) workout(s) between \(start) and \(end)")
         }
+    }
+
+    /// Flatten a Garmin workout-details payload into the compact step shape
+    /// `PlannedTSS` consumes (see `CoachTools` add_workout). Repeat groups are
+    /// expanded by their iteration count and pace targets (stored by Garmin as
+    /// m/s) are converted to seconds (sec/km, or sec/100 m for swims) so they
+    /// match the coach-supplied convention.
+    private func compactSteps(fromDetails details: [String: Any], sport: String) -> [[String: Any]] {
+        let segments = details["workoutSegments"] as? [[String: Any]] ?? []
+        let isSwim = GarminWorkoutBuilder.swimSportKeys.contains(sport)
+        var out: [[String: Any]] = []
+        func walk(_ stepList: [[String: Any]]) {
+            for step in stepList {
+                if (step["type"] as? String) == "RepeatGroupDTO" {
+                    let iterations = max(1, num(step["numberOfIterations"]).map { Int($0) } ?? 1)
+                    let children = step["workoutSteps"] as? [[String: Any]] ?? []
+                    for _ in 0 ..< iterations { walk(children) }
+                    continue
+                }
+                var compact: [String: Any] = [
+                    "type": (step["stepType"] as? [String: Any])?["stepTypeKey"] as? String ?? "interval"
+                ]
+                let endKey = (step["endCondition"] as? [String: Any])?["conditionTypeKey"] as? String ?? "time"
+                let endValue = num(step["endConditionValue"]) ?? 0
+                if endKey.contains("distance") {
+                    compact["distance_meters"] = endValue
+                } else {
+                    compact["duration_seconds"] = endValue
+                }
+                let targetKey = (step["targetType"] as? [String: Any])?["workoutTargetTypeKey"] as? String ?? "no.target"
+                if let low = num(step["targetValueOne"]), let high = num(step["targetValueTwo"]) {
+                    switch targetKey {
+                    case "power.zone":
+                        compact["target_type"] = "power"
+                        compact["target_low"] = low; compact["target_high"] = high
+                    case "heart.rate.zone":
+                        compact["target_type"] = "heart_rate"
+                        compact["target_low"] = low; compact["target_high"] = high
+                    case "pace.zone" where low > 0 && high > 0:
+                        let factor = isSwim ? 100.0 : 1000.0
+                        compact["target_type"] = "pace"
+                        compact["target_low"] = factor / high   // faster speed ⇒ smaller seconds
+                        compact["target_high"] = factor / low
+                    default:
+                        break
+                    }
+                }
+                out.append(compact)
+            }
+        }
+        for segment in segments { walk(segment["workoutSteps"] as? [[String: Any]] ?? []) }
+        return out
     }
 
     // MARK: - delete_workout

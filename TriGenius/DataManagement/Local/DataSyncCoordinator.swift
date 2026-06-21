@@ -142,7 +142,8 @@ final class DataSyncCoordinator {
             endDate: DateFormatter.ymd.string(from: to)
         )
         guard let workouts = Self.parseCalendarWorkouts(result) else { return }
-        let planned = workouts.compactMap(Self.scheduledDTO(from:))
+        let thresholds = store.latestSnapshot()
+        let planned = workouts.compactMap { Self.scheduledDTO(from: $0, thresholds: thresholds) }
         store.replaceScheduled(source: "garmin", from: from, to: to, with: planned)
     }
 
@@ -158,20 +159,28 @@ final class DataSyncCoordinator {
 
     /// Map a planned calendar item to a scheduled-workout DTO. Completed
     /// activities and non-planned items are dropped (they live in ActivityRecord).
-    private static func scheduledDTO(from item: [String: Any]) -> IngestedScheduledWorkout? {
+    private static func scheduledDTO(from item: [String: Any], thresholds: PerformanceSnapshot) -> IngestedScheduledWorkout? {
         if item["completed"] as? Bool == true { return nil }
         let src = item["source"] as? String ?? ""
         guard src == "scheduled" || src == "garmin_coach" else { return nil }
         guard let dateStr = item["date"] as? String, let date = DateFormatter.ymd.date(from: dateStr) else { return nil }
         let id = item["id"].map { "garmin:\($0)" } ?? "garmin:\(dateStr)"
+        let sport = item["sport"] as? String ?? "other"
+        // Intensity-based planned TSS from the workout's structured steps; nil falls
+        // back to the duration heuristic at read time.
+        let targetTSS = PlannedTSS.estimate(
+            compactSteps: item["steps"] as? [[String: Any]] ?? [],
+            family: SportFamily(sportKey: sport),
+            thresholds: thresholds
+        )
         return IngestedScheduledWorkout(
             id: id,
             source: "garmin",
             date: date,
-            sport: item["sport"] as? String ?? "other",
+            sport: sport,
             name: item["name"] as? String ?? "Scheduled Workout",
             targetDurationMinutes: (item["duration_minutes"] as? NSNumber)?.doubleValue ?? 0,
-            targetTSS: nil,
+            targetTSS: targetTSS,
             notes: item["description"] as? String ?? ""
         )
     }

@@ -15,11 +15,22 @@ final class NotificationCenterService {
     static let shared = NotificationCenterService()
 
     private let center = UNUserNotificationCenter.current()
+    /// Retained so the center keeps a strong reference to it (the center's
+    /// `delegate` property is weak).
+    private let foregroundDelegate = ForegroundPresentationDelegate()
     private init() {}
 
     /// Day-granularity watermark of the last posted notification, so repeated
     /// background runs on the same day don't re-notify the same concern.
     private let lastPostedDayKey = "trigenius.notify.lastPostedDay"
+
+    /// Install the foreground-presentation delegate. Without it, iOS silently
+    /// suppresses banners/sound while the app is in the foreground, so test
+    /// reminders fired from Settings would `add()` successfully yet never show.
+    /// Call once at launch, before any notification is posted.
+    func configure() {
+        center.delegate = foregroundDelegate
+    }
 
     // MARK: - Authorization
 
@@ -133,5 +144,21 @@ final class NotificationCenterService {
 
     private func setLastPostedDay(_ day: Date) {
         UserDefaults.standard.set(day.timeIntervalSince1970, forKey: lastPostedDayKey)
+    }
+}
+
+// MARK: - Foreground presentation
+
+/// Lets notifications show as a banner (with sound/list) even while the app is
+/// in the foreground. iOS suppresses foreground notifications by default unless
+/// a delegate opts in here — which is exactly the case when a reminder is fired
+/// from the in-app Test Reminders screen.
+private final class ForegroundPresentationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([.banner, .list, .sound])
     }
 }

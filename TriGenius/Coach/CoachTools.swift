@@ -760,6 +760,14 @@ final class GarminToolHandler: CoachToolHandler {
               let dateStr = data["date"] as? String,
               let date = DateFormatter.ymd.date(from: dateStr) else { return }
         let minutes = (workoutData["duration_minutes"] as? NSNumber)?.doubleValue ?? 0
+        let family = SportFamily(sportKey: data["sport"] as? String ?? "other")
+        // Compute an intensity-based planned TSS from the structured steps when the
+        // coach provided them; nil falls back to the duration heuristic at read time.
+        let targetTSS = PlannedTSS.estimate(
+            compactSteps: workoutData["steps"] as? [[String: Any]] ?? [],
+            family: family,
+            thresholds: TrainingDataStore.shared.latestSnapshot()
+        )
         TrainingDataStore.shared.ingestScheduled([
             IngestedScheduledWorkout(
                 id: "garmin:\(workoutId)",
@@ -768,7 +776,7 @@ final class GarminToolHandler: CoachToolHandler {
                 sport: data["sport"] as? String ?? "other",
                 name: data["name"] as? String ?? workoutData["name"] as? String ?? "Scheduled Workout",
                 targetDurationMinutes: minutes,
-                targetTSS: nil,
+                targetTSS: targetTSS,
                 notes: workoutData["description"] as? String ?? ""
             )
         ])

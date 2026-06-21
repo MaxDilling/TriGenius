@@ -43,16 +43,13 @@ enum WeeklyTargets {
     // MARK: TSS estimation
 
     /// Rough TSS accrued per hour for a discipline, used to fill in a TSS target
-    /// when a planned workout only specifies a duration, or for the heuristic
-    /// fallback. Triathlon disciplines differ in typical metabolic cost per hour.
+    /// when a planned workout only specifies a duration (no structured steps for an
+    /// intensity-based estimate — see `PlannedTSS`), or for the heuristic fallback.
+    /// Derived from the same default intensity model so the flat fallback and the
+    /// structured estimate stay consistent: 1 h at IF ⇒ IF² × 100 TSS.
     static func tssPerHour(_ family: SportFamily) -> Double {
-        switch family {
-        case .swim:     return 55
-        case .bike:     return 60
-        case .run:      return 70
-        case .strength: return 30
-        case .other:    return 50
-        }
+        let f = PlannedTSS.defaultIF(family)
+        return f * f * 100
     }
 
     /// Estimate TSS from a duration when no explicit value is available.

@@ -39,6 +39,10 @@ struct TriGeniusApp: App {
     }
 
     private func setupBrain() async {
+        // Allow notifications to present while the app is in the foreground —
+        // without this, reminders fired from the Test Reminders screen are
+        // silently suppressed by iOS.
+        NotificationCenterService.shared.configure()
         let b = CoachBrain(memory: memory, dataSource: settings.dataSource)
         // Live read of Debug Mode — captured once so toggling never resets the chat.
         b.isDebugEnabled = { [weak settings] in settings?.debugMode ?? false }

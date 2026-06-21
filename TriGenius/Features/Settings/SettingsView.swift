@@ -338,7 +338,7 @@ struct SettingsView: View {
 
     private var appleIntelligenceSection: some View {
         Group {
-            if #available(iOS 18.0, macOS 15.0, *) {
+            if #available(iOS 27.0, macOS 27.0, *) {
                 let backend = AppleFoundationModelBackend()
                 if backend.isAvailable {
                     Label("Apple Intelligence available", systemImage: "checkmark.circle.fill")
@@ -350,7 +350,7 @@ struct SettingsView: View {
                         .font(.caption)
                 }
             } else {
-                Label("Requires iOS 18 / macOS 15", systemImage: "xmark.circle.fill")
+                Label("Requires iOS 27 / macOS 27", systemImage: "xmark.circle.fill")
                     .foregroundStyle(.red)
                     .font(.caption)
             }
