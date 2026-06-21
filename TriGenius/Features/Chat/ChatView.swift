@@ -221,15 +221,10 @@ private struct MessageBubble: View {
                         MarkdownText(markdown: message.text)
                     }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background(
-                    message.isUser
-                        ? Color.blue
-                        : Color.appSecondaryBackground
-                )
+                .padding(.horizontal, Theme.Spacing.m)
+                .padding(.vertical, Theme.Spacing.s)
                 .foregroundStyle(message.isUser ? .white : .primary)
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .chatBubbleSurface(isUser: message.isUser)
 
                 Text(message.timestamp, style: .time)
                     .font(.caption2)
@@ -314,10 +309,9 @@ private struct ThinkingIndicator: View {
                         .animation(.easeInOut(duration: 0.3), value: dotIndex)
                 }
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 12)
-            .background(Color.appSecondaryBackground)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .padding(.horizontal, Theme.Spacing.l)
+            .padding(.vertical, Theme.Spacing.m)
+            .glassSurface(cornerRadius: Theme.Radius.l)
 
             Spacer(minLength: 40)
         }
@@ -363,5 +357,24 @@ private struct InputBar: View {
 
     private var canSend: Bool {
         !isDisabled && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+}
+
+// MARK: - Chat bubble surface
+
+private extension View {
+    /// Coach replies use a translucent Liquid Glass bubble; the athlete's own
+    /// messages use a solid, flat color. The material difference is what
+    /// separates AI insight from user input (DESIGN.md §3, "Silent AI").
+    @ViewBuilder
+    func chatBubbleSurface(isUser: Bool) -> some View {
+        if isUser {
+            self.background(
+                Color.blue,
+                in: RoundedRectangle(cornerRadius: Theme.Radius.l, style: .continuous)
+            )
+        } else {
+            self.glassSurface(cornerRadius: Theme.Radius.l)
+        }
     }
 }

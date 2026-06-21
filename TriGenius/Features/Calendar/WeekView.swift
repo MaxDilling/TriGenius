@@ -15,17 +15,21 @@ struct WeekView: View {
     let useColumns: Bool
 
     var body: some View {
-        if useColumns {
-            HStack(alignment: .top, spacing: 6) {
-                ForEach(viewModel.weekDays, id: \.self) { day in
-                    DayColumn(viewModel: viewModel, day: day)
-                        .frame(maxWidth: .infinity, alignment: .top)
+        // One GlassEffectContainer so the day columns' glass blends as a group
+        // instead of stacking many independent glass layers.
+        GlassEffectContainer(spacing: 6) {
+            if useColumns {
+                HStack(alignment: .top, spacing: 6) {
+                    ForEach(viewModel.weekDays, id: \.self) { day in
+                        DayColumn(viewModel: viewModel, day: day)
+                            .frame(maxWidth: .infinity, alignment: .top)
+                    }
                 }
-            }
-        } else {
-            VStack(spacing: 10) {
-                ForEach(viewModel.weekDays, id: \.self) { day in
-                    DayColumn(viewModel: viewModel, day: day)
+            } else {
+                VStack(spacing: Theme.Spacing.s) {
+                    ForEach(viewModel.weekDays, id: \.self) { day in
+                        DayColumn(viewModel: viewModel, day: day)
+                    }
                 }
             }
         }
@@ -46,13 +50,18 @@ private struct DayColumn: View {
         let completed = viewModel.completed(on: day)
         let busy = viewModel.busyWindows(on: day)
 
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
             header
 
-            // Availability + per-segment drop targets.
-            HStack(spacing: 4) {
-                ForEach(TimeOfDaySegment.allCases) { segment in
-                    segmentPill(segment)
+            // Slim free/busy indicator: three segments that also serve as
+            // time-of-day drop targets for drag-to-reschedule. Only shown when
+            // the calendar is linked — without it there's no availability to
+            // report, and an all-green bar would be misleading.
+            if !viewModel.segments(on: day).isEmpty {
+                HStack(spacing: 3) {
+                    ForEach(TimeOfDaySegment.allCases) { segment in
+                        segmentDropTarget(segment)
+                    }
                 }
             }
 
@@ -71,12 +80,18 @@ private struct DayColumn: View {
             }
             ForEach(busy) { BusyRow(window: $0) }
         }
-        .padding(10)
+        .padding(Theme.Spacing.s)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 12)
-                .fill(isSelected ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.04))
-        )
+        // Container inversion: the whole day is a single glass surface, not a
+        // stack of individual floating cards. Selection is a subtle accent
+        // hairline rather than a heavy fill.
+        .glassSurface(cornerRadius: Theme.Radius.m)
+        .overlay {
+            if isSelected {
+                RoundedRectangle(cornerRadius: Theme.Radius.m, style: .continuous)
+                    .strokeBorder(Color.accentColor.opacity(0.7), lineWidth: 2)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture { viewModel.selectedDay = Calendar.current.startOfDay(for: day) }
         // Whole-day fallback drop: move to this day, keep any time-of-day.
@@ -99,21 +114,20 @@ private struct DayColumn: View {
         }
     }
 
-    private func segmentPill(_ segment: TimeOfDaySegment) -> some View {
+    private func segmentDropTarget(_ segment: TimeOfDaySegment) -> some View {
         let state = viewModel.state(of: segment, on: day)
-        return VStack(spacing: 2) {
-            Image(systemName: segment.icon).font(.system(size: 9))
-            Text(segment.shortLabel).font(.system(size: 9, weight: .semibold))
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 5)
-        .foregroundStyle(state.color)
-        .background(Capsule().fill(state.color.opacity(0.15)))
-        .contentShape(Capsule())
-        .dropDestination(for: String.self) { ids, _ in
-            guard let id = ids.first else { return false }
-            viewModel.move(workoutID: id, to: day, segment: segment)
-            return true
-        }
+        // Slim colored bar (visual), wrapped in a taller transparent hit area so
+        // it stays an easy drop target despite the compact look.
+        return Capsule()
+            .fill(state.color.opacity(0.85))
+            .frame(height: 6)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+            .dropDestination(for: String.self) { ids, _ in
+                guard let id = ids.first else { return false }
+                viewModel.move(workoutID: id, to: day, segment: segment)
+                return true
+            }
     }
 }

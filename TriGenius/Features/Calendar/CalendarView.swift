@@ -27,7 +27,7 @@ struct CalendarView: View {
     private var useColumns: Bool { true }   // macOS / visionOS: always roomy
     #endif
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 4), count: 7)
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 7)
 
     var body: some View {
         ScrollView {
@@ -47,9 +47,10 @@ struct CalendarView: View {
                     WeekView(viewModel: viewModel, useColumns: useColumns)
                 }
 
-                // The week-column layout already shows every day in full, so the
-                // separate selected-day panel would just repeat it (desktop/iPad).
-                if !(viewModel.mode == .week && useColumns) {
+                // The week view already shows every day in full (stacked on
+                // compact, side-by-side on roomy devices), so the separate
+                // selected-day panel only adds value in month mode.
+                if viewModel.mode == .month {
                     selectedDayDetail
                 }
             }
@@ -96,7 +97,7 @@ struct CalendarView: View {
     }
 
     private var weekdayHeader: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: 0) {
             ForEach(viewModel.weekdaySymbols, id: \.self) { symbol in
                 Text(symbol)
                     .font(.caption2).foregroundStyle(.secondary)
@@ -125,7 +126,7 @@ struct CalendarView: View {
     // MARK: Month grid
 
     private var monthGrid: some View {
-        LazyVGrid(columns: columns, spacing: 4) {
+        LazyVGrid(columns: columns, spacing: 0) {
             ForEach(viewModel.gridDays, id: \.self) { day in
                 DayCell(
                     day: day,
@@ -134,7 +135,8 @@ struct CalendarView: View {
                     segments: viewModel.segments(on: day),
                     inMonth: viewModel.isInVisibleMonth(day),
                     isSelected: Calendar.current.isDate(day, inSameDayAs: viewModel.selectedDay),
-                    isToday: Calendar.current.isDateInToday(day)
+                    isToday: Calendar.current.isDateInToday(day),
+                    wide: useColumns
                 )
                 .onTapGesture { viewModel.selectedDay = Calendar.current.startOfDay(for: day) }
                 .dropDestination(for: String.self) { ids, _ in
@@ -154,7 +156,7 @@ struct CalendarView: View {
         let completed = viewModel.completed(on: day)
         let busy = viewModel.busyWindows(on: day)
 
-        return VStack(alignment: .leading, spacing: 10) {
+        return VStack(alignment: .leading, spacing: Theme.Spacing.s) {
             HStack {
                 Text(day.formatted(.dateTime.weekday(.wide).day().month(.wide)))
                     .font(.headline)
@@ -190,8 +192,7 @@ struct CalendarView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.05)))
+        .cardSurface(cornerRadius: Theme.Radius.l)
     }
 }
 
@@ -205,48 +206,107 @@ private struct DayCell: View {
     let inMonth: Bool
     let isSelected: Bool
     let isToday: Bool
+    /// On roomy layouts (iPad / macOS) events show as icon-left + title rows,
+    /// like Apple Calendar; on a compact iPhone they collapse to small chips.
+    let wide: Bool
 
     private var isPast: Bool { day < Calendar.current.startOfDay(for: Date()) }
+    private let gridLine = Color.primary.opacity(0.12)
 
     var body: some View {
-        VStack(spacing: 3) {
-            Text("\(Calendar.current.component(.day, from: day))")
-                .font(.caption2.weight(isToday ? .bold : .regular))
-                .foregroundStyle(isToday ? Color.accentColor : (inMonth ? .primary : .secondary))
+        VStack(alignment: .leading, spacing: 2) {
+            dayNumber
 
-            VStack(spacing: 2) {
-                ForEach(completed.prefix(2), id: \.id) { activity in
-                    sportChip(sport: activity.sport, completed: true)
-                }
-                ForEach(planned.prefix(max(0, 2 - completed.count))) { workout in
-                    sportChip(sport: workout.sport, completed: false)
-                        .draggable(workout.id)
-                }
-                let overflow = planned.count + completed.count - 2
-                if overflow > 0 {
-                    Text("+\(overflow)")
-                        .font(.system(size: 8)).foregroundStyle(.secondary)
-                }
+            if wide {
+                wideEvents
+            } else {
+                compactChips
             }
-            .frame(maxWidth: .infinity)
 
             Spacer(minLength: 0)
 
-            // Future/today: availability at a glance. (Completed days read from
-            // the solid sport chips above — no separate checkmark.)
+            // Availability at a glance — only when the calendar is linked (no
+            // data means no green bar). Completed days read from the events above.
             if !isPast && !segments.isEmpty {
                 SegmentBar(states: segments, style: .pips)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 60, alignment: .top)
-        .padding(.vertical, 4)
-        .padding(.horizontal, 2)
-        .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(isSelected ? Color.accentColor.opacity(0.15) : Color.primary.opacity(inMonth ? 0.04 : 0.0))
-        )
-        .opacity(inMonth ? 1 : 0.5)
+        .frame(maxWidth: .infinity, minHeight: wide ? 96 : 62, alignment: .topLeading)
+        .padding(wide ? 4 : 3)
+        .background(isSelected ? Color.accentColor.opacity(0.12) : .clear)
+        // Thin top + leading hairlines render the month as a continuous grid
+        // (Apple Calendar style) rather than a set of floating cards.
+        .overlay(alignment: .top) { Rectangle().fill(gridLine).frame(height: 0.5) }
+        .overlay(alignment: .leading) { Rectangle().fill(gridLine).frame(width: 0.5) }
+        .opacity(inMonth ? 1 : 0.45)
         .contentShape(Rectangle())
+    }
+
+    private var dayNumber: some View {
+        Text("\(Calendar.current.component(.day, from: day))")
+            .font(.caption.weight(isToday ? .bold : .regular))
+            .foregroundStyle(isToday ? .white : (inMonth ? .primary : .secondary))
+            .frame(width: 22, height: 22)
+            .background { if isToday { Circle().fill(Color.accentColor) } }
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: Wide layout — icon left, then workout title (Apple Calendar style)
+
+    private var wideEvents: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(completed.prefix(3), id: \.id) { activity in
+                eventRow(sport: activity.sport, title: activity.name, filled: true)
+            }
+            let plannedSlots = max(0, 3 - completed.count)
+            ForEach(planned.prefix(plannedSlots)) { workout in
+                eventRow(sport: workout.sport, title: workout.name, filled: false)
+                    .draggable(workout.id)
+            }
+            let overflow = completed.count + planned.count - 3
+            if overflow > 0 {
+                Text("+\(overflow) more")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .padding(.leading, 2)
+            }
+        }
+    }
+
+    private func eventRow(sport: String, title: String, filled: Bool) -> some View {
+        let family = SportFamily(sportKey: sport)
+        return HStack(spacing: 4) {
+            Image(systemName: family.icon)
+                .font(.system(size: 9))
+                .foregroundStyle(filled ? Color.white : family.color)
+            Text(title)
+                .font(.system(size: 11))
+                .lineLimit(1)
+                .foregroundStyle(filled ? Color.white : .primary)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 2)
+        .background(family.color.opacity(filled ? 0.9 : 0.18), in: RoundedRectangle(cornerRadius: 4))
+    }
+
+    // MARK: Compact layout — small sport chips (narrow iPhone month grid)
+
+    private var compactChips: some View {
+        VStack(spacing: 2) {
+            ForEach(completed.prefix(2), id: \.id) { activity in
+                sportChip(sport: activity.sport, completed: true)
+            }
+            ForEach(planned.prefix(max(0, 2 - completed.count))) { workout in
+                sportChip(sport: workout.sport, completed: false)
+                    .draggable(workout.id)
+            }
+            let overflow = planned.count + completed.count - 2
+            if overflow > 0 {
+                Text("+\(overflow)")
+                    .font(.system(size: 8)).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 
     private func sportChip(sport: String, completed: Bool) -> some View {
@@ -287,21 +347,23 @@ struct CompletedRow: View {
     }
 
     private var card: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Theme.Spacing.s) {
             Image(systemName: family.icon)
-                .foregroundStyle(.white)
-                .frame(width: 26, height: 26)
-                .background(Circle().fill(family.color))
-            VStack(alignment: .leading, spacing: 2) {
-                Text(activity.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                Text(summary).font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(family.color)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(activity.name).font(.subheadline.weight(.medium)).lineLimit(1)
+                Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            Spacer()
-            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+            Spacer(minLength: Theme.Spacing.xs)
+            Image(systemName: "checkmark.circle.fill")
+                .font(.caption).foregroundStyle(Theme.Palette.success)
         }
-        .padding(10)
+        .padding(.vertical, Theme.Spacing.xs)
+        .padding(.horizontal, Theme.Spacing.s)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.04)))
+        // Discipline tint marks this as a training session (vs. flat life events).
+        .background(family.color.opacity(0.12), in: RoundedRectangle(cornerRadius: Theme.Radius.s))
     }
 
     private var summary: String {
@@ -325,24 +387,28 @@ struct PlannedRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: Theme.Spacing.s) {
             Image(systemName: family.icon)
-                .foregroundStyle(family.color)
-                .frame(width: 26)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(workout.name).font(.subheadline.weight(.semibold)).lineLimit(1)
-                Text(summaryLine).font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(family.color)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(workout.name).font(.subheadline.weight(.medium)).lineLimit(1)
+                Text(summaryLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
-            Spacer()
+            Spacer(minLength: Theme.Spacing.xs)
             if conflict {
                 Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.orange)
+                    .font(.caption).foregroundStyle(Theme.Palette.warning)
             }
-            Image(systemName: "line.3.horizontal").foregroundStyle(.tertiary)
+            Image(systemName: "line.3.horizontal")
+                .font(.caption).foregroundStyle(.tertiary)
         }
-        .padding(10)
+        .padding(.vertical, Theme.Spacing.xs)
+        .padding(.horizontal, Theme.Spacing.s)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.04)))
+        // Planned training: same discipline tint as completed, lighter, so the
+        // day's training stands out from flat life events.
+        .background(family.color.opacity(0.10), in: RoundedRectangle(cornerRadius: Theme.Radius.s))
     }
 
     private var summaryLine: String {
@@ -359,19 +425,19 @@ struct BusyRow: View {
     let window: BusyWindow
 
     var body: some View {
-        HStack(spacing: 10) {
+        // Life events are visually subordinate: colorless, flat, minimal height,
+        // so the colored training rows stay the day's anchors.
+        HStack(spacing: Theme.Spacing.s) {
             Image(systemName: "calendar")
-                .foregroundStyle(.secondary)
-                .frame(width: 26)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(window.title).font(.subheadline).lineLimit(1)
-                Text(timeRange).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer()
+                .font(.caption2).foregroundStyle(.secondary)
+                .frame(width: 18)
+            Text(window.title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            Spacer(minLength: Theme.Spacing.xs)
+            Text(timeRange).font(.caption2).foregroundStyle(.tertiary)
         }
-        .padding(10)
+        .padding(.vertical, 2)
+        .padding(.horizontal, Theme.Spacing.s)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.03)))
     }
 
     private var timeRange: String {

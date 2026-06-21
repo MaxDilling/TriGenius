@@ -61,19 +61,23 @@ struct PerformanceInsightsView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                if let s = result.snapshot {
-                    HStack(spacing: 10) {
-                        statCard("Fitness", dot: .blue, value: Int(s.ctl.rounded()),
-                                 delta: delta { $0.ctl })
-                        statCard("Fatigue", dot: .pink, value: Int(s.atl.rounded()),
-                                 delta: delta { $0.atl })
-                        statCard("Form", dot: .orange, value: Int(s.tsb.rounded()),
-                                 delta: delta { $0.tsb })
+            // One GlassEffectContainer so the stat cards and chart pane blend as a
+            // single glass system instead of stacking independent glass layers.
+            GlassEffectContainer(spacing: Theme.Spacing.l) {
+                VStack(spacing: 20) {
+                    if let s = result.snapshot {
+                        HStack(spacing: 10) {
+                            statCard("Fitness", dot: .blue, value: Int(s.ctl.rounded()),
+                                     delta: delta { $0.ctl })
+                            statCard("Fatigue", dot: .pink, value: Int(s.atl.rounded()),
+                                     delta: delta { $0.atl })
+                            statCard("Form", dot: .orange, value: Int(s.tsb.rounded()),
+                                     delta: delta { $0.tsb })
+                        }
                     }
-                }
 
-                chartCard
+                    chartCard
+                }
             }
             .padding()
         }
@@ -154,8 +158,8 @@ struct PerformanceInsightsView: View {
             .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
-        .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.05)))
+        .padding(Theme.Spacing.l)
+        .glassSurface(cornerRadius: Theme.Radius.l)
     }
 
     private func legend(_ color: Color, _ label: String) -> some View {
@@ -183,8 +187,8 @@ struct PerformanceInsightsView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.05)))
+        .padding(Theme.Spacing.m)
+        .glassSurface(cornerRadius: Theme.Radius.l)
     }
 
     private func delta(_ metric: (PMCPoint) -> Double) -> Int {

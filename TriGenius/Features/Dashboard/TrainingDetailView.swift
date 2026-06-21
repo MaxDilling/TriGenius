@@ -32,50 +32,17 @@ struct TrainingDetailView: View {
     private var isHealthKit: Bool { record.source == "healthkit" }
 
     var body: some View {
-        List {
-            Section {
-                HStack(spacing: 14) {
-                    Image(systemName: family.icon)
-                        .font(.title)
-                        .foregroundStyle(.white)
-                        .frame(width: 52, height: 52)
-                        .background(family.color.gradient)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(record.name).font(.headline)
-                        HStack(){
-                            Text(record.date, style: .date)
-                            Text("(\(record.source))")
-                        }
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    }
-                }
-                .padding(.vertical, 4)
-            }
-
-            Section("Metrics") {
-                statRow("Duration", value: "\(Int(record.durationMinutes)) min", icon: "clock")
-                if record.distanceKm > 0 {
-                    statRow("Distance", value: String(format: "%.2f km", record.distanceKm), icon: "ruler")
-                }
-                statRow("TSS", value: record.tss.map { "\(Int($0.rounded()))" } ?? "—", icon: "gauge.with.dots.needle.67percent")
-                if let te = record.aerobicTE {
-                    statRow("Aerobic TE", value: String(format: "%.1f", te), icon: "lungs")
-                }
-                if let te = record.anaerobicTE {
-                    statRow("Anaerobic TE", value: String(format: "%.1f", te), icon: "bolt.heart")
-                }
-                if let hr = details["avg_hr"] as? Int {
-                    statRow("Avg HR", value: "\(hr) bpm", icon: "heart")
-                }
-                if let kcal = details["calories"] as? Int {
-                    statRow("Calories", value: "\(kcal) kcal", icon: "flame")
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                header
+                heroCapsule
+                coachInsight
+                secondaryMetrics
+                if isHealthKit {
+                    heartRateCard
                 }
             }
-
-            if isHealthKit {
-                heartRateSection
-            }
+            .padding()
         }
         .navigationTitle(family.displayName)
         #if os(iOS)
@@ -93,9 +60,146 @@ struct TrainingDetailView: View {
         }
     }
 
+    // MARK: Header
+
+    private var header: some View {
+        HStack(spacing: Theme.Spacing.m) {
+            Image(systemName: family.icon)
+                .font(.title)
+                .foregroundStyle(.white)
+                .frame(width: 52, height: 52)
+                .background(family.color.gradient)
+                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.m))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(record.name).font(.headline)
+                HStack(spacing: 4) {
+                    Text(record.date, style: .date)
+                    Text("(\(record.source))")
+                }
+                .font(.subheadline).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+    }
+
+    // MARK: Hero metrics
+    //
+    // The 2–3 most important metrics, featured up top in a glass capsule.
+
+    private struct HeroMetric: Identifiable {
+        let id = UUID()
+        let value: String
+        let label: String
+    }
+
+    private var heroMetrics: [HeroMetric] {
+        var metrics: [HeroMetric] = [
+            HeroMetric(value: durationHM(record.durationMinutes), label: "Duration"),
+            HeroMetric(value: record.tss.map { "\(Int($0.rounded()))" } ?? "—", label: "TSS"),
+        ]
+        if let te = record.aerobicTE {
+            metrics.append(HeroMetric(value: String(format: "%.1f", te), label: "Aerobic TE"))
+        } else if record.distanceKm > 0 {
+            metrics.append(HeroMetric(value: String(format: "%.1f km", record.distanceKm), label: "Distance"))
+        }
+        return metrics
+    }
+
+    private var heroCapsule: some View {
+        HStack(spacing: 0) {
+            ForEach(Array(heroMetrics.enumerated()), id: \.element.id) { index, metric in
+                if index > 0 {
+                    Divider().frame(height: 34)
+                }
+                VStack(spacing: Theme.Spacing.xs) {
+                    Text(metric.value)
+                        .font(.title2.weight(.semibold))
+                        .monospacedDigit()
+                        .lineLimit(1).minimumScaleFactor(0.6)
+                    Text(metric.label)
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.vertical, Theme.Spacing.l)
+        .padding(.horizontal, Theme.Spacing.m)
+        .glassSurface(cornerRadius: Theme.Radius.l)
+    }
+
+    // MARK: Coach insight ("Silent AI")
+    //
+    // Static placeholder for now — to be wired to the LLM later. Styled as an
+    // insight (glass + a coach-tinted hairline), not a badge.
+
+    private var coachInsight: some View {
+        HStack(alignment: .top, spacing: Theme.Spacing.s) {
+            Image(systemName: "brain.head.profile")
+                .font(.subheadline).foregroundStyle(family.color)
+            Text("Controlled aerobic session — pacing stayed in range for a solid endurance stimulus.")
+                .font(.subheadline)
+            Spacer(minLength: 0)
+        }
+        .padding(Theme.Spacing.m)
+        .glassSurface(cornerRadius: Theme.Radius.m)
+        .coachAccent(family.color, cornerRadius: Theme.Radius.m)
+    }
+
+    // MARK: Secondary metrics
+
+    private struct SecondaryMetric: Identifiable {
+        let id = UUID()
+        let label: String
+        let value: String
+        let icon: String
+    }
+
+    private var secondaryMetricList: [SecondaryMetric] {
+        var rows: [SecondaryMetric] = []
+        // Distance is a hero metric only when there's no Aerobic TE; otherwise
+        // it lives down here.
+        if record.aerobicTE != nil, record.distanceKm > 0 {
+            rows.append(.init(label: "Distance", value: String(format: "%.2f km", record.distanceKm), icon: "ruler"))
+        }
+        if let te = record.anaerobicTE {
+            rows.append(.init(label: "Anaerobic TE", value: String(format: "%.1f", te), icon: "bolt.heart"))
+        }
+        if let hr = details["avg_hr"] as? Int {
+            rows.append(.init(label: "Avg HR", value: "\(hr) bpm", icon: "heart"))
+        }
+        if let kcal = details["calories"] as? Int {
+            rows.append(.init(label: "Calories", value: "\(kcal) kcal", icon: "flame"))
+        }
+        return rows
+    }
+
     @ViewBuilder
-    private var heartRateSection: some View {
-        Section("Heart rate") {
+    private var secondaryMetrics: some View {
+        let rows = secondaryMetricList
+        if !rows.isEmpty {
+            VStack(spacing: 0) {
+                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                    if index > 0 { Divider() }
+                    HStack {
+                        Label(row.label, systemImage: row.icon).font(.subheadline)
+                        Spacer()
+                        Text(row.value)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.vertical, Theme.Spacing.s)
+                }
+            }
+            .cardSurface()
+        }
+    }
+
+    // MARK: Heart rate
+
+    @ViewBuilder
+    private var heartRateCard: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+            Text("Heart rate").font(.headline)
             if isLoadingHR {
                 HStack { Spacer(); ProgressView(); Spacer() }
             } else if heartRateSamples.isEmpty {
@@ -121,14 +225,8 @@ struct TrainingDetailView: View {
                 .disabled(isExporting)
             }
         }
-    }
-
-    private func statRow(_ label: String, value: String, icon: String) -> some View {
-        HStack {
-            Label(label, systemImage: icon)
-            Spacer()
-            Text(value).foregroundStyle(.secondary).fontWeight(.medium)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface()
     }
 
     // The HealthKit workout UUID, stripped of the source prefix.

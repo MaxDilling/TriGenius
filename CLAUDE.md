@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-TriGenius is a SwiftUI multiplatform app (iOS / macOS / visionOS) — an evidence-based AI triathlon coach. It's a native Swift port of `TriGenius_python`; many files are 1:1 ports and call that out in their header comments. JSON keys and tool schemas use **snake_case** to stay compatible with the Python memory/data format.
+TriGenius is a SwiftUI multiplatform app (iOS / iPadOS / macOS) — an evidence-based AI triathlon coach. It's a native Swift port of `TriGenius_python`; many files are 1:1 ports and call that out in their header comments. JSON keys and tool schemas use **snake_case** to stay compatible with the Python memory/data format.
 
 UI strings are **English**; code comments, the system prompt, and tool descriptions are also **English**; coach replies go back to the user in their language (the system prompt instructs the model to "respond in the athlete's language").
 
@@ -61,8 +61,13 @@ The app has two pluggable axes that meet in `CoachBrain`: **LLM backend** (who a
 - `App/TriGeniusApp.swift`: builds `CoachBrain` once, re-applies backend + data source whenever settings change (`applyBackend`). Tab UI in `RootTabView`.
 - `Features/Settings/SettingsView.swift`: `AppSettings` (`ObservableObject`) + `DataSource` enum. Persists Gemini API key, selected backend/model, data source, and Garmin email via `UserDefaults`. `makeBackend()` is the single place backends are constructed.
 
+## Design
+
+UI work follows **`DESIGN.md`** (the normative design system) — modern, compact, data-dense, "Silent AI", and Apple's real Liquid Glass (`glassEffect`, not hand-rolled materials). Tokens and surfaces are code-backed in `TriGenius/Shared/DesignSystem/` (`Theme.swift`, `Color+App.swift`, `Surfaces.swift`): use `Theme.Spacing` / `Theme.Radius` / `Theme.Palette` and `.cardSurface()` / `.glassSurface(tint:)` / `.coachAccent(_:)` instead of magic numbers or raw materials. **`DESIGN_CHANGES.md`** is the rollout checklist. (Accessibility is intentionally deferred for now.)
+
 ## Conventions when extending
 
+- **UI / styling**: pull spacing, radius and status colors from `Theme`; use the `Surfaces.swift` modifiers. Content goes on the opaque `.cardSurface()` layer, glass is reserved for the floating control/nav layer. See `DESIGN.md`.
 - **Adding a tool**: define it as a JSON-Schema dict in a `CoachToolHandler` — it then works for *both* backends automatically. Keep parameter names snake_case.
 - **Adding a data source**: implement a `CoachToolHandler` that registers the same `get_health_metrics` / `get_activities` names, and wire it into `CoachBrain.configureTools()` + the `DataSource` enum.
 - **Backend behavior differences** belong behind the `LLMBackend` protocol, not in `CoachBrain` — keep the orchestrator source/backend-agnostic.

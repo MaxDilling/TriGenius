@@ -34,15 +34,19 @@ struct DashboardView: View {
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 20) {
-                if viewModel.isLoading && viewModel.pmc == nil {
-                    ProgressView("Loading…").padding(.top, 60)
-                } else {
-                    header
-                    planBanner
-                    performanceInsights
-                    weeklyTarget
-                    agenda
+            // One GlassEffectContainer so the dashboard's glass panes blend as a
+            // single system instead of stacking independent glass layers.
+            GlassEffectContainer(spacing: Theme.Spacing.l) {
+                VStack(spacing: 20) {
+                    if viewModel.isLoading && viewModel.pmc == nil {
+                        ProgressView("Loading…").padding(.top, 60)
+                    } else {
+                        header
+                        planBanner
+                        performanceInsights
+                        weeklyTarget
+                        agenda
+                    }
                 }
             }
             .padding()
@@ -85,8 +89,7 @@ struct DashboardView: View {
                 Image(systemName: "calendar")
                     .font(.title3)
                     .frame(width: 44, height: 44)
-                    .background(Color.primary.opacity(0.06))
-                    .clipShape(Circle())
+                    .glassEffect(.regular, in: .circle)
             }
             .buttonStyle(.plain)
         }
@@ -341,7 +344,7 @@ private struct VolumeMetricToggle: View {
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
-            .background(Capsule().fill(Color.primary.opacity(0.06)))
+            .glassEffect(.regular, in: .capsule)
         }
         .buttonStyle(.plain)
     }
@@ -384,7 +387,7 @@ private struct VolumeRing: View {
                     .rotationEffect(.degrees(-90))
                 Image(systemName: family.icon).font(.title3).foregroundStyle(family.color)
             }
-            .frame(width: 72, height: 72)
+            .frame(width: 60, height: 60)
 
             VStack(spacing: 1) {
                 Text(label(metric, actual)).font(.subheadline.weight(.semibold))
@@ -552,13 +555,17 @@ func durationHM(_ minutes: Double) -> String {
 
 // MARK: - Card styling
 
+// Dashboard cards ride on real Liquid Glass (`glassEffect`) instead of a
+// hand-rolled translucent fill. They're grouped under a single
+// `GlassEffectContainer` in `DashboardView.body` so the panes blend as one
+// glass system rather than stacking independent layers.
 private struct DashCard: ViewModifier {
-    var padding: CGFloat = 16
+    var padding: CGFloat = Theme.Spacing.l
     func body(content: Content) -> some View {
         content
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.05)))
+            .glassSurface(cornerRadius: Theme.Radius.l)
     }
 }
 
