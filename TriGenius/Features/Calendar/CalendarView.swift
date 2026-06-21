@@ -32,19 +32,23 @@ struct CalendarView: View {
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
-                modePicker
                 header
+                    .padding(.horizontal)
 
                 if viewModel.needsCalendarAccess {
                     calendarAccessPrompt
+                        .padding(.horizontal)
                 }
 
                 switch viewModel.mode {
                 case .month:
+                    // Weekday header + grid run edge-to-edge (Apple Calendar
+                    // style); only the chrome around them keeps side padding.
                     weekdayHeader
                     monthGrid
                 case .week:
                     WeekView(viewModel: viewModel, useColumns: useColumns)
+                        .padding(.horizontal)
                 }
 
                 // The week view already shows every day in full (stacked on
@@ -52,15 +56,22 @@ struct CalendarView: View {
                 // selected-day panel only adds value in month mode.
                 if viewModel.mode == .month {
                     selectedDayDetail
+                        .padding(.horizontal)
                 }
             }
-            .padding()
+            .padding(.vertical)
         }
         .navigationTitle("Calendar")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
+            // Week/Month lives in the nav bar (not a full-width band in the
+            // content) so it reads as view chrome, clearly distinct from the
+            // app-wide Dashboard/Coach/Settings tabs.
+            ToolbarItem(placement: .principal) {
+                modePicker
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button("Today") { viewModel.goToToday() }
             }
@@ -78,6 +89,9 @@ struct CalendarView: View {
             ForEach(CalendarMode.allCases) { Text($0.label).tag($0) }
         }
         .pickerStyle(.segmented)
+        // Sized to its content so it stays a compact bar control rather than
+        // stretching the full width like the app's tab bar.
+        .fixedSize()
     }
 
     private var header: some View {
@@ -86,7 +100,7 @@ struct CalendarView: View {
                 Image(systemName: "chevron.left")
             }
             Spacer()
-            Text(viewModel.title).font(.headline)
+            Text(viewModel.title).font(.title2.weight(.semibold))
             Spacer()
             Button { viewModel.showNext() } label: {
                 Image(systemName: "chevron.right")
@@ -387,6 +401,16 @@ struct PlannedRow: View {
     }
 
     var body: some View {
+        // Tap → planned-workout detail; the row stays draggable for rescheduling.
+        NavigationLink {
+            PlannedWorkoutDetailView(workout: workout)
+        } label: {
+            card
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var card: some View {
         HStack(spacing: Theme.Spacing.s) {
             Image(systemName: family.icon)
                 .font(.caption).foregroundStyle(family.color)

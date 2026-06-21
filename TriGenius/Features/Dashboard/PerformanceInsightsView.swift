@@ -77,6 +77,8 @@ struct PerformanceInsightsView: View {
                     }
 
                     chartCard
+
+                    PerformanceMetricsSection()
                 }
             }
             .padding()

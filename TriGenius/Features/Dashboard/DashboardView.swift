@@ -255,7 +255,12 @@ struct DashboardView: View {
                     .buttonStyle(.plain)
                 }
                 ForEach(day.planned) { planned in
-                    PlannedAgendaCard(workout: planned)
+                    NavigationLink {
+                        PlannedWorkoutDetailView(workout: planned)
+                    } label: {
+                        PlannedAgendaCard(workout: planned)
+                    }
+                    .buttonStyle(.plain)
                 }
             }
         }

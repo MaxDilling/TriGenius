@@ -216,6 +216,14 @@ struct IngestedMetric: Sendable {
     let date: Date
 }
 
+/// One performance metric's value on a given day — the unit the Performance
+/// Insights progression charts work on.
+struct MetricPoint: Sendable, Identifiable {
+    let date: Date
+    let value: Double
+    var id: Date { date }
+}
+
 /// Latest value per performance metric, read from the DB to build the coach's
 /// system-prompt context and the Settings display. Replaces the former
 /// `coach_memory.json` scalars.
@@ -550,5 +558,28 @@ final class TrainingDataStore {
         snap.vo2maxCycling = latest["vo2max_cycling"]?.value
         snap.weightKg = latest["weight_kg"]?.value
         return snap
+    }
+
+    /// Ascending day-by-day history for one metric key — the progression the
+    /// Performance Insights charts plot. When several sources report the same
+    /// day, the higher-ranked source wins (matching `latestSnapshot`).
+    func metricHistory(_ key: String) -> [MetricPoint] {
+        let records = (try? context.fetch(
+            FetchDescriptor<PerformanceMetricRecord>(
+                predicate: #Predicate { $0.metricKey == key },
+                sortBy: [SortDescriptor(\.date, order: .forward)]
+            )
+        )) ?? []
+        var perDay: [Date: PerformanceMetricRecord] = [:]
+        for r in records {
+            if let cur = perDay[r.date] {
+                if Self.sourceRank(r.source) > Self.sourceRank(cur.source) { perDay[r.date] = r }
+            } else {
+                perDay[r.date] = r
+            }
+        }
+        return perDay.values
+            .map { MetricPoint(date: $0.date, value: $0.value) }
+            .sorted { $0.date < $1.date }
     }
 }
