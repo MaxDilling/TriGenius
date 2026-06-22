@@ -1,12 +1,8 @@
 {
-  "fill" : {
-    "linear-gradient" : [
-      "display-p3:0.88086,0.94531,0.92627,1.00000",
-      "display-p3:0.34741,0.61914,0.65918,1.00000"
-    ]
-  },
+  "fill" : "automatic",
   "groups" : [
     {
+      "hidden" : true,
       "layers" : [
         {
           "blend-mode" : "soft-light",
@@ -44,6 +40,33 @@
             "translation-in-points" : [
               -22.222295199510427,
               38.28764626580141
+            ]
+          }
+        }
+      ],
+      "shadow" : {
+        "kind" : "neutral",
+        "opacity" : 0.6
+      },
+      "translucency" : {
+        "enabled" : true,
+        "value" : 0.2
+      }
+    },
+    {
+      "layers" : [
+        {
+          "fill" : {
+            "solid" : "display-p3:0.96875,0.83936,0.36475,1.00000"
+          },
+          "image-name" : "logo.svg",
+          "name" : "logo",
+          "opacity" : 0.9,
+          "position" : {
+            "scale" : 11,
+            "translation-in-points" : [
+              0,
+              0
             ]
           }
         }
