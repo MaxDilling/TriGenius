@@ -171,19 +171,17 @@ nonisolated enum GarminTransform {
         var cumulativeDistance = 0.0
         var activeIntervalNum = 0
 
-        func num(_ v: Any?) -> Double? { (v as? NSNumber)?.doubleValue }
-
         for lap in lapDTOs {
-            let duration = num(lap["duration"]) ?? 0
-            var distance = num(lap["distance"]) ?? 0
-            let numActiveLengths = Int(num(lap["numberOfActiveLengths"]) ?? 0)
+            let duration = Coerce.double(lap["duration"]) ?? 0
+            var distance = Coerce.double(lap["distance"]) ?? 0
+            let numActiveLengths = Int(Coerce.double(lap["numberOfActiveLengths"]) ?? 0)
             let isRest = distance == 0 && numActiveLengths == 0
 
             cumulativeTime += duration
 
-            let avgHR = num(lap["averageHR"]).map { Int($0.rounded()) }
-            let maxHR = num(lap["maxHR"]).map { Int($0.rounded()) }
-            let totalStrokes = Int(num(lap["totalNumberOfStrokes"]) ?? 0)
+            let avgHR = Coerce.double(lap["averageHR"]).map { Int($0.rounded()) }
+            let maxHR = Coerce.double(lap["maxHR"]).map { Int($0.rounded()) }
+            let totalStrokes = Int(Coerce.double(lap["totalNumberOfStrokes"]) ?? 0)
 
             if isRest {
                 var rest: [String: Any] = [:]
@@ -249,12 +247,12 @@ nonisolated enum GarminTransform {
             }
             var bestPace: String? = nil
             if !activeLengths.isEmpty {
-                let bestSpeed = activeLengths.compactMap { num($0["averageSpeed"]) }.max() ?? 0
+                let bestSpeed = activeLengths.compactMap { Coerce.double($0["averageSpeed"]) }.max() ?? 0
                 if bestSpeed > 0 { bestPace = speedToPace(bestSpeed, distanceM: 100) }
             }
 
-            let swolf = num(lap["averageSWOLF"]) ?? num(lap["avgSwolf"]) ?? num(lap["swolf"])
-            let strokesPerLength = num(lap["averageStrokes"]) ?? num(lap["avgStrokesPerLength"])
+            let swolf = Coerce.double(lap["averageSWOLF"]) ?? Coerce.double(lap["avgSwolf"]) ?? Coerce.double(lap["swolf"])
+            let strokesPerLength = Coerce.double(lap["averageStrokes"]) ?? Coerce.double(lap["avgStrokesPerLength"])
 
             var entry: [String: Any] = [:]
             entry["interval"] = activeIntervalNum
@@ -275,7 +273,7 @@ nonisolated enum GarminTransform {
             entry["avg_hr"] = avgHR ?? NSNull()
             entry["max_hr"] = maxHR ?? NSNull()
             entry["total_strokes"] = totalStrokes
-            entry["calories"] = Int(num(lap["calories"]) ?? 0)
+            entry["calories"] = Int(Coerce.double(lap["calories"]) ?? 0)
             intervals.append(entry)
         }
         return intervals

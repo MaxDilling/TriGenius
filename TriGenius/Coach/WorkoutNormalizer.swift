@@ -44,7 +44,7 @@ nonisolated enum WorkoutNormalizer {
 
         // --- Top-level defaults ---
         if (data["name"] as? String)?.isEmpty ?? true {
-            let fallback = defaultName(sport: sport, minutes: intVal(data["duration_minutes"]))
+            let fallback = defaultName(sport: sport, minutes: Coerce.int(data["duration_minutes"]))
             data["name"] = fallback
             notes.append("Name: defaulted to \"\(fallback)\".")
         }
@@ -58,8 +58,8 @@ nonisolated enum WorkoutNormalizer {
         let rawSteps = data["steps"] as? [[String: Any]] ?? []
         if rawSteps.isEmpty {
             let (steps, synthNotes) = synthesizeSteps(
-                durationMinutes: intVal(data["duration_minutes"]),
-                distanceMeters: doubleVal(data["distance_meters"]),
+                durationMinutes: Coerce.int(data["duration_minutes"]),
+                distanceMeters: Coerce.double(data["distance_meters"]),
                 includeWarmup: data["include_warmup"] as? Bool ?? true,
                 includeCooldown: data["include_cooldown"] as? Bool ?? true,
                 isSwim: isSwim
@@ -158,8 +158,8 @@ nonisolated enum WorkoutNormalizer {
 
     private static func expandTarget(in step: inout [String: Any], label: String, notes: inout [String]) {
         guard let targetType = token(step["target_type"]), targetType != "no_target" else { return }
-        let low = doubleVal(step["target_low"])
-        let high = doubleVal(step["target_high"])
+        let low = Coerce.double(step["target_low"])
+        let high = Coerce.double(step["target_high"])
 
         // Determine the single center value to expand. An explicit, non-degenerate
         // band (low != high) is left exactly as the model provided it.
@@ -216,23 +216,7 @@ nonisolated enum WorkoutNormalizer {
     /// only (matches the data's snake_case convention), not fuzzy enum matching.
     private static func token(_ value: Any?) -> String? {
         guard let s = value as? String, !s.isEmpty else { return nil }
-        return s.lowercased()
-            .replacingOccurrences(of: " ", with: "_")
-            .replacingOccurrences(of: "-", with: "_")
-    }
-
-    private static func intVal(_ value: Any?) -> Int? {
-        if let i = value as? Int { return i }
-        if let n = value as? NSNumber { return n.intValue }
-        if let s = value as? String { return Int(s) }
-        return nil
-    }
-
-    private static func doubleVal(_ value: Any?) -> Double? {
-        if let d = value as? Double { return d }
-        if let n = value as? NSNumber { return n.doubleValue }
-        if let s = value as? String { return Double(s) }
-        return nil
+        return Coerce.token(s)
     }
 
     private static func paceStr(_ secPerKm: Double) -> String {

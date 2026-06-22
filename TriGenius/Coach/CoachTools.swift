@@ -771,8 +771,8 @@ final class GarminToolHandler: CoachToolHandler {
             return await DataSyncCoordinator.shared.activities(
                 source: .garmin,
                 sport: arguments["sport"] as? String,
-                count: intArg(arguments["count"]) ?? 10,
-                days: intArg(arguments["days"])
+                count: Coerce.int(arguments["count"]) ?? 10,
+                days: Coerce.int(arguments["days"])
             )
         }
 
@@ -783,9 +783,9 @@ final class GarminToolHandler: CoachToolHandler {
 
         switch name {
         case "get_health_metrics":
-            return await service.getHealthMetrics(days: intArg(arguments["days"]) ?? 7)
+            return await service.getHealthMetrics(days: Coerce.int(arguments["days"]) ?? 7)
         case "get_power_curve":
-            let durations = (arguments["durations_seconds"] as? [Any])?.compactMap { intArg($0) }
+            let durations = (arguments["durations_seconds"] as? [Any])?.compactMap { Coerce.int($0) }
             return await service.getPowerCurve(
                 startDate: arguments["start_date"] as? String ?? "",
                 endDate: arguments["end_date"] as? String ?? "",
@@ -798,7 +798,7 @@ final class GarminToolHandler: CoachToolHandler {
                 endDate: arguments["end_date"] as? String ?? ""
             )
         case "delete_workout":
-            let workoutId = stringArg(arguments["workout_id"]) ?? ""
+            let workoutId = Coerce.string(arguments["workout_id"]) ?? ""
             let result = await service.deleteWorkout(workoutId: workoutId)
             if result.hasPrefix("✓") {
                 TrainingDataStore.shared.deleteScheduledWorkout(id: "garmin:\(workoutId)")
@@ -810,7 +810,7 @@ final class GarminToolHandler: CoachToolHandler {
             }
             return await addWorkoutsBatch(items)
         case "move_workout":
-            guard let workoutId = stringArg(arguments["workout_id"]), !workoutId.isEmpty else {
+            guard let workoutId = Coerce.string(arguments["workout_id"]), !workoutId.isEmpty else {
                 return "✗ Error: workout_id is required."
             }
             let result = await service.moveWorkout(
@@ -821,7 +821,7 @@ final class GarminToolHandler: CoachToolHandler {
             applyMovedWorkout(result)
             return result
         case "modify_workout":
-            guard let workoutId = stringArg(arguments["workout_id"]), !workoutId.isEmpty,
+            guard let workoutId = Coerce.string(arguments["workout_id"]), !workoutId.isEmpty,
                   let rawWorkout = arguments["workout_data"] as? [String: Any] else {
                 return "✗ Error: workout_id and workout_data are required."
             }
@@ -841,21 +841,6 @@ final class GarminToolHandler: CoachToolHandler {
         default:
             return "Unknown Garmin tool: \(name)"
         }
-    }
-
-    // MARK: - Argument coercion
-
-    private func intArg(_ value: Any?) -> Int? {
-        if let i = value as? Int { return i }
-        if let n = value as? NSNumber { return n.intValue }
-        if let s = value as? String { return Int(s) }
-        return nil
-    }
-
-    private func stringArg(_ value: Any?) -> String? {
-        if let s = value as? String { return s }
-        if let n = value as? NSNumber { return "\(n)" }
-        return nil
     }
 
     // MARK: - add_workouts batch

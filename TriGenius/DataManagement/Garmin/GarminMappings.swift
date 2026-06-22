@@ -119,12 +119,4 @@ nonisolated enum GarminMappings {
         "pace": ["workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone", "displayOrder": 6],
         "cadence": ["workoutTargetTypeId": 3, "workoutTargetTypeKey": "cadence.zone", "displayOrder": 3]
     ]
-
-    /// Normalize a free-form token to lowercase snake_case (ports helpers.normalize_token).
-    static func normalizeToken(_ value: String?, default def: String = "") -> String {
-        guard let value else { return def }
-        return value.lowercased()
-            .replacingOccurrences(of: " ", with: "_")
-            .replacingOccurrences(of: "-", with: "_")
-    }
 }

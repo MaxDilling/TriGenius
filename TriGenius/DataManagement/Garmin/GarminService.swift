@@ -15,11 +15,24 @@ actor GarminService {
 
     // MARK: - Result helpers
 
-    private func num(_ v: Any?) -> Double? { (v as? NSNumber)?.doubleValue }
     /// JSON-safe value: the wrapped value, or NSNull when nil.
     private func orNull(_ v: Any?) -> Any { if let v { return v }; return NSNull() }
     private func round1(_ v: Double) -> Double { (v * 10).rounded() / 10 }
     private func round2(_ v: Double) -> Double { (v * 100).rounded() / 100 }
+
+    /// `{z1…z5: seconds}` from per-zone keys like `hrTimeInZone_1` (rounded to Int).
+    private func zoneSeconds(_ source: [String: Any], prefix: String) -> [String: Int] {
+        var out: [String: Int] = [:]
+        for i in 1...5 { out["z\(i)"] = Int((Coerce.double(source["\(prefix)_\(i)"]) ?? 0).rounded()) }
+        return out
+    }
+
+    /// `{z1…z5: [lo, hi]}` from six ascending bounds (z1 floor … top cap).
+    private func zoneBands(_ bounds: [Int]) -> [String: [Int]] {
+        var out: [String: [Int]] = [:]
+        for i in 0..<5 { out["z\(i + 1)"] = [bounds[i], bounds[i + 1]] }
+        return out
+    }
 
     private func resultString(success: Bool, data: Any?, message: String) -> String {
         if !success { return "✗ Error: \(message)" }
@@ -43,7 +56,7 @@ actor GarminService {
         let startTime = activity["startTimeLocal"] as? String ?? ""
         let activityType = (activity["activityType"] as? [String: Any])?["typeKey"] as? String ?? "unknown"
 
-        func intOrNull(_ key: String) -> Any { num(activity[key]).map { Int($0.rounded()) } ?? NSNull() }
+        func intOrNull(_ key: String) -> Any { Coerce.double(activity[key]).map { Int($0.rounded()) } ?? NSNull() }
 
         var data: [String: Any] = [
             "id": activity["activityId"] ?? NSNull(),
@@ -51,59 +64,47 @@ actor GarminService {
             "date": startTime.count >= 10 ? String(startTime.prefix(10)) : "",
             "time": startTime.count > 11 ? String(startTime.dropFirst(11).prefix(5)) : "",
             "sport": activityType,
-            "duration_minutes": round1((num(activity["duration"]) ?? 0) / 60),
-            "distance_km": round2((num(activity["distance"]) ?? 0) / 1000),
+            "duration_minutes": round1((Coerce.double(activity["duration"]) ?? 0) / 60),
+            "distance_km": round2((Coerce.double(activity["distance"]) ?? 0) / 1000),
             "calories": activity["calories"] ?? NSNull(),
             "location": activity["locationName"] ?? NSNull(),
             "avg_hr": intOrNull("averageHR"),
             "max_hr": intOrNull("maxHR"),
-            "aerobic_te": num(activity["aerobicTrainingEffect"]).map { round1($0) } ?? NSNull(),
-            "anaerobic_te": num(activity["anaerobicTrainingEffect"]).map { round1($0) } ?? NSNull(),
+            "aerobic_te": Coerce.double(activity["aerobicTrainingEffect"]).map { round1($0) } ?? NSNull(),
+            "anaerobic_te": Coerce.double(activity["anaerobicTrainingEffect"]).map { round1($0) } ?? NSNull(),
             "training_load": intOrNull("activityTrainingLoad"),
             "elevation_gain_m": intOrNull("elevationGain"),
             "elevation_loss_m": intOrNull("elevationLoss")
         ]
         if activity["hrTimeInZone_1"] != nil {
-            data["hr_zones_seconds"] = [
-                "z1": Int((num(activity["hrTimeInZone_1"]) ?? 0).rounded()),
-                "z2": Int((num(activity["hrTimeInZone_2"]) ?? 0).rounded()),
-                "z3": Int((num(activity["hrTimeInZone_3"]) ?? 0).rounded()),
-                "z4": Int((num(activity["hrTimeInZone_4"]) ?? 0).rounded()),
-                "z5": Int((num(activity["hrTimeInZone_5"]) ?? 0).rounded())
-            ]
+            data["hr_zones_seconds"] = zoneSeconds(activity, prefix: "hrTimeInZone")
         }
 
         if ["running", "trail_running", "treadmill_running"].contains(activityType) {
             data["running"] = [
-                "avg_pace_min_km": orNull(GarminTransform.speedToPace(num(activity["averageSpeed"]), distanceM: 1000)),
-                "best_pace_min_km": orNull(GarminTransform.speedToPace(num(activity["maxSpeed"]), distanceM: 1000)),
-                "avg_cadence_spm": orNull(num(activity["averageRunningCadenceInStepsPerMinute"]).map { Int($0.rounded()) }),
-                "max_cadence_spm": orNull(num(activity["maxRunningCadenceInStepsPerMinute"]).map { Int($0.rounded()) }),
-                "avg_power_w": orNull(num(activity["avgPower"]).map { Int($0.rounded()) }),
+                "avg_pace_min_km": orNull(GarminTransform.speedToPace(Coerce.double(activity["averageSpeed"]), distanceM: 1000)),
+                "best_pace_min_km": orNull(GarminTransform.speedToPace(Coerce.double(activity["maxSpeed"]), distanceM: 1000)),
+                "avg_cadence_spm": orNull(Coerce.double(activity["averageRunningCadenceInStepsPerMinute"]).map { Int($0.rounded()) }),
+                "max_cadence_spm": orNull(Coerce.double(activity["maxRunningCadenceInStepsPerMinute"]).map { Int($0.rounded()) }),
+                "avg_power_w": orNull(Coerce.double(activity["avgPower"]).map { Int($0.rounded()) }),
                 "steps": orNull(activity["steps"])
             ]
         } else if ["cycling", "indoor_cycling", "virtual_ride"].contains(activityType) {
-            let avgSpeed = num(activity["averageSpeed"]) ?? 0
+            let avgSpeed = Coerce.double(activity["averageSpeed"]) ?? 0
             var cycling: [String: Any] = [
                 "avg_speed_kmh": avgSpeed > 0 ? round1(avgSpeed * 3.6) : NSNull(),
-                "max_speed_kmh": num(activity["maxSpeed"]).map { round1($0 * 3.6) } ?? NSNull(),
-                "avg_power_w": num(activity["avgPower"]).map { Int($0.rounded()) } ?? NSNull(),
-                "max_power_w": num(activity["maxPower"]).map { Int($0.rounded()) } ?? NSNull(),
-                "normalized_power_w": num(activity["normPower"]).map { Int($0.rounded()) } ?? NSNull(),
-                "avg_cadence_rpm": num(activity["avgBikingCadenceInRevPerMinute"]).map { Int($0.rounded()) } ?? NSNull()
+                "max_speed_kmh": Coerce.double(activity["maxSpeed"]).map { round1($0 * 3.6) } ?? NSNull(),
+                "avg_power_w": Coerce.double(activity["avgPower"]).map { Int($0.rounded()) } ?? NSNull(),
+                "max_power_w": Coerce.double(activity["maxPower"]).map { Int($0.rounded()) } ?? NSNull(),
+                "normalized_power_w": Coerce.double(activity["normPower"]).map { Int($0.rounded()) } ?? NSNull(),
+                "avg_cadence_rpm": Coerce.double(activity["avgBikingCadenceInRevPerMinute"]).map { Int($0.rounded()) } ?? NSNull()
             ]
             if activity["powerTimeInZone_1"] != nil {
-                cycling["power_zones_seconds"] = [
-                    "z1": Int((num(activity["powerTimeInZone_1"]) ?? 0).rounded()),
-                    "z2": Int((num(activity["powerTimeInZone_2"]) ?? 0).rounded()),
-                    "z3": Int((num(activity["powerTimeInZone_3"]) ?? 0).rounded()),
-                    "z4": Int((num(activity["powerTimeInZone_4"]) ?? 0).rounded()),
-                    "z5": Int((num(activity["powerTimeInZone_5"]) ?? 0).rounded())
-                ]
+                cycling["power_zones_seconds"] = zoneSeconds(activity, prefix: "powerTimeInZone")
             }
             data["cycling"] = cycling
         } else if activityType.lowercased().contains("swim") {
-            let poolLengthM = num(activity["poolLength"]).map { $0 / 100 }
+            let poolLengthM = Coerce.double(activity["poolLength"]).map { $0 / 100 }
             let activityId = activity["activityId"].map { "\($0)" }
             var intervals: [[String: Any]]? = nil
             if let activityId {
@@ -118,7 +119,7 @@ actor GarminService {
                 "avg_swolf": activity["averageSwolf"] ?? NSNull(),
                 "avg_strokes_per_length": activity["avgStrokes"] ?? NSNull(),
                 "total_lengths": activity["activeLengths"] ?? NSNull(),
-                "avg_pace_per_100m": GarminTransform.speedToPace(num(activity["averageSpeed"]), distanceM: 100) ?? NSNull(),
+                "avg_pace_per_100m": GarminTransform.speedToPace(Coerce.double(activity["averageSpeed"]), distanceM: 100) ?? NSNull(),
                 "intervals": intervals ?? NSNull()
             ]
         }
@@ -218,7 +219,7 @@ actor GarminService {
     // MARK: - get_power_curve
 
     func getPowerCurve(startDate: String, endDate: String, sport: String = "cycling", durationsSeconds: [Int]?) async -> String {
-        let sportKey = GarminMappings.normalizeToken(sport, default: "cycling")
+        let sportKey = Coerce.token(sport, default: "cycling")
         if sportKey != "cycling" {
             return resultString(success: false, data: nil, message: "Power curve analysis is currently supported only for cycling.")
         }
@@ -325,10 +326,10 @@ actor GarminService {
                     let quality = (scores["totalDuration"] as? [String: Any])?["qualifierKey"] as? String ?? "Unknown"
                     day["sleep"] = [
                         "score": overall ?? NSNull(),
-                        "duration_hours": round1((num(dto["sleepTimeSeconds"]) ?? 0) / 3600),
+                        "duration_hours": round1((Coerce.double(dto["sleepTimeSeconds"]) ?? 0) / 3600),
                         "quality": quality,
-                        "deep_hours": round1((num(dto["deepSleepSeconds"]) ?? 0) / 3600),
-                        "rem_hours": round1((num(dto["remSleepSeconds"]) ?? 0) / 3600),
+                        "deep_hours": round1((Coerce.double(dto["deepSleepSeconds"]) ?? 0) / 3600),
+                        "rem_hours": round1((Coerce.double(dto["remSleepSeconds"]) ?? 0) / 3600),
                         "avg_hr": dto["avgHeartRate"] ?? NSNull()
                     ]
                 } else { day["sleep"] = NSNull() }
@@ -339,7 +340,7 @@ actor GarminService {
             func collect(_ path: (String, String)) -> [Double] {
                 dailyMetrics.compactMap { entry in
                     guard let sub = entry[path.0] as? [String: Any] else { return nil }
-                    return num(sub[path.1])
+                    return Coerce.double(sub[path.1])
                 }
             }
             let hrvValues = collect(("hrv", "last_night"))
@@ -410,7 +411,7 @@ actor GarminService {
                     }
                     if details == nil { details = try? await client.getWorkoutDetails(workoutId: id) }
                     if let details {
-                        if let est = num(details["estimatedDurationInSecs"]) {
+                        if let est = Coerce.double(details["estimatedDurationInSecs"]) {
                             durationMinutes = Int((est / 60).rounded())
                         }
                         steps = compactSteps(fromDetails: details, sport: sportKey)
@@ -431,8 +432,8 @@ actor GarminService {
                     let id = item["id"].map { "\($0)" } ?? ""
                     if id.isEmpty || seen.contains(id) { continue }
                     seen.insert(id)
-                    let elapsed = num(item["elapsedDuration"])
-                    let durMs = num(item["duration"])
+                    let elapsed = Coerce.double(item["elapsedDuration"])
+                    let durMs = Coerce.double(item["duration"])
                     let durationMinutes: Any = elapsed.map { Int(($0 / 60).rounded()) }
                         ?? durMs.map { Int(($0 / 60000).rounded()) } ?? NSNull()
                     let sport = item["sportTypeKey"] as? String ?? activityTypeToSport((item["activityTypeId"] as? NSNumber)?.intValue) ?? "other"
@@ -469,7 +470,7 @@ actor GarminService {
                     "id": id, "name": activity["activityName"] as? String ?? "Unnamed Activity",
                     "date": st.count >= 10 ? String(st.prefix(10)) : "",
                     "sport": (activity["activityType"] as? [String: Any])?["typeKey"] as? String ?? "Unknown",
-                    "duration_minutes": num(activity["duration"]).map { Int(($0 / 60).rounded()) } ?? NSNull(),
+                    "duration_minutes": Coerce.double(activity["duration"]).map { Int(($0 / 60).rounded()) } ?? NSNull(),
                     "description": activity["description"] as? String ?? ""
                 ])
             }
@@ -492,12 +493,12 @@ actor GarminService {
     /// match the coach-supplied convention.
     private func compactSteps(fromDetails details: [String: Any], sport: String) -> [[String: Any]] {
         let segments = details["workoutSegments"] as? [[String: Any]] ?? []
-        let isSwim = GarminWorkoutBuilder.swimSportKeys.contains(sport)
+        let isSwim = WorkoutNormalizer.swimSportKeys.contains(sport)
         var out: [[String: Any]] = []
         func walk(_ stepList: [[String: Any]]) {
             for step in stepList {
                 if (step["type"] as? String) == "RepeatGroupDTO" {
-                    let iterations = max(1, num(step["numberOfIterations"]).map { Int($0) } ?? 1)
+                    let iterations = max(1, Coerce.double(step["numberOfIterations"]).map { Int($0) } ?? 1)
                     let children = step["workoutSteps"] as? [[String: Any]] ?? []
                     for _ in 0 ..< iterations { walk(children) }
                     continue
@@ -506,14 +507,14 @@ actor GarminService {
                     "type": (step["stepType"] as? [String: Any])?["stepTypeKey"] as? String ?? "interval"
                 ]
                 let endKey = (step["endCondition"] as? [String: Any])?["conditionTypeKey"] as? String ?? "time"
-                let endValue = num(step["endConditionValue"]) ?? 0
+                let endValue = Coerce.double(step["endConditionValue"]) ?? 0
                 if endKey.contains("distance") {
                     compact["distance_meters"] = endValue
                 } else {
                     compact["duration_seconds"] = endValue
                 }
                 let targetKey = (step["targetType"] as? [String: Any])?["workoutTargetTypeKey"] as? String ?? "no.target"
-                if let low = num(step["targetValueOne"]), let high = num(step["targetValueTwo"]) {
+                if let low = Coerce.double(step["targetValueOne"]), let high = Coerce.double(step["targetValueTwo"]) {
                     switch targetKey {
                     case "power.zone":
                         compact["target_type"] = "power"
@@ -553,7 +554,7 @@ actor GarminService {
     func addWorkout(workoutData: [String: Any], date: String) async -> String {
         do {
             let targetDate = GarminTransform.formatDate(date)
-            let sport = GarminMappings.normalizeToken(workoutData["sport"] as? String, default: "other")
+            let sport = Coerce.token(workoutData["sport"] as? String, default: "other")
             let sportType = GarminMappings.workoutSportTypes[sport] ?? GarminMappings.workoutSportTypes["other"]!
             let json = GarminWorkoutBuilder.buildWorkoutJSON(workoutData, sportType: sportType, sport: sport)
             let created = try await client.uploadWorkout(json)
@@ -635,7 +636,7 @@ actor GarminService {
                 return resultString(success: false, data: nil, message: "Workout \(workoutId) not found")
             }
             let existingSportKey = (existing["sportType"] as? [String: Any])?["sportTypeKey"] as? String
-            let sport = GarminMappings.normalizeToken(workoutData["sport"] as? String ?? existingSportKey, default: "other")
+            let sport = Coerce.token(workoutData["sport"] as? String ?? existingSportKey, default: "other")
             let sportType = GarminMappings.workoutSportTypes[sport] ?? GarminMappings.workoutSportTypes["other"]!
 
             var json: [String: Any]
@@ -697,17 +698,15 @@ actor GarminService {
                 let defaultZones = hrZones.first { ($0["sport"] as? String) == "DEFAULT" } ?? hrZones[0]
                 if let maxHR = (defaultZones["maxHeartRateUsed"] as? NSNumber)?.intValue { settings["max_hr"] = maxHR }
                 func z(_ key: String) -> Int { (defaultZones[key] as? NSNumber)?.intValue ?? 0 }
-                settings["hr_zones"] = [
-                    "z1": [0, z("zone1Floor")], "z2": [z("zone1Floor"), z("zone2Floor")],
-                    "z3": [z("zone2Floor"), z("zone3Floor")], "z4": [z("zone3Floor"), z("zone4Floor")],
-                    "z5": [z("zone4Floor"), z("maxHeartRateUsed")]
-                ]
+                settings["hr_zones"] = zoneBands([
+                    0, z("zone1Floor"), z("zone2Floor"), z("zone3Floor"), z("zone4Floor"), z("maxHeartRateUsed")
+                ])
             }
 
             if let profile = try? await client.getUserProfile(), let userData = profile["userData"] as? [String: Any] {
                 if let v = userData["vo2MaxRunning"] { settings["vo2max_running"] = v }
                 if let v = userData["vo2MaxCycling"] { settings["vo2max_cycling"] = v }
-                if let w = num(userData["weight"]) { settings["weight_kg"] = round1(w / 1000) }
+                if let w = Coerce.double(userData["weight"]) { settings["weight_kg"] = round1(w / 1000) }
                 if let h = userData["height"] { settings["height_cm"] = h }
                 if let g = userData["gender"] as? String { settings["gender"] = g.lowercased() }
                 if let b = userData["birthDate"] { settings["birth_date"] = b }
@@ -715,11 +714,8 @@ actor GarminService {
 
             if let ftp = settings["cycling_ftp"] as? Int {
                 let f = Double(ftp)
-                settings["power_zones"] = [
-                    "z1": [0, Int((f * 0.55).rounded())], "z2": [Int((f * 0.55).rounded()), Int((f * 0.75).rounded())],
-                    "z3": [Int((f * 0.75).rounded()), Int((f * 0.90).rounded())], "z4": [Int((f * 0.90).rounded()), Int((f * 1.05).rounded())],
-                    "z5": [Int((f * 1.05).rounded()), Int((f * 1.20).rounded())]
-                ]
+                let bounds = [0, 0.55, 0.75, 0.90, 1.05, 1.20].map { Int((f * $0).rounded()) }
+                settings["power_zones"] = zoneBands(bounds)
             }
 
             let today = GarminTransform.ymd(Date())

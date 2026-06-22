@@ -11,8 +11,6 @@ import Foundation
 
 nonisolated enum GarminWorkoutBuilder {
 
-    static let swimSportKeys: Set<String> = ["swimming", "swim", "pool_swimming", "lap_swimming"]
-
     static func buildWorkoutJSON(_ workoutData: [String: Any], sportType: GarminMappings.SportType, sport: String) -> [String: Any] {
         let name = workoutData["name"] as? String ?? "Workout"
         let description = workoutData["description"] as? String ?? ""
@@ -31,32 +29,24 @@ nonisolated enum GarminWorkoutBuilder {
         if let distanceMeters { workoutJSON["estimatedDistanceInMeters"] = distanceMeters }
 
         var poolLengthUnit: [String: Any]?
-        if swimSportKeys.contains(sport) {
+        if WorkoutNormalizer.swimSportKeys.contains(sport) {
             let poolLength = (workoutData["pool_length"] as? NSNumber)?.doubleValue ?? 50
             poolLengthUnit = ["unitId": 1, "unitKey": "meter", "factor": 100.0]
             workoutJSON["poolLength"] = poolLength
             workoutJSON["poolLengthUnit"] = poolLengthUnit
         }
 
-        // Steps arrive already normalized (explicit, with resolved end conditions and
-        // expanded target bands). The fallback only guards against an empty list:
-        // prefer a distance interval when distance is the only target, else time.
-        let normalizedSteps: [[String: Any]]
-        if !steps.isEmpty {
-            normalizedSteps = steps
-        } else if let distanceMeters {
-            normalizedSteps = [["type": "interval", "end_condition": "distance", "distance_meters": distanceMeters]]
-        } else {
-            normalizedSteps = [["type": "interval", "end_condition": "time", "duration_seconds": (durationMinutes ?? 60) * 60]]
-        }
-        let workoutSteps = buildStructuredSteps(normalizedSteps, sport: sport)
+        // Steps arrive already normalized by WorkoutNormalizer (always a non-empty,
+        // explicit list with resolved end conditions and expanded target bands), so
+        // the builder only translates them to Garmin's wire format.
+        let workoutSteps = buildStructuredSteps(steps, sport: sport)
 
         var segment: [String: Any] = [
             "segmentOrder": 1,
             "sportType": sportType.dict,
             "workoutSteps": workoutSteps
         ]
-        if swimSportKeys.contains(sport) {
+        if WorkoutNormalizer.swimSportKeys.contains(sport) {
             segment["poolLength"] = workoutJSON["poolLength"]
             segment["poolLengthUnit"] = poolLengthUnit as Any
         }
@@ -68,26 +58,24 @@ nonisolated enum GarminWorkoutBuilder {
         var workoutSteps: [[String: Any]] = []
         var stepOrder = 1
 
-        func num(_ v: Any?) -> Double? { (v as? NSNumber)?.doubleValue }
-
         for step in steps {
-            let stepTypeStr = GarminMappings.normalizeToken(step["type"] as? String, default: "interval")
+            let stepTypeStr = Coerce.token(step["type"] as? String, default: "interval")
             let stepType = GarminMappings.workoutStepTypes[stepTypeStr] ?? GarminMappings.workoutStepTypes["interval"]!
 
             if stepTypeStr == "repeat" {
                 var repeatSteps: [[String: Any]] = []
                 var childOrder = 1
                 for child in step["repeat_steps"] as? [[String: Any]] ?? [] {
-                    let childTypeStr = GarminMappings.normalizeToken(child["type"] as? String, default: "interval")
+                    let childTypeStr = Coerce.token(child["type"] as? String, default: "interval")
                     let childType = GarminMappings.workoutStepTypes[childTypeStr] ?? GarminMappings.workoutStepTypes["interval"]!
-                    let childEnd = GarminMappings.normalizeToken(child["end_condition"] as? String, default: "time")
+                    let childEnd = Coerce.token(child["end_condition"] as? String, default: "time")
                     var childStep = createStep(
                         order: stepOrder + childOrder,
                         stepTypeKey: childType.key, stepTypeId: childType.id, sport: sport,
                         endCondition: childEnd,
-                        endValue: num(child["distance_meters"]) ?? num(child["duration_seconds"]) ?? 60,
+                        endValue: Coerce.double(child["distance_meters"]) ?? Coerce.double(child["duration_seconds"]) ?? 60,
                         targetType: child["target_type"] as? String,
-                        targetLow: num(child["target_low"]), targetHigh: num(child["target_high"]),
+                        targetLow: Coerce.double(child["target_low"]), targetHigh: Coerce.double(child["target_high"]),
                         stroke: child["stroke"] as? String
                     )
                     childStep["childStepId"] = 1
@@ -112,14 +100,14 @@ nonisolated enum GarminWorkoutBuilder {
                 continue
             }
 
-            let endCondition = GarminMappings.normalizeToken(step["end_condition"] as? String, default: "time")
+            let endCondition = Coerce.token(step["end_condition"] as? String, default: "time")
             workoutSteps.append(createStep(
                 order: stepOrder,
                 stepTypeKey: stepType.key, stepTypeId: stepType.id, sport: sport,
                 endCondition: endCondition,
-                endValue: num(step["distance_meters"]) ?? num(step["duration_seconds"]) ?? 60,
+                endValue: Coerce.double(step["distance_meters"]) ?? Coerce.double(step["duration_seconds"]) ?? 60,
                 targetType: step["target_type"] as? String,
-                targetLow: num(step["target_low"]), targetHigh: num(step["target_high"]),
+                targetLow: Coerce.double(step["target_low"]), targetHigh: Coerce.double(step["target_high"]),
                 stroke: step["stroke"] as? String
             ))
             stepOrder += 1
@@ -168,11 +156,11 @@ nonisolated enum GarminWorkoutBuilder {
             step["preferredEndConditionUnit"] = ["unitId": 1, "unitKey": "meter", "factor": 100.0]
         }
 
-        if swimSportKeys.contains(sport) {
+        if WorkoutNormalizer.swimSportKeys.contains(sport) {
             if stepTypeKey == "rest" {
                 step["strokeType"] = GarminMappings.workoutStrokeNone
             } else {
-                let strokeKey = stroke.map { GarminMappings.normalizeToken($0) }
+                let strokeKey = stroke.map { Coerce.token($0) }
                 step["strokeType"] = GarminMappings.workoutStrokes[strokeKey ?? "free"] ?? GarminMappings.workoutStrokes["free"]!
             }
             step["equipmentType"] = ["equipmentTypeId": 0, "equipmentTypeKey": NSNull(), "displayOrder": 0]

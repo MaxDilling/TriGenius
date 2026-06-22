@@ -178,7 +178,7 @@ enum PlannedTSS {
         var out: [RawStep] = []
         for step in steps {
             if let children = step["repeat_steps"] as? [[String: Any]] {
-                let count = max(1, num(step["repeat_count"]).map { Int($0) } ?? 1)
+                let count = max(1, Coerce.double(step["repeat_count"]).map { Int($0) } ?? 1)
                 let leaves = children.compactMap(leaf(from:))
                 for _ in 0 ..< count { out.append(contentsOf: leaves) }
             } else if let leaf = leaf(from: step) {
@@ -192,10 +192,10 @@ enum PlannedTSS {
         let typeKey = (step["type"] as? String)?.lowercased() ?? "interval"
         let isDistance: Bool
         let endValue: Double
-        if let meters = num(step["distance_meters"]) {
+        if let meters = Coerce.double(step["distance_meters"]) {
             isDistance = true
             endValue = meters
-        } else if let secs = num(step["duration_seconds"]) {
+        } else if let secs = Coerce.double(step["duration_seconds"]) {
             isDistance = false
             endValue = secs
         } else {
@@ -208,15 +208,8 @@ enum PlannedTSS {
             isDistance: isDistance,
             endValue: endValue,
             targetType: targetType,
-            targetLow: num(step["target_low"]),
-            targetHigh: num(step["target_high"])
+            targetLow: Coerce.double(step["target_low"]),
+            targetHigh: Coerce.double(step["target_high"])
         )
-    }
-
-    private static func num(_ v: Any?) -> Double? {
-        if let d = v as? Double { return d }
-        if let n = v as? NSNumber { return n.doubleValue }
-        if let i = v as? Int { return Double(i) }
-        return nil
     }
 }
