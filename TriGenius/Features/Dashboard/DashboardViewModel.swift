@@ -105,19 +105,18 @@ final class DashboardViewModel {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let end = cal.date(byAdding: .day, value: agendaUpcomingDays, to: today) ?? today
-        let planned = store.scheduledWorkouts(from: today, to: end)
+        // `openScheduledWorkouts` already drops plans whose completion has landed,
+        // so a done session never shows twice (pending plan + completed ✓).
+        let planned = store.openScheduledWorkouts(from: today, to: end)
 
         var days: [AgendaDay] = []
         for offset in 0...agendaUpcomingDays {
             guard let day = cal.date(byAdding: .day, value: offset, to: today) else { continue }
             // Completed activities only matter for today (past days roll off the agenda).
-            let dayRecords = records.filter { cal.isDate($0.date, inSameDayAs: day) }
-            let completed = offset == 0 ? dayRecords.sorted { $0.date < $1.date } : []
-            // Drop plans already fulfilled by a completed activity so a done
-            // session doesn't show twice (pending plan + completed ✓).
-            let dayPlanned = PlanReconciliation.unfulfilled(
-                planned: planned.filter { cal.isDate($0.date, inSameDayAs: day) },
-                completed: dayRecords)
+            let completed = offset == 0
+                ? records.filter { cal.isDate($0.date, inSameDayAs: day) }.sorted { $0.date < $1.date }
+                : []
+            let dayPlanned = planned.filter { cal.isDate($0.date, inSameDayAs: day) }
             if completed.isEmpty && dayPlanned.isEmpty { continue }
             days.append(AgendaDay(date: day, completed: completed, planned: dayPlanned))
         }

@@ -214,12 +214,10 @@ enum WeeklyTargets {
             out[family] = p
         }
 
-        // Still-planned for today + the remaining days. Plans already fulfilled by
-        // a completed activity (matched on day + sport + name) drop out so a done
-        // session isn't double-counted against the projection.
-        let stillPlanned = PlanReconciliation.unfulfilled(
-            planned: store.scheduledWorkouts(from: weekStart, to: weekEnd),
-            completed: weekCompleted)
+        // Still-planned for today + the remaining days. `openScheduledWorkouts`
+        // drops plans whose completion has landed, so a done session isn't
+        // double-counted against the projection.
+        let stillPlanned = store.openScheduledWorkouts(from: weekStart, to: weekEnd)
         for w in stillPlanned {
             let day = cal.startOfDay(for: w.date)
             let family = SportFamily(sportKey: w.sport)

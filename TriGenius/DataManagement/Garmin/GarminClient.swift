@@ -211,6 +211,13 @@ actor GarminClient {
         try await connectapi("/workout-service/workout/\(workoutId)") as? [String: Any]
     }
 
+    /// Fetch a scheduled occurrence by its schedule id. A superset of
+    /// `getWorkoutDetails`: embeds the full `workout` object plus the
+    /// `associatedActivityId` Garmin sets once the session is completed.
+    func getScheduledWorkout(scheduleId: String) async throws -> [String: Any]? {
+        try await connectapi("/workout-service/schedule/\(scheduleId)") as? [String: Any]
+    }
+
     func getAdaptiveTrainingPlan(id: Int) async throws -> [String: Any]? {
         try await connectapi("/trainingplan-service/trainingplan/\(id)") as? [String: Any]
     }

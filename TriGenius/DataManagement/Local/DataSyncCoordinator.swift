@@ -180,7 +180,8 @@ final class DataSyncCoordinator {
             name: data["name"] as? String ?? "Scheduled Workout",
             targetDurationMinutes: (data["duration_minutes"] as? NSNumber)?.doubleValue ?? 0,
             targetTSS: targetTSS,
-            notes: data["description"] as? String ?? ""
+            notes: data["description"] as? String ?? "",
+            associatedActivityId: item["associated_activity_id"].map { "\($0)" }
         )
     }
 

@@ -145,6 +145,10 @@ final class ScheduledWorkoutRecord {
     /// the time-of-day. Set by dragging onto a calendar segment; lost if the
     /// workout is (re)created in Garmin.
     var startMinute: Int?
+    /// The completed activity Garmin linked to this plan (its `activityId`), set
+    /// once the session is done. Used to suppress the now-redundant pending plan.
+    /// Nil while still outstanding.
+    var associatedActivityId: String?
 
     init(
         id: String,
@@ -155,7 +159,8 @@ final class ScheduledWorkoutRecord {
         targetDurationMinutes: Double,
         targetTSS: Double?,
         notes: String = "",
-        startMinute: Int? = nil
+        startMinute: Int? = nil,
+        associatedActivityId: String? = nil
     ) {
         self.id = id
         self.source = source
@@ -166,6 +171,7 @@ final class ScheduledWorkoutRecord {
         self.targetTSS = targetTSS
         self.notes = notes
         self.startMinute = startMinute
+        self.associatedActivityId = associatedActivityId
     }
 }
 
@@ -199,6 +205,7 @@ struct IngestedScheduledWorkout: Sendable {
     let targetDurationMinutes: Double
     let targetTSS: Double?
     let notes: String
+    var associatedActivityId: String? = nil
 }
 
 /// One day's aggregated TSS — the unit the PMC engine works on.
@@ -426,15 +433,31 @@ final class TrainingDataStore {
                 record.targetDurationMinutes = w.targetDurationMinutes
                 record.targetTSS = w.targetTSS
                 record.notes = w.notes
+                record.associatedActivityId = w.associatedActivityId
             } else {
                 context.insert(ScheduledWorkoutRecord(
                     id: w.id, source: w.source, date: day, sport: w.sport, name: w.name,
-                    targetDurationMinutes: w.targetDurationMinutes, targetTSS: w.targetTSS, notes: w.notes
+                    targetDurationMinutes: w.targetDurationMinutes, targetTSS: w.targetTSS, notes: w.notes,
+                    associatedActivityId: w.associatedActivityId
                 ))
             }
         }
         try? context.save()
         markChanged()
+    }
+
+    /// Planned workouts in `[from, to]` that are still outstanding — Garmin hasn't
+    /// linked them to a completed activity we've already stored. Centralizes the
+    /// plan/activity de-duplication so the Agenda, calendar and projections all hide
+    /// a plan the moment its completion lands, instead of showing it twice.
+    func openScheduledWorkouts(from: Date, to: Date) -> [ScheduledWorkoutRecord] {
+        let planned = scheduledWorkouts(from: from, to: to)
+        guard planned.contains(where: { $0.associatedActivityId != nil }) else { return planned }
+        let done = Set(activities(from: from, to: to).map(\.id))
+        return planned.filter { p in
+            guard let aid = p.associatedActivityId else { return true }
+            return !done.contains("garmin:\(aid)")
+        }
     }
 
     /// Planned workouts within `[from, to]` (start-of-day inclusive), ascending.

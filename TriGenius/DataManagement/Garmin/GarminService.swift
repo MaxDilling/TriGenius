@@ -397,7 +397,19 @@ actor GarminService {
                     var durationMinutes: Any = NSNull()
                     var steps: [[String: Any]] = []
                     let sportKey = item["sportTypeKey"] as? String ?? "other"
-                    if let details = try? await client.getWorkoutDetails(workoutId: id) {
+                    // Prefer the schedule detail: it embeds the same `workout`
+                    // payload AND the `associatedActivityId` Garmin sets once the
+                    // session is completed (used to suppress the redundant plan).
+                    // Fall back to the plain workout detail if no schedule id.
+                    var associatedActivityId: Any?
+                    let scheduleId = item["id"].map { "\($0)" }
+                    var details: [String: Any]?
+                    if let scheduleId, let schedule = try? await client.getScheduledWorkout(scheduleId: scheduleId) {
+                        details = schedule["workout"] as? [String: Any]
+                        associatedActivityId = schedule["associatedActivityId"].flatMap { $0 is NSNull ? nil : $0 }
+                    }
+                    if details == nil { details = try? await client.getWorkoutDetails(workoutId: id) }
+                    if let details {
                         if let est = num(details["estimatedDurationInSecs"]) {
                             durationMinutes = Int((est / 60).rounded())
                         }
@@ -405,14 +417,16 @@ actor GarminService {
                     }
                     // workout_data mirrors the add_workouts/modify_workout shape, so
                     // an item can be passed straight back to modify_workout.
-                    scheduled.append([
+                    var entry: [String: Any] = [
                         "workout_id": id, "date": itemDate, "editable": true,
                         "workout_data": [
                             "name": item["title"] as? String ?? "Scheduled Workout",
                             "sport": sportKey, "duration_minutes": durationMinutes,
                             "description": "", "steps": steps
                         ]
-                    ])
+                    ]
+                    if let associatedActivityId { entry["associated_activity_id"] = "\(associatedActivityId)" }
+                    scheduled.append(entry)
                 } else if itemType == "activity" {
                     let id = item["id"].map { "\($0)" } ?? ""
                     if id.isEmpty || seen.contains(id) { continue }
