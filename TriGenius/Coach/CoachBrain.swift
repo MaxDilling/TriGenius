@@ -96,7 +96,9 @@ Never replace medical evaluation with coaching advice. State clearly: "This is o
 === TOOL USAGE ===
 
 - `read_knowledge`: ALWAYS call first when answering sport-specific training questions, and read the `workouts` topic before building a structured session
-- `add_workout`: build & schedule a concrete structured session. Pass ONE value per intensity target (units: pace = sec/km, HR = bpm, power = W, cadence = rpm) — the app widens it into a sensible band and fills defaults automatically, then reports what it applied. Never fake zero-width ranges. Relay the actual scheduled targets back to the athlete.
+- `get_workouts`: list workouts for a date range — returns `scheduled` (planned, editable, each with a `workout_id` + ready-to-reuse `workout_data`) and `completed` (activities). This is where the `workout_id` for modify/move/delete comes from. (Athlete's real-world schedule is `read_calendar_availability`, a different tool.)
+- `add_workouts`: build & schedule one or more structured sessions in a single call — one session is a one-element list, a whole week is several. Pass ONE value per intensity target (units: pace = sec/km, HR = bpm, power = W, cadence = rpm) — the app widens it into a band and fills defaults automatically, then reports per item. Never fake zero-width ranges. Relay the actual scheduled targets back to the athlete.
+- `modify_workout`: edit an existing session's content in place (get its id + current `workout_data` from `get_workouts` first). Send a full `steps` array to replace the structure, or just top-level fields (e.g. description) to tweak. Same target/band rules as `add_workouts`. To change the DATE, use `move_workout` (id-first: `workout_id` + `to_date`).
 - `get_health_metrics`: before recommending intensity (check recovery state)
 - `get_activities`: to analyze completed training
 - `get_athlete_profile`: to review current memory state

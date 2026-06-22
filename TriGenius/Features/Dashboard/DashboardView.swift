@@ -57,11 +57,25 @@ struct DashboardView: View {
         #endif
         .refreshable { await viewModel.refresh(context: context) }
         .task { await viewModel.loadInitialIfNeeded(context: context) }
-        // A reschedule/delete in the Calendar updates the local store but not
-        // this view's cached snapshot; reload (no network) when it changes.
-        .onReceive(NotificationCenter.default.publisher(for: .scheduledWorkoutsDidChange)) { _ in
+        // Any local-store mutation (coach `add_workout`, a sync, a Calendar
+        // reschedule/delete) updates the DB but not this view's cached snapshot;
+        // reload (no network) when it changes.
+        .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
             Task { await viewModel.load(context: context) }
         }
+        // Plan/structure live in `coach_memory.json`, not the DB, so a coach edit
+        // there bypasses the notification above. Reload when the plan signature
+        // changes so the weekly targets recompute. `.onChange` fires after the new
+        // value is in place, so `context` already carries the fresh plan.
+        .onChange(of: planSignature) {
+            Task { await viewModel.load(context: context) }
+        }
+    }
+
+    /// Cheap, DB-free fingerprint of the inputs the weekly targets depend on, so a
+    /// coach-driven plan/structure edit triggers a dashboard reload.
+    private var planSignature: String {
+        "\(trainingPlan.toDict())\n\(weeklyStructure.toDict())"
     }
 
     // MARK: Header

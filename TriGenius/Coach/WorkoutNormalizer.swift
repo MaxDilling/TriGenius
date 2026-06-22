@@ -50,15 +50,15 @@ nonisolated enum WorkoutNormalizer {
         }
 
         if isSwim, data["pool_length"] == nil {
-            data["pool_length"] = 25
-            notes.append("Pool length: defaulted to 25 m.")
+            data["pool_length"] = 50
+            notes.append("Pool length: defaulted to 50 m.")
         }
 
         // --- Steps: synthesize if absent, otherwise normalize the provided ones ---
         let rawSteps = data["steps"] as? [[String: Any]] ?? []
         if rawSteps.isEmpty {
             let (steps, synthNotes) = synthesizeSteps(
-                durationMinutes: intVal(data["duration_minutes"]) ?? 60,
+                durationMinutes: intVal(data["duration_minutes"]),
                 distanceMeters: doubleVal(data["distance_meters"]),
                 includeWarmup: data["include_warmup"] as? Bool ?? true,
                 includeCooldown: data["include_cooldown"] as? Bool ?? true,
@@ -77,10 +77,19 @@ nonisolated enum WorkoutNormalizer {
 
     // MARK: - Step synthesis (no explicit steps provided)
 
-    private static func synthesizeSteps(durationMinutes: Int, distanceMeters: Double?, includeWarmup: Bool, includeCooldown: Bool, isSwim: Bool) -> ([[String: Any]], [String]) {
+    private static func synthesizeSteps(durationMinutes: Int?, distanceMeters: Double?, includeWarmup: Bool, includeCooldown: Bool, isSwim: Bool) -> ([[String: Any]], [String]) {
         var steps: [[String: Any]] = []
         var notes: [String] = []
-        var remaining = durationMinutes * 60
+
+        // Distance-only (no duration): a single distance interval — there is no time
+        // budget to split, so no auto warm-up / cool-down.
+        if durationMinutes == nil, let distanceMeters {
+            steps.append(["type": "interval", "end_condition": "distance", "distance_meters": distanceMeters])
+            notes.append("No steps given — built a single \(Int(distanceMeters)) m interval.")
+            return (steps, notes)
+        }
+
+        var remaining = (durationMinutes ?? 60) * 60
 
         if includeWarmup && remaining >= 600 {
             let secs = Int(min(Double(remaining) * 0.1, 300))

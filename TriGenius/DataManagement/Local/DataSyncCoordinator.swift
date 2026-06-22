@@ -137,39 +137,38 @@ final class DataSyncCoordinator {
         let today = cal.startOfDay(for: Date())
         guard let from = cal.date(byAdding: .day, value: -Self.scheduledLookbackDays, to: today),
               let to = cal.date(byAdding: .day, value: Self.scheduledLookaheadDays, to: today) else { return }
-        let result = await GarminService.shared.getCalendar(
+        let result = await GarminService.shared.getWorkouts(
             startDate: DateFormatter.ymd.string(from: from),
             endDate: DateFormatter.ymd.string(from: to)
         )
-        guard let workouts = Self.parseCalendarWorkouts(result) else { return }
+        guard let scheduled = Self.parseScheduledWorkouts(result) else { return }
         let thresholds = store.latestSnapshot()
-        let planned = workouts.compactMap { Self.scheduledDTO(from: $0, thresholds: thresholds) }
+        let planned = scheduled.compactMap { Self.scheduledDTO(from: $0, thresholds: thresholds) }
         store.replaceScheduled(source: "garmin", from: from, to: to, with: planned)
     }
 
-    /// Extract the `workouts` array from `getCalendar`'s "✓ …\n<json>" output.
-    private static func parseCalendarWorkouts(_ result: String) -> [[String: Any]]? {
+    /// Extract the `scheduled` array from `getWorkouts`'s "✓ …\n<json>" output.
+    private static func parseScheduledWorkouts(_ result: String) -> [[String: Any]]? {
         guard let brace = result.firstIndex(of: "{") else { return nil }
         let json = String(result[brace...])
         guard let data = json.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let workouts = obj["workouts"] as? [[String: Any]] else { return nil }
-        return workouts
+              let scheduled = obj["scheduled"] as? [[String: Any]] else { return nil }
+        return scheduled
     }
 
-    /// Map a planned calendar item to a scheduled-workout DTO. Completed
-    /// activities and non-planned items are dropped (they live in ActivityRecord).
+    /// Map a `getWorkouts` scheduled item to a scheduled-workout DTO. The editable
+    /// content lives under `workout_data` (completed activities are in a separate
+    /// array and never reach here).
     private static func scheduledDTO(from item: [String: Any], thresholds: PerformanceSnapshot) -> IngestedScheduledWorkout? {
-        if item["completed"] as? Bool == true { return nil }
-        let src = item["source"] as? String ?? ""
-        guard src == "scheduled" || src == "garmin_coach" else { return nil }
         guard let dateStr = item["date"] as? String, let date = DateFormatter.ymd.date(from: dateStr) else { return nil }
-        let id = item["id"].map { "garmin:\($0)" } ?? "garmin:\(dateStr)"
-        let sport = item["sport"] as? String ?? "other"
+        let id = item["workout_id"].map { "garmin:\($0)" } ?? "garmin:\(dateStr)"
+        let data = item["workout_data"] as? [String: Any] ?? [:]
+        let sport = data["sport"] as? String ?? "other"
         // Intensity-based planned TSS from the workout's structured steps; nil falls
         // back to the duration heuristic at read time.
         let targetTSS = PlannedTSS.estimate(
-            compactSteps: item["steps"] as? [[String: Any]] ?? [],
+            compactSteps: data["steps"] as? [[String: Any]] ?? [],
             family: SportFamily(sportKey: sport),
             thresholds: thresholds
         )
@@ -178,10 +177,10 @@ final class DataSyncCoordinator {
             source: "garmin",
             date: date,
             sport: sport,
-            name: item["name"] as? String ?? "Scheduled Workout",
-            targetDurationMinutes: (item["duration_minutes"] as? NSNumber)?.doubleValue ?? 0,
+            name: data["name"] as? String ?? "Scheduled Workout",
+            targetDurationMinutes: (data["duration_minutes"] as? NSNumber)?.doubleValue ?? 0,
             targetTSS: targetTSS,
-            notes: item["description"] as? String ?? ""
+            notes: data["description"] as? String ?? ""
         )
     }
 

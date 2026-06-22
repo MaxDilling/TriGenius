@@ -77,7 +77,7 @@ struct CalendarView: View {
             }
         }
         .onAppear { viewModel.load() }
-        .onReceive(NotificationCenter.default.publisher(for: .scheduledWorkoutsDidChange)) { _ in
+        .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
             viewModel.load()
         }
     }

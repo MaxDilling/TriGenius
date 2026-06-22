@@ -16,32 +16,39 @@ nonisolated enum GarminWorkoutBuilder {
     static func buildWorkoutJSON(_ workoutData: [String: Any], sportType: GarminMappings.SportType, sport: String) -> [String: Any] {
         let name = workoutData["name"] as? String ?? "Workout"
         let description = workoutData["description"] as? String ?? ""
-        let durationMinutes = (workoutData["duration_minutes"] as? NSNumber)?.intValue ?? 60
-        let durationSecs = durationMinutes * 60
+        // duration and distance are both optional — a workout may target one, the
+        // other, or carry explicit steps.
+        let durationMinutes = (workoutData["duration_minutes"] as? NSNumber)?.intValue
         let distanceMeters = (workoutData["distance_meters"] as? NSNumber)?.doubleValue
         let steps = workoutData["steps"] as? [[String: Any]] ?? []
 
         var workoutJSON: [String: Any] = [
             "workoutName": name,
             "description": description,
-            "sportType": sportType.dict,
-            "estimatedDurationInSecs": durationSecs
+            "sportType": sportType.dict
         ]
+        if let durationMinutes { workoutJSON["estimatedDurationInSecs"] = durationMinutes * 60 }
+        if let distanceMeters { workoutJSON["estimatedDistanceInMeters"] = distanceMeters }
 
         var poolLengthUnit: [String: Any]?
         if swimSportKeys.contains(sport) {
-            let poolLength = (workoutData["pool_length"] as? NSNumber)?.doubleValue ?? 25
+            let poolLength = (workoutData["pool_length"] as? NSNumber)?.doubleValue ?? 50
             poolLengthUnit = ["unitId": 1, "unitKey": "meter", "factor": 100.0]
             workoutJSON["poolLength"] = poolLength
             workoutJSON["poolLengthUnit"] = poolLengthUnit
-            if let distanceMeters { workoutJSON["estimatedDistanceInMeters"] = distanceMeters }
         }
 
         // Steps arrive already normalized (explicit, with resolved end conditions and
-        // expanded target bands). The fallback only guards against an empty list.
-        let normalizedSteps = steps.isEmpty
-            ? [["type": "interval", "end_condition": "time", "duration_seconds": durationSecs]]
-            : steps
+        // expanded target bands). The fallback only guards against an empty list:
+        // prefer a distance interval when distance is the only target, else time.
+        let normalizedSteps: [[String: Any]]
+        if !steps.isEmpty {
+            normalizedSteps = steps
+        } else if let distanceMeters {
+            normalizedSteps = [["type": "interval", "end_condition": "distance", "distance_meters": distanceMeters]]
+        } else {
+            normalizedSteps = [["type": "interval", "end_condition": "time", "duration_seconds": (durationMinutes ?? 60) * 60]]
+        }
         let workoutSteps = buildStructuredSteps(normalizedSteps, sport: sport)
 
         var segment: [String: Any] = [

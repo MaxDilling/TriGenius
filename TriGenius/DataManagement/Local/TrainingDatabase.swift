@@ -355,6 +355,7 @@ final class TrainingDataStore {
         guard !stale.isEmpty else { return }
         for r in stale { context.delete(r) }
         try? context.save()
+        markChanged()
     }
 
     /// Activities on/after `since` (or all), newest first.
@@ -433,6 +434,7 @@ final class TrainingDataStore {
             }
         }
         try? context.save()
+        markChanged()
     }
 
     /// Planned workouts within `[from, to]` (start-of-day inclusive), ascending.
@@ -456,7 +458,29 @@ final class TrainingDataStore {
         guard let record else { return nil }
         record.date = Calendar.current.startOfDay(for: newDate)
         try? context.save()
-        NotificationCenter.default.post(name: .scheduledWorkoutsDidChange, object: nil)
+        markChanged()
+        return record
+    }
+
+    /// Update a planned workout's content in place (date is left untouched —
+    /// use `moveScheduledWorkout` for that). Only non-nil arguments are applied;
+    /// `targetTSS` is double-optional so `.some(nil)` can explicitly clear it
+    /// while `nil` leaves it unchanged. Returns the updated record.
+    @discardableResult
+    func updateScheduledContent(id: String, sport: String? = nil, name: String? = nil,
+                                targetDurationMinutes: Double? = nil, targetTSS: Double?? = nil,
+                                notes: String? = nil) -> ScheduledWorkoutRecord? {
+        let record = try? context.fetch(
+            FetchDescriptor<ScheduledWorkoutRecord>(predicate: #Predicate { $0.id == id })
+        ).first
+        guard let record else { return nil }
+        if let sport { record.sport = sport }
+        if let name { record.name = name }
+        if let targetDurationMinutes { record.targetDurationMinutes = targetDurationMinutes }
+        if let targetTSS { record.targetTSS = targetTSS }
+        if let notes { record.notes = notes }
+        try? context.save()
+        markChanged()
         return record
     }
 
@@ -471,7 +495,7 @@ final class TrainingDataStore {
         guard let record else { return nil }
         record.startMinute = minute
         try? context.save()
-        NotificationCenter.default.post(name: .scheduledWorkoutsDidChange, object: nil)
+        markChanged()
         return record
     }
 
@@ -482,7 +506,7 @@ final class TrainingDataStore {
         ).first else { return }
         context.delete(record)
         try? context.save()
-        NotificationCenter.default.post(name: .scheduledWorkoutsDidChange, object: nil)
+        markChanged()
     }
 
     /// Replace all `source`-originated planned workouts within `[from, to]` with
@@ -511,6 +535,7 @@ final class TrainingDataStore {
             }
         }
         if !preservedStart.isEmpty { try? context.save() }
+        markChanged()
     }
 
     // MARK: - Performance metrics
@@ -539,6 +564,7 @@ final class TrainingDataStore {
             }
         }
         try? context.save()
+        markChanged()
     }
 
     /// Source preference when two records share the newest day for a metric.

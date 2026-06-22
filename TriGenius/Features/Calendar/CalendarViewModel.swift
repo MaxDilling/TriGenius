@@ -248,7 +248,7 @@ final class CalendarViewModel {
         if dayChanged, dataSource == .garmin, source == "garmin", let garminID {
             let from = DateFormatter.ymd.string(from: fromDay)
             let to = DateFormatter.ymd.string(from: target)
-            Task { _ = await GarminService.shared.moveWorkout(fromDate: from, toDate: to, workoutId: garminID) }
+            Task { _ = await GarminService.shared.moveWorkout(workoutId: garminID, toDate: to, fromDate: from) }
         }
     }
 

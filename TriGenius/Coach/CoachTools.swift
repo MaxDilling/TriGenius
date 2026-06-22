@@ -167,7 +167,7 @@ final class ProfileToolHandler: CoachToolHandler {
             ),
             ToolDefinition(
                 name: "read_knowledge",
-                description: "Read coaching knowledge files on specific topics: cycling, running, swimming, injuries, or workouts. Always call this FIRST when answering sport-specific training questions, and read the 'workouts' topic before building a structured workout with add_workout.",
+                description: "Read coaching knowledge files on specific topics: cycling, running, swimming, injuries, or workouts. Always call this FIRST when answering sport-specific training questions, and read the 'workouts' topic before building structured workouts with add_workouts.",
                 parameters: [
                     "type": "object",
                     "properties": [
@@ -391,14 +391,13 @@ final class ProfileToolHandler: CoachToolHandler {
         return "Profile updated: \(updates.joined(separator: ", "))"
     }
 
-    /// Maps a topic to its knowledge file (in `Assets/Knowledge/`) and the
-    /// embedded fallback used when the bundled file can't be loaded.
-    private static let knowledgeFiles: [String: (resource: String, ext: String, fallback: String)] = [
-        "cycling":  ("CYCLING",  "md", CoachKnowledge.cycling),
-        "running":  ("RUNNING",  "md", CoachKnowledge.running),
-        "swimming": ("SWIMMING", "md", CoachKnowledge.swimming),
-        "injuries": ("INJURIES", "MD", CoachKnowledge.injuries),
-        "workouts": ("WORKOUTS", "md", CoachKnowledge.workouts)
+    /// Maps a topic to its knowledge file (in `Assets/Knowledge/`).
+    private static let knowledgeFiles: [String: (resource: String, ext: String)] = [
+        "cycling":  ("CYCLING",  "md"),
+        "running":  ("RUNNING",  "md"),
+        "swimming": ("SWIMMING", "md"),
+        "injuries": ("INJURIES", "MD"),
+        "workouts": ("WORKOUTS", "md")
     ]
 
     private func knowledgeSummary(for topic: String) -> String {
@@ -409,13 +408,11 @@ final class ProfileToolHandler: CoachToolHandler {
 
         // Synchronized groups copy the .md files into the bundle's resource
         // root (flattened), so look them up by name without a subdirectory.
-        if let url = Bundle.main.url(forResource: entry.resource, withExtension: entry.ext),
-           let contents = try? String(contentsOf: url, encoding: .utf8) {
-            return contents
+        guard let url = Bundle.main.url(forResource: entry.resource, withExtension: entry.ext),
+              let contents = try? String(contentsOf: url, encoding: .utf8) else {
+            return "Knowledge file \(entry.resource).\(entry.ext) is not bundled."
         }
-
-        // Fall back to the embedded constant if the file is missing.
-        return entry.fallback
+        return contents
     }
 }
 
@@ -598,6 +595,51 @@ final class GarminToolHandler: CoachToolHandler {
         self.memory = memory
     }
 
+    /// The `workout_data` object properties, shared by `add_workout` and
+    /// `modify_workout` (they differ only in which fields are required).
+    private static let workoutDataProperties: [String: Any] = [
+        "name": ["type": "string", "description": "Workout name."],
+        "sport": ["type": "string", "enum": ["running", "cycling", "swimming", "strength", "yoga", "cardio", "other"], "description": "Workout sport."],
+        "duration_minutes": ["type": "integer", "description": "Total duration in minutes. Provide this and/or distance_meters (or explicit steps) — a workout can be time-based, distance-based, or both."],
+        "distance_meters": ["type": "number", "description": "Total distance in meters. Use for a distance goal (e.g. a 10 km run) instead of, or alongside, duration_minutes."],
+        "pool_length": ["type": "integer", "description": "Pool length in meters for swim workouts (default 50)."],
+        "description": ["type": "string", "description": "Workout description."],
+        "include_warmup": ["type": "boolean", "description": "Include a warm-up block when no explicit steps are given (default true)."],
+        "include_cooldown": ["type": "boolean", "description": "Include a cool-down block when no explicit steps are given (default true)."],
+        "steps": [
+            "type": "array",
+            "description": "Optional structured workout steps.",
+            "items": [
+                "type": "object",
+                "properties": [
+                    "type": ["type": "string", "enum": ["warmup", "interval", "main", "recovery", "rest", "cooldown", "repeat"], "description": "Step type."],
+                    "duration_seconds": ["type": "integer", "description": "Step duration in seconds."],
+                    "distance_meters": ["type": "number", "description": "Step distance in meters."],
+                    "end_condition": ["type": "string", "enum": ["time", "distance", "lap_button", "fixed_rest"], "description": "How the step ends."],
+                    "stroke": ["type": "string", "enum": ["free", "breaststroke", "backstroke", "butterfly", "any_stroke", "drill", "im"], "description": "Swim stroke for swimming steps."],
+                    "repeat_count": ["type": "integer", "description": "Iterations for repeat blocks (default 4)."],
+                    "repeat_steps": [
+                        "type": "array",
+                        "description": "Child steps inside a repeat block.",
+                        "items": [
+                            "type": "object",
+                            "properties": [
+                                "type": ["type": "string", "description": "Child step type."],
+                                "distance_meters": ["type": "number", "description": "Child step distance in meters."],
+                                "duration_seconds": ["type": "integer", "description": "Child step duration in seconds."],
+                                "stroke": ["type": "string", "description": "Child step swim stroke."]
+                            ]
+                        ]
+                    ],
+                    "skip_last_rest": ["type": "boolean", "description": "Skip the last rest in a repeat block."],
+                    "target_type": ["type": "string", "enum": ["no_target", "heart_rate", "power", "pace", "cadence"], "description": "Intensity target type. Units: pace = seconds per km, heart_rate = bpm, power = watts, cadence = rpm."],
+                    "target_low": ["type": "number", "description": "Target value. Pass a single value here (and/or in target_high) and the app expands it into a sensible band automatically — e.g. pace 300 (5:00/km) → 4:40–5:10."],
+                    "target_high": ["type": "number", "description": "Optional explicit upper bound. Provide a distinct target_low/target_high pair only to override the automatic band."]
+                ]
+            ]
+        ]
+    ]
+
     var definitions: [ToolDefinition] {
         [
             ToolDefinition(
@@ -637,8 +679,8 @@ final class GarminToolHandler: CoachToolHandler {
                 ]
             ),
             ToolDefinition(
-                name: "get_calendar",
-                description: "Fetch Garmin calendar workouts and completed activities for a date range.",
+                name: "get_workouts",
+                description: "List the athlete's workouts for a date range. Returns `scheduled` (planned, editable workouts — each carries a `workout_id` and a `workout_data` object you can pass straight to modify_workout) and `completed` (finished activities). This is the source for the `workout_id` that modify_workout, move_workout, and delete_workout need. (For the athlete's real-world busy/free time, use read_calendar_availability instead.)",
                 parameters: [
                     "type": "object",
                     "properties": [
@@ -653,79 +695,65 @@ final class GarminToolHandler: CoachToolHandler {
                 description: "Delete a scheduled Garmin workout by ID.",
                 parameters: [
                     "type": "object",
-                    "properties": ["workout_id": ["type": "string", "description": "Workout ID from get_calendar."]],
+                    "properties": ["workout_id": ["type": "string", "description": "Workout ID from get_workouts."]],
                     "required": ["workout_id"]
                 ]
             ),
             ToolDefinition(
-                name: "add_workout",
-                description: "Create and schedule a structured workout (running, cycling, swimming, or strength). Call read_knowledge('workouts') first for the schema, target units, and conventions. The app fills sensible defaults and widens single-value intensity targets into bands automatically — pass one value per target, don't fake zero-width ranges.",
+                name: "add_workouts",
+                description: "Create and schedule one or more structured workouts in a single call — one session is a one-element list, a whole week is several. Call read_knowledge('workouts') first for the schema, target units, and conventions. The app fills sensible defaults and widens single-value intensity targets into bands automatically — pass one value per target, don't fake zero-width ranges. Items are scheduled independently; the result reports each one.",
                 parameters: [
                     "type": "object",
                     "properties": [
-                        "workout_data": [
-                            "type": "object",
-                            "description": "Workout definition object.",
-                            "properties": [
-                                "name": ["type": "string", "description": "Workout name."],
-                                "sport": ["type": "string", "enum": ["running", "cycling", "swimming", "strength", "yoga", "cardio", "other"], "description": "Workout sport."],
-                                "duration_minutes": ["type": "integer", "description": "Total duration in minutes."],
-                                "distance_meters": ["type": "number", "description": "Optional total distance in meters."],
-                                "pool_length": ["type": "integer", "description": "Pool length in meters for swim workouts (default 25)."],
-                                "description": ["type": "string", "description": "Workout description."],
-                                "include_warmup": ["type": "boolean", "description": "Include a warm-up block when no explicit steps are given (default true)."],
-                                "include_cooldown": ["type": "boolean", "description": "Include a cool-down block when no explicit steps are given (default true)."],
-                                "steps": [
-                                    "type": "array",
-                                    "description": "Optional structured workout steps.",
-                                    "items": [
+                        "workouts": [
+                            "type": "array",
+                            "description": "Workouts to create. Each item is one session.",
+                            "items": [
+                                "type": "object",
+                                "properties": [
+                                    "workout_data": [
                                         "type": "object",
-                                        "properties": [
-                                            "type": ["type": "string", "enum": ["warmup", "interval", "main", "recovery", "rest", "cooldown", "repeat"], "description": "Step type."],
-                                            "duration_seconds": ["type": "integer", "description": "Step duration in seconds."],
-                                            "distance_meters": ["type": "number", "description": "Step distance in meters."],
-                                            "end_condition": ["type": "string", "enum": ["time", "distance", "lap_button", "fixed_rest"], "description": "How the step ends."],
-                                            "stroke": ["type": "string", "enum": ["free", "breaststroke", "backstroke", "butterfly", "any_stroke", "drill", "im"], "description": "Swim stroke for swimming steps."],
-                                            "repeat_count": ["type": "integer", "description": "Iterations for repeat blocks (default 4)."],
-                                            "repeat_steps": [
-                                                "type": "array",
-                                                "description": "Child steps inside a repeat block.",
-                                                "items": [
-                                                    "type": "object",
-                                                    "properties": [
-                                                        "type": ["type": "string", "description": "Child step type."],
-                                                        "distance_meters": ["type": "number", "description": "Child step distance in meters."],
-                                                        "duration_seconds": ["type": "integer", "description": "Child step duration in seconds."],
-                                                        "stroke": ["type": "string", "description": "Child step swim stroke."]
-                                                    ]
-                                                ]
-                                            ],
-                                            "skip_last_rest": ["type": "boolean", "description": "Skip the last rest in a repeat block."],
-                                            "target_type": ["type": "string", "enum": ["no_target", "heart_rate", "power", "pace", "cadence"], "description": "Intensity target type. Units: pace = seconds per km, heart_rate = bpm, power = watts, cadence = rpm."],
-                                            "target_low": ["type": "number", "description": "Target value. Pass a single value here (and/or in target_high) and the app expands it into a sensible band automatically — e.g. pace 300 (5:00/km) → 4:40–5:10."],
-                                            "target_high": ["type": "number", "description": "Optional explicit upper bound. Provide a distinct target_low/target_high pair only to override the automatic band."]
-                                        ]
-                                    ]
-                                ]
-                            ],
-                            "required": ["name", "sport", "duration_minutes"]
-                        ],
-                        "date": ["type": "string", "description": "Target date in YYYY-MM-DD format."]
+                                        "description": "Workout definition object. Give duration_minutes and/or distance_meters (or explicit steps).",
+                                        "properties": Self.workoutDataProperties,
+                                        "required": ["name", "sport"]
+                                    ],
+                                    "date": ["type": "string", "description": "Target date in YYYY-MM-DD format."]
+                                ],
+                                "required": ["workout_data", "date"]
+                            ]
+                        ]
                     ],
-                    "required": ["workout_data", "date"]
+                    "required": ["workouts"]
                 ]
             ),
             ToolDefinition(
                 name: "move_workout",
-                description: "Move a scheduled Garmin workout from one date to another.",
+                description: "Reschedule a workout to a new date by its ID (from get_workouts). The content is unchanged — use modify_workout to edit content.",
                 parameters: [
                     "type": "object",
                     "properties": [
-                        "from_date": ["type": "string", "description": "Current workout date in YYYY-MM-DD format."],
-                        "to_date": ["type": "string", "description": "Target workout date in YYYY-MM-DD format."],
-                        "workout_id": ["type": "string", "description": "Optional specific workout ID."]
+                        "workout_id": ["type": "string", "description": "Workout ID from get_workouts."],
+                        "to_date": ["type": "string", "description": "Target date in YYYY-MM-DD format."],
+                        "from_date": ["type": "string", "description": "Optional current date (from get_workouts) — speeds up the lookup."]
                     ],
-                    "required": ["from_date", "to_date"]
+                    "required": ["workout_id", "to_date"]
+                ]
+            ),
+            ToolDefinition(
+                name: "modify_workout",
+                description: "Edit an existing scheduled workout's content in place (name, description, steps, targets, duration). Get the workout_id and its current workout_data from get_workouts first. Provide `steps` in workout_data to replace the structure (targets get banded just like add_workouts); provide only top-level fields (e.g. name/description) to tweak without resending steps. Date changes use move_workout, not this.",
+                parameters: [
+                    "type": "object",
+                    "properties": [
+                        "workout_id": ["type": "string", "description": "Workout ID from get_workouts."],
+                        "workout_data": [
+                            "type": "object",
+                            "description": "Fields to change. All optional: include `steps` to replace the structure, or just the top-level fields you want to edit.",
+                            "properties": Self.workoutDataProperties,
+                            "required": []
+                        ]
+                    ],
+                    "required": ["workout_id", "workout_data"]
                 ]
             ),
             ToolDefinition(
@@ -764,8 +792,8 @@ final class GarminToolHandler: CoachToolHandler {
                 sport: arguments["sport"] as? String ?? "cycling",
                 durationsSeconds: durations
             )
-        case "get_calendar":
-            return await service.getCalendar(
+        case "get_workouts":
+            return await service.getWorkouts(
                 startDate: arguments["start_date"] as? String ?? "",
                 endDate: arguments["end_date"] as? String ?? ""
             )
@@ -776,24 +804,36 @@ final class GarminToolHandler: CoachToolHandler {
                 TrainingDataStore.shared.deleteScheduledWorkout(id: "garmin:\(workoutId)")
             }
             return result
-        case "add_workout":
-            guard let rawWorkout = arguments["workout_data"] as? [String: Any] else {
-                return "✗ Error: workout_data is missing or invalid."
+        case "add_workouts":
+            guard let items = arguments["workouts"] as? [[String: Any]], !items.isEmpty else {
+                return "✗ Error: workouts is missing or empty."
             }
-            // Fill defaults, synthesize structure, and widen single-value targets in a
-            // source-agnostic layer; the notes are surfaced back to the model.
-            let (workoutData, notes) = WorkoutNormalizer.normalize(rawWorkout)
-            let result = await service.addWorkout(workoutData: workoutData, date: arguments["date"] as? String ?? "")
-            ingestAddedWorkout(result, workoutData: workoutData)
-            return appendDefaultsNotes(to: result, notes: notes)
+            return await addWorkoutsBatch(items)
         case "move_workout":
+            guard let workoutId = stringArg(arguments["workout_id"]), !workoutId.isEmpty else {
+                return "✗ Error: workout_id is required."
+            }
             let result = await service.moveWorkout(
-                fromDate: arguments["from_date"] as? String ?? "",
+                workoutId: workoutId,
                 toDate: arguments["to_date"] as? String ?? "",
-                workoutId: stringArg(arguments["workout_id"])
+                fromDate: arguments["from_date"] as? String
             )
             applyMovedWorkout(result)
             return result
+        case "modify_workout":
+            guard let workoutId = stringArg(arguments["workout_id"]), !workoutId.isEmpty,
+                  let rawWorkout = arguments["workout_data"] as? [String: Any] else {
+                return "✗ Error: workout_id and workout_data are required."
+            }
+            // Normalize only when the structure is being replaced — a top-level-only
+            // edit (e.g. description) keeps the existing steps untouched.
+            let editsSteps = rawWorkout["steps"] != nil
+            let (workoutData, notes) = editsSteps
+                ? WorkoutNormalizer.normalize(rawWorkout)
+                : (rawWorkout, [])
+            let result = await service.modifyWorkout(workoutId: workoutId, workoutData: workoutData)
+            ingestModifiedWorkout(result, workoutData: workoutData, editsSteps: editsSteps)
+            return appendDefaultsNotes(to: result, notes: notes)
         case "sync_user_settings":
             let (text, settings) = await service.syncUserSettings()
             if let settings { applySettingsToMemory(settings) }
@@ -816,6 +856,38 @@ final class GarminToolHandler: CoachToolHandler {
         if let s = value as? String { return s }
         if let n = value as? NSNumber { return "\(n)" }
         return nil
+    }
+
+    // MARK: - add_workouts batch
+
+    /// Schedule a batch of workouts independently, tolerating per-item failures,
+    /// and return one aggregate summary the model can relay. Each item reuses the
+    /// same normalize → addWorkout → mirror path as a single add.
+    private func addWorkoutsBatch(_ items: [[String: Any]]) async -> String {
+        var lines: [String] = []
+        var ok = 0
+        for (i, item) in items.enumerated() {
+            let date = item["date"] as? String ?? ""
+            guard let raw = item["workout_data"] as? [String: Any] else {
+                lines.append("- \(date.isEmpty ? "item \(i + 1)" : date) — ✗ missing workout_data")
+                continue
+            }
+            let (workoutData, notes) = WorkoutNormalizer.normalize(raw)
+            let name = workoutData["name"] as? String ?? "Workout"
+            let result = await service.addWorkout(workoutData: workoutData, date: date)
+            if result.hasPrefix("✓") {
+                ok += 1
+                ingestAddedWorkout(result, workoutData: workoutData)
+                let suffix = notes.isEmpty ? "" : " (\(notes.joined(separator: "; ")))"
+                lines.append("- \(date) \(name) — ok\(suffix)")
+            } else {
+                let reason = result.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? result
+                lines.append("- \(date) \(name) — ✗ \(reason)")
+            }
+        }
+        let mark = ok == items.count ? "✓ " : ""
+        let header = "\(mark)Scheduled \(ok)/\(items.count) workouts."
+        return ([header] + lines).joined(separator: "\n")
     }
 
     // MARK: - Local scheduled-workout mirror
@@ -868,6 +940,32 @@ final class GarminToolHandler: CoachToolHandler {
         ])
     }
 
+    /// Reflect a Garmin in-place edit locally (content only — the date is preserved).
+    private func ingestModifiedWorkout(_ result: String, workoutData: [String: Any], editsSteps: Bool) {
+        guard let data = resultData(result),
+              let workoutId = data["workout_id"], !(workoutId is NSNull) else { return }
+        // Recompute planned TSS only when the structure changed; `.none` leaves the
+        // stored value untouched, while a fresh estimate (possibly nil) replaces it.
+        let targetTSS: Double??
+        if editsSteps {
+            targetTSS = PlannedTSS.estimate(
+                compactSteps: workoutData["steps"] as? [[String: Any]] ?? [],
+                family: SportFamily(sportKey: data["sport"] as? String ?? "other"),
+                thresholds: TrainingDataStore.shared.latestSnapshot()
+            )
+        } else {
+            targetTSS = nil
+        }
+        TrainingDataStore.shared.updateScheduledContent(
+            id: "garmin:\(workoutId)",
+            sport: data["sport"] as? String,
+            name: data["name"] as? String,
+            targetDurationMinutes: (workoutData["duration_minutes"] as? NSNumber)?.doubleValue,
+            targetTSS: targetTSS,
+            notes: workoutData["description"] as? String
+        )
+    }
+
     /// Reflect a Garmin move locally by shifting the record to its new date.
     private func applyMovedWorkout(_ result: String) {
         guard let data = resultData(result),
@@ -886,189 +984,4 @@ final class GarminToolHandler: CoachToolHandler {
             DataSyncCoordinator.metrics(fromGarminSettings: settings, date: Date())
         )
     }
-}
-
-// MARK: - Embedded Knowledge Base
-
-private enum CoachKnowledge {
-    static let cycling = """
-    === CYCLING COACHING KNOWLEDGE ===
-
-    TRAINING ZONES (Power-based, % of FTP):
-    Z1 Recovery: <55% FTP
-    Z2 Endurance: 56–75% FTP  ← Core of base training
-    Z3 Tempo: 76–90% FTP
-    Z4 Threshold: 91–105% FTP
-    Z5 VO2max: 106–120% FTP
-    Z6 Anaerobic: >120% FTP
-
-    BASE TRAINING PRINCIPLES:
-    - 80% of volume in Z1-Z2 (aerobic base)
-    - FTP gains come primarily from sustained Z2 + Z4 blocks
-    - Polarized: ~80% easy, ~20% hard — well-evidenced for trained athletes
-    - Pyramidal: ~75% easy, ~15% moderate, ~10% hard — valid alternative
-
-    STAGNATION CHECKLIST (in order):
-    1. Consistency: gaps >1 week in past 3 months?
-    2. Volume: total weekly TSS, not just intensity
-    3. Frequency: 3+ rides/week needed for meaningful adaptation
-    4. Specificity: are you training the demands of your goal event?
-    5. Recovery: sleep, nutrition, non-training stress
-    6. Intensity distribution: only after 1–5 are adequate
-
-    COMMON MISTAKES:
-    - Everything in "no man's land" (Z3) — neither easy enough for recovery nor hard enough for adaptation
-    - FTP testing too frequently (every 4–6 weeks is sufficient)
-    - Neglecting long Z2 rides (2+ hours) for aerobic adaptation
-    - Indoor vs outdoor calibration: power meters may read differently; recalibrate if switching
-
-    DEVICE DATA CAVEATS:
-    - FTP estimates from devices: treat as ±5–10% approximation
-    - Power meters need regular calibration (temperature affects readings)
-    - HR lags 30–90s behind power during intervals — use power + RPE for pacing
-    """
-
-    static let running = """
-    === RUNNING COACHING KNOWLEDGE ===
-
-    TRAINING ZONES (HR or pace-based):
-    Z1 Easy: conversational pace, <70% HRmax
-    Z2 Aerobic: 70–80% HRmax, can speak in short sentences
-    Z3 Tempo: 80–87% HRmax, controlled discomfort
-    Z4 Threshold: 87–93% HRmax
-    Z5 VO2max: >93% HRmax, 3–8 min intervals
-
-    VOLUME PROGRESSION:
-    - 10% rule (max weekly increase): evidence is weak, but cautious progression is sound
-    - Practical guideline: increase every 3 weeks, recover on week 4
-    - New runners: build base for 8–12 weeks before adding intensity
-    - Base mileage matters more than workout complexity
-
-    INJURY PREVENTION:
-    - Shin splints: reduce volume, check shoes, surface variety
-    - Knee pain: check cadence (aim 170–180 spm), hip strength
-    - Achilles/calf: eccentric heel drops; never ignore persistent pain
-    - Most running injuries: too much, too soon, too fast
-
-    RACE PREP:
-    - 5K/10K: VO2max intervals (3–5 min @ Z5) + threshold
-    - Half marathon: threshold + long run
-    - Marathon: 80% Z1-Z2, long runs 90–180 min, periodic tempo
-    - Triathlon run: practice brick sessions (bike → run)
-
-    COMMON MISTAKES:
-    - Running every day without rest → accumulation injury
-    - All runs at the same moderate effort
-    - Ignoring cadence and form under fatigue
-    - Tapering too aggressively (2 weeks for half, 3 weeks for marathon)
-    """
-
-    static let swimming = """
-    === SWIMMING COACHING KNOWLEDGE ===
-
-    KEY METRICS:
-    - CSS (Critical Swim Speed): lactate threshold pace, key for aerobic training
-    - T-pace: CSS equivalent, basis for interval pacing
-    - Stroke efficiency: distance per stroke (DPS) + stroke rate
-
-    TECHNIQUE PRIORITY (beginners):
-    - Body position / balance first — most efficiency gains come from this
-    - Bilateral breathing (every 3 strokes) for symmetrical development
-    - High elbow catch — avoid crossing over the centerline
-    - Don't kick hard for propulsion; kick for balance and body position
-
-    DRILLS:
-    - Catch-up drill: timing and reach
-    - Fingertip drag: high elbow recovery
-    - Kick on side: balance and rotation
-    - Pull buoy: isolate upper body, feel body position
-
-    TRAINING STRUCTURE:
-    - Warm-up: 10–15% of total volume
-    - CSS intervals: 200–400m reps at T-pace, 15–30s rest
-    - Aerobic: longer sets (400–1500m) at comfortable pace
-    - Cool-down: easy 100–200m
-
-    FOR TRIATHLETES:
-    - Open water ≠ pool: practice sighting every 6–8 strokes
-    - Wetsuit changes buoyancy — adjust body position expectations
-    - Don't sprint start; build into race pace over first 100–200m
-    - Focus on consistency, not speed in early training phases
-    """
-
-    static let injuries = """
-    === INJURY MANAGEMENT & RED FLAGS ===
-
-    IMMEDIATE REFERRAL (do not coach around these — refer to sports medicine):
-    - Cardiac symptoms during exercise (chest pain, palpitations, unusual shortness of breath)
-    - Sudden, severe joint pain (possible fracture/dislocation)
-    - Stress fracture suspicion: localized bone pain, worse with activity
-    - REDs signs: weight loss + performance drop + fatigue + mood changes
-    - Persistent saddle/perineal symptoms (cyclists)
-    - Any pain that progressively worsens over days despite rest
-
-    RELATIVE ENERGY DEFICIENCY IN SPORT (REDs):
-    - Both men and women at risk (IOC 2023)
-    - Signs: fatigue, recurrent illness, stress fractures, mood changes, performance plateau
-    - Action: refer to sports physician + sports dietitian
-
-    IRON DEFICIENCY:
-    - High prevalence in endurance athletes, especially women
-    - Ferritin <30 µg/L often impairs performance even without anemia
-    - Cannot diagnose via training data — requires blood test
-
-    OVERTRAINING SYNDROME vs OVERREACHING:
-    - Overreaching: 1–2 weeks recovery needed; expected adaptation dip
-    - Overtraining: months of impaired performance; requires medical evaluation
-    - Signs: declining performance despite training, mood disturbance, elevated resting HR, poor sleep
-    - Treatment: rest, nutrition, professional support
-
-    TRAINING WITH MINOR ISSUES:
-    - General rule: if pain changes gait/form, don't train through it
-    - DOMS (delayed onset muscle soreness): train gently through it
-    - Minor tendon irritation: reduce load, avoid hills/intervals, address biomechanics
-    - Never increase load while injured — maintain or reduce
-    """
-
-    static let workouts = """
-    === BUILDING STRUCTURED WORKOUTS (add_workout) ===
-
-    REQUIRED: workout_data.name, workout_data.sport, workout_data.duration_minutes, date (YYYY-MM-DD).
-
-    STEPS (optional): if you omit `steps`, the app builds warm-up / main / cool-down from the
-    duration. For real sessions, provide explicit `steps`. Each step has:
-    - type: warmup | interval | main | recovery | rest | cooldown | repeat
-    - end_condition: time | distance | lap_button | fixed_rest (inferred if omitted: distance when
-      distance_meters is set, else time)
-    - duration_seconds OR distance_meters
-    - target_type + target_low (see TARGETS)
-    Use a `repeat` step with repeat_count and repeat_steps[] for interval sets.
-
-    TARGET UNITS (critical — get these right):
-    - pace  → seconds per km (5:00/km = 300; 4:00/km = 240). Swimming pace is per 100 m.
-    - heart_rate → bpm
-    - power → watts
-    - cadence → rpm
-
-    RANGES — pass ONE value, not a zero-width range:
-    - Put a single value in target_low. The app expands it into a sensible band automatically:
-      pace −20/+10 s/km, HR ±3 bpm, power ±5%, cadence ±3 rpm.
-      e.g. pace 300 → 4:40–5:10/km. Only pass a distinct target_low/target_high to override.
-
-    DEFAULTS the app fills (and reports back): include_warmup/cooldown = true, repeat_count = 4,
-    pool_length = 25 m, skip_last_rest = true. The tool result lists every default and band it
-    applied — relay the actual targets to the athlete.
-
-    EXAMPLES (steps shown conceptually):
-    - Run intervals 5×1000 m @ 5:00/km, 90 s jog recovery:
-      repeat ×5 of [interval distance_meters 1000, target_type pace, target_low 300]
-      + [recovery duration_seconds 90].
-    - Bike sweet-spot 3×12 min @ 230 W:
-      repeat ×3 of [interval duration_seconds 720, target_type power, target_low 230]
-      + [recovery duration_seconds 300].
-    - Swim CSS 8×100 m @ 1:40/100m, 15 s rest (pool_length 25):
-      repeat ×8 of [interval distance_meters 100, target_type pace, target_low 100]
-      + [rest duration_seconds 15, end_condition fixed_rest].
-    - Strength: duration_minutes only, no targets (Garmin tracks it as a timed session).
-    """
 }

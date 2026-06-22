@@ -199,6 +199,14 @@ actor GarminClient {
         _ = try await connectapi("/workout-service/workout/\(workoutId)", method: "DELETE")
     }
 
+    /// Update an existing workout template in place. Garmin expects the full
+    /// workout DTO in the body, including the identity fields (`workoutId`,
+    /// `ownerId`). The scheduled calendar occurrence keeps its id and date and
+    /// automatically reflects the new content, so no reschedule is needed.
+    func updateWorkout(workoutId: String, json: [String: Any]) async throws -> [String: Any]? {
+        try await connectapi("/workout-service/workout/\(workoutId)", method: "PUT", jsonBody: json) as? [String: Any]
+    }
+
     func getWorkoutDetails(workoutId: String) async throws -> [String: Any]? {
         try await connectapi("/workout-service/workout/\(workoutId)") as? [String: Any]
     }

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-TriGenius is a SwiftUI multiplatform app (iOS / iPadOS / macOS) — an evidence-based AI triathlon coach. It's a native Swift port of `TriGenius_python`; many files are 1:1 ports and call that out in their header comments. JSON keys and tool schemas use **snake_case** to stay compatible with the Python memory/data format.
+TriGenius is a SwiftUI multiplatform app (iOS / iPadOS / macOS) — an evidence-based AI triathlon coach. JSON keys and tool schemas use **snake_case** throughout the memory/data format.
 
 UI strings are **English**; code comments, the system prompt, and tool descriptions are also **English**; coach replies go back to the user in their language (the system prompt instructs the model to "respond in the athlete's language").
 
@@ -45,16 +45,17 @@ The app has two pluggable axes that meet in `CoachBrain`: **LLM backend** (who a
 
 ### Tools (`Coach/CoachTools.swift`) — `CoachToolHandler` + `CoachToolRegistry`
 - All handlers are `@MainActor`. The registry maps tool name → handler.
-- **The data-source abstraction lives here**: `HealthKitToolHandler` and `GarminToolHandler` both register `get_health_metrics` / `get_activities` under the same names, so only one is active at a time and the coach is source-agnostic. Garmin additionally exposes workout scheduling (`add_workout`, `move_workout`, `delete_workout`, `get_calendar`), `get_power_curve`, `get_training_status`, and `sync_user_settings`.
-- `ProfileToolHandler` is always registered (profile read/write + `read_knowledge`). The coaching knowledge base is **embedded** as Swift string constants (`CoachKnowledge`) in this file.
+- **The data-source abstraction lives here**: `HealthKitToolHandler` and `GarminToolHandler` both register `get_health_metrics` / `get_activities` under the same names, so only one is active at a time and the coach is source-agnostic. Garmin additionally exposes workout management (`get_workouts`, `add_workouts`, `modify_workout`, `move_workout`, `delete_workout`), `get_power_curve`, `get_training_status`, and `sync_user_settings`.
+- `ProfileToolHandler` is always registered (profile read/write + `read_knowledge`). The coaching knowledge base lives in Markdown files under `TriGenius/Assets/Knowledge/` (`CYCLING.md`, `RUNNING.md`, `SWIMMING.md`, `INJURIES.MD`, `WORKOUTS.md`), loaded from the app bundle at runtime via the `knowledgeFiles` map.
 - Tool parameters are dictionaries literally shaped like JSON Schema — that same dict feeds Gemini's API directly and `CoachToolBridge` for Apple FM.
 
 ### Data sources (`DataManagement/`)
 - **HealthKit** (`HealthKit/HealthKitService.swift`): read-only Apple Health.
-- **Garmin** (`DataManagement/Garmin/`): native port of the Python Garmin stack, layered — `GarminAuth` (SSO/MFA → OAuth token), `GarminClient` (low-level connectapi), `GarminService` (high-level orchestration, returns ToolResult-style JSON strings), `GarminTransformations` (pure response-shaping), `GarminWorkoutBuilder` (builds workout payloads), `GarminMappings` (lookup tables). Garmin can both read and write (schedule workouts, sync settings back into memory).
+- **Garmin** (`DataManagement/Garmin/`): layered — `GarminAuth` (SSO/MFA → OAuth token), `GarminClient` (low-level connectapi), `GarminService` (high-level orchestration, returns ToolResult-style JSON strings), `GarminTransformations` (pure response-shaping), `GarminWorkoutBuilder` (builds workout payloads), `GarminMappings` (lookup tables). Garmin can both read and write (schedule workouts, sync settings back into memory).
+  - **Reference only — `ref/garmin_health_data/`**: a vendored Python Garmin Connect client (not part of the build) kept as a worked example of the Garmin Connect API. Useful for understanding endpoint URLs, request/response shapes, the OAuth/DI token exchange, and the five-strategy login fallback when extending the Swift Garmin layer. Start with `garmin_client/api.py` (endpoint → method mapping), `garmin_client/constants.py` (URL templates), and `garmin_client/client.py` (auth + token refresh). Do not import or ship it — port behavior into the Swift `Garmin/` layer.
 
 ### Memory (`Coach/CoachMemory.swift`)
-- `ObservableObject` persisting athlete profile, preferences, weekly structure, training plan, sport progress, and feedback as a JSON file (`coach_memory.json`) in Application Support. Mirrors the Python `coach_memory.json` structure — keys are snake_case and each model has `init(from: [String: Any])` / `toDict()`.
+- `ObservableObject` persisting athlete profile, preferences, weekly structure, training plan, sport progress, and feedback as a JSON file (`coach_memory.json`) in Application Support. Keys are snake_case and each model has `init(from: [String: Any])` / `toDict()`.
 - `contextSummary` is what gets injected into the system prompt; when it contains "FEHLENDE INFORMATIONEN", the prompt drives an onboarding flow.
 
 ### App entry & settings

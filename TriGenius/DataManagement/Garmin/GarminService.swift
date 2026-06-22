@@ -368,95 +368,107 @@ actor GarminService {
         }
     }
 
-    // MARK: - get_calendar
+    // MARK: - get_workouts
 
-    func getCalendar(startDate: String, endDate: String) async -> String {
+    func getWorkouts(startDate: String, endDate: String) async -> String {
         let start = GarminTransform.formatDate(startDate)
         let end = GarminTransform.formatDate(endDate)
-        do {
-            var workouts: [[String: Any]] = []
-            var seen = Set<String>()
 
-            // Calendar items (scheduled workouts, activities, garmin coach)
-            let parts = start.split(separator: "-")
-            if parts.count >= 2, let year = Int(parts[0]), let month = Int(parts[1]) {
-                if let calData = try? await client.connectapi("/calendar-service/year/\(year)/month/\(month - 1)") as? [String: Any],
-                   let items = calData["calendarItems"] as? [[String: Any]] {
-                    for item in items {
-                        let itemDate = item["date"] as? String ?? ""
-                        guard !itemDate.isEmpty, itemDate >= start, itemDate <= end else { continue }
-                        let itemType = item["itemType"] as? String
-                        if itemType == "workout", let workoutId = item["workoutId"] {
-                            let id = "\(workoutId)"
-                            if seen.contains(id) { continue }
-                            seen.insert(id)
-                            var durationMinutes: Any = NSNull()
-                            var steps: [[String: Any]] = []
-                            let sportKey = item["sportTypeKey"] as? String ?? "other"
-                            if let details = try? await client.getWorkoutDetails(workoutId: id) {
-                                if let est = num(details["estimatedDurationInSecs"]) {
-                                    durationMinutes = Int((est / 60).rounded())
-                                }
-                                steps = compactSteps(fromDetails: details, sport: sportKey)
-                            }
-                            workouts.append([
-                                "id": id, "name": item["title"] as? String ?? "Scheduled Workout",
-                                "date": itemDate, "sport": sportKey,
-                                "duration_minutes": durationMinutes, "description": "",
-                                "steps": steps,
-                                "completed": false, "source": "scheduled"
-                            ])
-                        } else if itemType == "activity" {
-                            let id = item["id"].map { "\($0)" } ?? ""
-                            if id.isEmpty || seen.contains(id) { continue }
-                            seen.insert(id)
-                            let elapsed = num(item["elapsedDuration"])
-                            let durMs = num(item["duration"])
-                            let durationMinutes: Any = elapsed.map { Int(($0 / 60).rounded()) }
-                                ?? durMs.map { Int(($0 / 60000).rounded()) } ?? NSNull()
-                            let sport = item["sportTypeKey"] as? String ?? activityTypeToSport((item["activityTypeId"] as? NSNumber)?.intValue) ?? "other"
-                            workouts.append([
-                                "id": id, "name": item["title"] as? String ?? "Activity",
-                                "date": itemDate, "sport": sport, "duration_minutes": durationMinutes,
-                                "description": "", "completed": true, "source": "activity"
-                            ])
-                        } else if itemType == "fbtAdaptiveWorkout" {
-                            let uuid = item["workoutUuid"] as? String ?? ""
-                            if uuid.isEmpty || seen.contains(uuid) { continue }
-                            seen.insert(uuid)
-                            workouts.append([
-                                "id": uuid, "name": "[GC] \(item["title"] as? String ?? "Training Plan Workout")",
-                                "date": itemDate, "sport": item["sportTypeKey"] as? String ?? "other",
-                                "duration_minutes": NSNull(), "description": "",
-                                "completed": false, "source": "garmin_coach"
-                            ])
+        // `scheduled` holds editable planned workouts (round-trippable into
+        // modify_workout); `completed` holds finished activities. Kept separate so
+        // the model never has to filter a mixed list.
+        var scheduled: [[String: Any]] = []
+        var completed: [[String: Any]] = []
+        var seen = Set<String>()
+
+        // Calendar items (scheduled workouts, activities, garmin coach)
+        let parts = start.split(separator: "-")
+        if parts.count >= 2, let year = Int(parts[0]), let month = Int(parts[1]),
+           let calData = try? await client.connectapi("/calendar-service/year/\(year)/month/\(month - 1)") as? [String: Any],
+           let items = calData["calendarItems"] as? [[String: Any]] {
+            for item in items {
+                let itemDate = item["date"] as? String ?? ""
+                guard !itemDate.isEmpty, itemDate >= start, itemDate <= end else { continue }
+                let itemType = item["itemType"] as? String
+                if itemType == "workout", let workoutId = item["workoutId"] {
+                    let id = "\(workoutId)"
+                    if seen.contains(id) { continue }
+                    seen.insert(id)
+                    var durationMinutes: Any = NSNull()
+                    var steps: [[String: Any]] = []
+                    let sportKey = item["sportTypeKey"] as? String ?? "other"
+                    if let details = try? await client.getWorkoutDetails(workoutId: id) {
+                        if let est = num(details["estimatedDurationInSecs"]) {
+                            durationMinutes = Int((est / 60).rounded())
                         }
+                        steps = compactSteps(fromDetails: details, sport: sportKey)
                     }
-                }
-            }
-
-            // Completed activities by date
-            if let activities = try? await client.getActivitiesByDate(start: start, end: end) {
-                for activity in activities {
-                    let id = activity["activityId"].map { "\($0)" } ?? ""
+                    // workout_data mirrors the add_workouts/modify_workout shape, so
+                    // an item can be passed straight back to modify_workout.
+                    scheduled.append([
+                        "workout_id": id, "date": itemDate, "editable": true,
+                        "workout_data": [
+                            "name": item["title"] as? String ?? "Scheduled Workout",
+                            "sport": sportKey, "duration_minutes": durationMinutes,
+                            "description": "", "steps": steps
+                        ]
+                    ])
+                } else if itemType == "activity" {
+                    let id = item["id"].map { "\($0)" } ?? ""
                     if id.isEmpty || seen.contains(id) { continue }
                     seen.insert(id)
-                    let st = activity["startTimeLocal"] as? String ?? ""
-                    workouts.append([
-                        "id": id, "name": activity["activityName"] as? String ?? "Unnamed Activity",
-                        "date": st.count >= 10 ? String(st.prefix(10)) : "",
-                        "sport": (activity["activityType"] as? [String: Any])?["typeKey"] as? String ?? "Unknown",
-                        "duration_minutes": num(activity["duration"]).map { Int(($0 / 60).rounded()) } ?? NSNull(),
-                        "description": activity["description"] as? String ?? "",
-                        "completed": true, "source": "activity"
+                    let elapsed = num(item["elapsedDuration"])
+                    let durMs = num(item["duration"])
+                    let durationMinutes: Any = elapsed.map { Int(($0 / 60).rounded()) }
+                        ?? durMs.map { Int(($0 / 60000).rounded()) } ?? NSNull()
+                    let sport = item["sportTypeKey"] as? String ?? activityTypeToSport((item["activityTypeId"] as? NSNumber)?.intValue) ?? "other"
+                    completed.append([
+                        "id": id, "name": item["title"] as? String ?? "Activity",
+                        "date": itemDate, "sport": sport, "duration_minutes": durationMinutes,
+                        "description": ""
+                    ])
+                } else if itemType == "fbtAdaptiveWorkout" {
+                    let uuid = item["workoutUuid"] as? String ?? ""
+                    if uuid.isEmpty || seen.contains(uuid) { continue }
+                    seen.insert(uuid)
+                    // Garmin-coach workouts are planned but not editable via our API.
+                    scheduled.append([
+                        "workout_id": uuid, "date": itemDate, "editable": false,
+                        "workout_data": [
+                            "name": "[GC] \(item["title"] as? String ?? "Training Plan Workout")",
+                            "sport": item["sportTypeKey"] as? String ?? "other",
+                            "duration_minutes": NSNull(), "description": "", "steps": []
+                        ]
                     ])
                 }
             }
-
-            workouts.sort { ($0["date"] as? String ?? "") < ($1["date"] as? String ?? "") }
-            let data: [String: Any] = ["period": ["start": start, "end": end], "workouts": workouts, "count": workouts.count]
-            return resultString(success: true, data: data, message: "Found \(workouts.count) workout(s) between \(start) and \(end)")
         }
+
+        // Completed activities by date
+        if let activities = try? await client.getActivitiesByDate(start: start, end: end) {
+            for activity in activities {
+                let id = activity["activityId"].map { "\($0)" } ?? ""
+                if id.isEmpty || seen.contains(id) { continue }
+                seen.insert(id)
+                let st = activity["startTimeLocal"] as? String ?? ""
+                completed.append([
+                    "id": id, "name": activity["activityName"] as? String ?? "Unnamed Activity",
+                    "date": st.count >= 10 ? String(st.prefix(10)) : "",
+                    "sport": (activity["activityType"] as? [String: Any])?["typeKey"] as? String ?? "Unknown",
+                    "duration_minutes": num(activity["duration"]).map { Int(($0 / 60).rounded()) } ?? NSNull(),
+                    "description": activity["description"] as? String ?? ""
+                ])
+            }
+        }
+
+        scheduled.sort { ($0["date"] as? String ?? "") < ($1["date"] as? String ?? "") }
+        completed.sort { ($0["date"] as? String ?? "") < ($1["date"] as? String ?? "") }
+        let data: [String: Any] = [
+            "period": ["start": start, "end": end],
+            "scheduled": scheduled, "completed": completed,
+            "scheduled_count": scheduled.count, "completed_count": completed.count
+        ]
+        return resultString(success: true, data: data, message: "Found \(scheduled.count) scheduled and \(completed.count) completed between \(start) and \(end)")
     }
 
     /// Flatten a Garmin workout-details payload into the compact step shape
@@ -522,7 +534,7 @@ actor GarminService {
         }
     }
 
-    // MARK: - add_workout
+    // MARK: - add_workouts (single add)
 
     func addWorkout(workoutData: [String: Any], date: String) async -> String {
         do {
@@ -545,50 +557,95 @@ actor GarminService {
 
     // MARK: - move_workout
 
-    func moveWorkout(fromDate: String, toDate: String, workoutId: String?) async -> String {
-        let source = GarminTransform.formatDate(fromDate)
+    func moveWorkout(workoutId: String, toDate: String, fromDate: String?) async -> String {
         let target = GarminTransform.formatDate(toDate)
         do {
-            // Resolve the scheduled occurrence on the source date via the raw
-            // calendar service. We need BOTH the workout template id (to schedule
-            // it on the target date) and the calendar item's `id` — the schedule
-            // occurrence id — so we can delete the OLD occurrence. Garmin's
+            // Find the workout's current scheduled occurrence: its date and the
+            // calendar item's `id` (the schedule-occurrence id, distinct from the
+            // workout template id) so we can delete the OLD occurrence. Garmin's
             // POST /schedule is additive (it adds an occurrence, it does not move
-            // one), so without deleting the source-date schedule the workout
-            // lingers on both days and the next calendar sync snaps it back to the
-            // earlier date.
-            var resolvedId = workoutId
+            // one), so a real move must unschedule the source occurrence — otherwise
+            // the workout lingers on both days and the next sync snaps it back.
+            var sourceDate: String?
             var scheduleId: String?
-            var workoutName = workoutId.map { "Workout \($0)" } ?? ""
-            let parts = source.split(separator: "-")
-            if parts.count >= 2, let year = Int(parts[0]), let month = Int(parts[1]),
-               let calData = try? await client.connectapi("/calendar-service/year/\(year)/month/\(month - 1)") as? [String: Any],
-               let items = calData["calendarItems"] as? [[String: Any]] {
-                let candidates = items.filter {
-                    ($0["date"] as? String) == source
-                        && ($0["itemType"] as? String) == "workout"
-                        && $0["workoutId"] != nil
-                        && (workoutId == nil || "\($0["workoutId"]!)" == workoutId)
-                }
-                if let first = candidates.first, let wid = first["workoutId"] {
-                    resolvedId = "\(wid)"
-                    scheduleId = first["id"].map { "\($0)" }
-                    workoutName = first["title"] as? String ?? workoutName
+            var workoutName = "Workout \(workoutId)"
+
+            // Scan just the source month when given (fast path); otherwise the next
+            // few months from today, which covers typical "this/next week" moves.
+            let months: [(Int, Int)]
+            if let fromDate {
+                let p = GarminTransform.formatDate(fromDate).split(separator: "-")
+                months = (p.count >= 2 ? [(Int(p[0]) ?? 0, Int(p[1]) ?? 0)] : []).filter { $0.0 > 0 && $0.1 > 0 }
+            } else {
+                let cal = Calendar.current
+                months = (0...2).compactMap { offset in
+                    guard let d = cal.date(byAdding: .month, value: offset, to: Date()) else { return nil }
+                    let c = cal.dateComponents([.year, .month], from: d)
+                    guard let y = c.year, let m = c.month else { return nil }
+                    return (y, m)
                 }
             }
-            guard let resolvedId else {
-                return resultString(success: false, data: nil, message: "No movable workouts found on \(source)")
+
+            outer: for (year, month) in months {
+                guard let calData = try? await client.connectapi("/calendar-service/year/\(year)/month/\(month - 1)") as? [String: Any],
+                      let items = calData["calendarItems"] as? [[String: Any]] else { continue }
+                for item in items where (item["itemType"] as? String) == "workout"
+                    && item["workoutId"] != nil && "\(item["workoutId"]!)" == workoutId {
+                    sourceDate = item["date"] as? String
+                    scheduleId = item["id"].map { "\($0)" }
+                    workoutName = item["title"] as? String ?? workoutName
+                    break outer
+                }
             }
+
             // Schedule on the new date first; only then drop the old occurrence,
             // so a failure to schedule never leaves the workout unscheduled.
-            try await client.scheduleWorkout(workoutId: resolvedId, date: target)
+            try await client.scheduleWorkout(workoutId: workoutId, date: target)
             if let scheduleId {
                 try? await client.unscheduleWorkout(scheduleId: scheduleId)
             }
-            let data: [String: Any] = ["workout_id": resolvedId, "workout_name": workoutName, "from_date": source, "to_date": target]
-            return resultString(success: true, data: data, message: "Moved '\(workoutName)' from \(source) to \(target)")
+            let data: [String: Any] = ["workout_id": workoutId, "workout_name": workoutName, "from_date": sourceDate ?? NSNull(), "to_date": target]
+            return resultString(success: true, data: data, message: "Moved '\(workoutName)' to \(target)")
         } catch {
             return resultString(success: false, data: nil, message: "Failed to move workout: \(authMessage(error))")
+        }
+    }
+
+    // MARK: - modify_workout
+
+    /// Edit an existing workout's content in place via PUT. The schedule
+    /// occurrence (id + date) is untouched — date changes belong to moveWorkout.
+    func modifyWorkout(workoutId: String, workoutData: [String: Any]) async -> String {
+        do {
+            guard let existing = try await client.getWorkoutDetails(workoutId: workoutId) else {
+                return resultString(success: false, data: nil, message: "Workout \(workoutId) not found")
+            }
+            let existingSportKey = (existing["sportType"] as? [String: Any])?["sportTypeKey"] as? String
+            let sport = GarminMappings.normalizeToken(workoutData["sport"] as? String ?? existingSportKey, default: "other")
+            let sportType = GarminMappings.workoutSportTypes[sport] ?? GarminMappings.workoutSportTypes["other"]!
+
+            var json: [String: Any]
+            if workoutData["steps"] != nil {
+                // Structural edit: rebuild the payload from the new definition.
+                json = GarminWorkoutBuilder.buildWorkoutJSON(workoutData, sportType: sportType, sport: sport)
+            } else {
+                // Lightweight edit: keep the existing payload and override only the
+                // provided top-level fields, preserving the existing step ids.
+                json = existing
+                if let name = workoutData["name"] as? String { json["workoutName"] = name }
+                if let desc = workoutData["description"] as? String { json["description"] = desc }
+            }
+            // Garmin's PUT requires the identity fields in the body.
+            json["workoutId"] = Int(workoutId) ?? existing["workoutId"] ?? workoutId
+            if let ownerId = existing["ownerId"] { json["ownerId"] = ownerId }
+
+            _ = try await client.updateWorkout(workoutId: workoutId, json: json)
+
+            let name = workoutData["name"] as? String ?? existing["workoutName"] as? String ?? "Workout"
+            let data: [String: Any] = ["workout_id": workoutId, "name": name, "sport": sport]
+            return resultString(success: true, data: data, message: "Updated '\(name)'")
+        } catch {
+            return resultString(success: false, data: nil, message: "Failed to modify workout \(workoutId): \(authMessage(error))")
         }
     }
 

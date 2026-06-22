@@ -90,6 +90,11 @@ struct PerformanceMetricsSection: View {
             }
         }
         .task { load() }
+        // A sync or manual entry appends to the metric time series; reload so the
+        // cards reflect new values without leaving and re-entering the screen.
+        .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
+            load()
+        }
     }
 
     private func load() {
