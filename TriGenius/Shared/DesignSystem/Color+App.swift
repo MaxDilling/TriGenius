@@ -42,4 +42,20 @@ extension Color {
         Color(uiColor: .tertiaryLabel)
         #endif
     }
+
+    /// Build a color from a `#RRGGBB` (or `RRGGBB`) hex string. Falls back to a
+    /// neutral gray for malformed input.
+    init(hex: String) {
+        let cleaned = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+        var value: UInt64 = 0
+        guard cleaned.count == 6, Scanner(string: cleaned).scanHexInt64(&value) else {
+            self = .gray
+            return
+        }
+        self = Color(
+            red: Double((value >> 16) & 0xFF) / 255,
+            green: Double((value >> 8) & 0xFF) / 255,
+            blue: Double(value & 0xFF) / 255
+        )
+    }
 }

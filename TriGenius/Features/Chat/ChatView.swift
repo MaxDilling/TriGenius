@@ -203,14 +203,6 @@ private struct MessageBubble: View {
         HStack(alignment: .bottom, spacing: 8) {
             if message.isUser { Spacer(minLength: 40) }
 
-            if !message.isUser {
-                Image(systemName: "brain.head.profile")
-                    .font(.caption)
-                    .foregroundStyle(.blue)
-                    .frame(width: 24, height: 24)
-                    .background(Circle().fill(.blue.opacity(0.12)))
-            }
-
             VStack(alignment: message.isUser ? .trailing : .leading, spacing: 4) {
                 Group {
                     if message.isUser {
@@ -294,11 +286,6 @@ private struct ThinkingIndicator: View {
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            Image(systemName: "brain.head.profile")
-                .font(.caption)
-                .foregroundStyle(.blue)
-                .frame(width: 24, height: 24)
-                .background(Circle().fill(.blue.opacity(0.12)))
 
             HStack(spacing: 4) {
                 ForEach(0..<3, id: \.self) { i in

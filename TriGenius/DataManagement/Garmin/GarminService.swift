@@ -368,56 +368,6 @@ actor GarminService {
         }
     }
 
-    // MARK: - get_training_status
-
-    func getTrainingStatus(targetDate: String) async -> String {
-        do {
-            let raw = try await client.getTrainingStatus(date: targetDate)
-            var result: [String: Any] = [
-                "date": targetDate, "training_status": NSNull(), "vo2_max": NSNull(),
-                "acute_load": NSNull(), "chronic_load": NSNull(), "acwr": NSNull(), "load_balance": NSNull()
-            ]
-
-            if let vo2 = raw["mostRecentVO2Max"] as? [String: Any] {
-                var out: [String: Any] = [:]
-                if let g = vo2["generic"] as? [String: Any] { out["running"] = g["vo2MaxPreciseValue"] ?? NSNull() }
-                if let c = vo2["cycling"] as? [String: Any] { out["cycling"] = c["vo2MaxPreciseValue"] ?? NSNull() }
-                result["vo2_max"] = out
-            }
-
-            if let statusWrapper = raw["mostRecentTrainingStatus"] as? [String: Any],
-               let latestMap = statusWrapper["latestTrainingStatusData"] as? [String: Any],
-               let firstDevice = latestMap.values.first as? [String: Any] {
-                result["training_status"] = firstDevice["trainingStatusFeedbackPhrase"] ?? firstDevice["trainingStatus"] ?? NSNull()
-                if let dto = firstDevice["acuteTrainingLoadDTO"] as? [String: Any] {
-                    result["acute_load"] = dto["dailyTrainingLoadAcute"] ?? NSNull()
-                    result["chronic_load"] = dto["dailyTrainingLoadChronic"] ?? NSNull()
-                    result["acwr"] = dto["dailyAcuteChronicWorkloadRatio"] ?? NSNull()
-                }
-            }
-
-            if let balanceWrapper = raw["mostRecentTrainingLoadBalance"] as? [String: Any],
-               let balanceMap = balanceWrapper["metricsTrainingLoadBalanceDTOMap"] as? [String: Any],
-               let b = balanceMap.values.first as? [String: Any] {
-                result["load_balance"] = [
-                    "anaerobic": b["monthlyLoadAnaerobic"] ?? NSNull(),
-                    "anaerobic_target_min": b["monthlyLoadAnaerobicTargetMin"] ?? NSNull(),
-                    "anaerobic_target_max": b["monthlyLoadAnaerobicTargetMax"] ?? NSNull(),
-                    "high_aerobic": b["monthlyLoadAerobicHigh"] ?? NSNull(),
-                    "high_aerobic_target_min": b["monthlyLoadAerobicHighTargetMin"] ?? NSNull(),
-                    "high_aerobic_target_max": b["monthlyLoadAerobicHighTargetMax"] ?? NSNull(),
-                    "low_aerobic": b["monthlyLoadAerobicLow"] ?? NSNull(),
-                    "low_aerobic_target_min": b["monthlyLoadAerobicLowTargetMin"] ?? NSNull(),
-                    "low_aerobic_target_max": b["monthlyLoadAerobicLowTargetMax"] ?? NSNull(),
-                    "feedback": b["trainingBalanceFeedbackPhrase"] ?? NSNull()
-                ]
-            }
-            return resultString(success: true, data: result, message: "Retrieved training status for \(targetDate)")
-        } catch {
-            return resultString(success: false, data: nil, message: "Failed to fetch training status: \(authMessage(error))")
-        }
-    }
-
     // MARK: - get_calendar
 
     func getCalendar(startDate: String, endDate: String) async -> String {

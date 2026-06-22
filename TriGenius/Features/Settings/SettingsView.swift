@@ -242,6 +242,11 @@ struct SettingsView: View {
                     } label: {
                         Label("Tool Runner", systemImage: "wrench.and.screwdriver")
                     }
+                    NavigationLink {
+                        SystemPromptDebugView(brain: brain)
+                    } label: {
+                        Label("System Prompt", systemImage: "text.alignleft")
+                    }
                 }
                 NavigationLink {
                     ReminderTestView()
@@ -654,6 +659,7 @@ struct CalendarAccessSection: View {
                 Label("Calendar access granted", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
                     .font(.caption)
+                CalendarSelectionList()
             case .notDetermined:
                 Button {
                     Task {
@@ -674,6 +680,59 @@ struct CalendarAccessSection: View {
             }
         }
         .task { state = CalendarService.shared.accessState }
+    }
+}
+
+// MARK: - Calendar Selection
+
+/// Lets the athlete pick which device calendars the coach should consider.
+/// Toggling a calendar off (e.g. a shared family calendar) writes its identifier
+/// to `CalendarService.excludedCalendarIdentifiers`; calendars added later are
+/// included by default.
+private struct CalendarSelectionList: View {
+    @State private var calendars: [CalendarInfo] = []
+    @State private var excluded: Set<String> = CalendarService.shared.excludedCalendarIdentifiers
+
+    var body: some View {
+        Group {
+            DisclosureGroup("Calendars considered (\(calendars.count - excluded.count)/\(calendars.count))") {
+                ForEach(groupedSources, id: \.self) { source in
+                    ForEach(calendars.filter { $0.sourceTitle == source }) { cal in
+                        Toggle(isOn: binding(for: cal.id)) {
+                            HStack(spacing: Theme.Spacing.s) {
+                                Circle()
+                                    .fill(Color(hex: cal.colorHex))
+                                    .frame(width: 10, height: 10)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(cal.title)
+                                    if cal.isSubscribed {
+                                        Text("Shared")
+                                            .font(.caption2)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .task { calendars = CalendarService.shared.availableCalendars() }
+    }
+
+    private var groupedSources: [String] {
+        var seen = Set<String>()
+        return calendars.compactMap { seen.insert($0.sourceTitle).inserted ? $0.sourceTitle : nil }
+    }
+
+    private func binding(for id: String) -> Binding<Bool> {
+        Binding(
+            get: { !excluded.contains(id) },
+            set: { include in
+                if include { excluded.remove(id) } else { excluded.insert(id) }
+                CalendarService.shared.excludedCalendarIdentifiers = excluded
+            }
+        )
     }
 }
 

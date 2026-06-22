@@ -33,6 +33,15 @@ struct DayAvailability: Sendable, Identifiable {
     var id: Date { date }
 }
 
+/// A device calendar the athlete can opt in/out of for availability checks.
+struct CalendarInfo: Sendable, Identifiable {
+    let id: String          // EKCalendar.calendarIdentifier
+    let title: String
+    let sourceTitle: String // e.g. "iCloud", "Gmail" — groups shared/account calendars
+    let colorHex: String
+    let isSubscribed: Bool  // shared/subscribed calendars the athlete may want to skip
+}
+
 @MainActor
 final class CalendarService {
     static let shared = CalendarService()
@@ -68,13 +77,52 @@ final class CalendarService {
         }
     }
 
+    // MARK: - Calendar selection
+
+    /// UserDefaults key holding the identifiers of calendars the athlete opted
+    /// *out* of. We store the exclusion set (not the inclusion set) so that
+    /// calendars added after the athlete made their choice are included by
+    /// default — the common case is wanting to drop a few shared calendars.
+    private static let excludedKey = "calendar_excluded_identifiers"
+
+    /// Identifiers of calendars excluded from availability checks.
+    var excludedCalendarIdentifiers: Set<String> {
+        get { Set(UserDefaults.standard.stringArray(forKey: Self.excludedKey) ?? []) }
+        set { UserDefaults.standard.set(Array(newValue), forKey: Self.excludedKey) }
+    }
+
+    /// All event calendars on the device, grouped-friendly (sorted by source then
+    /// title). Empty if access isn't granted.
+    func availableCalendars() -> [CalendarInfo] {
+        guard accessState == .authorized else { return [] }
+        return store.calendars(for: .event)
+            .map { cal in
+                CalendarInfo(
+                    id: cal.calendarIdentifier,
+                    title: cal.title,
+                    sourceTitle: cal.source?.title ?? "",
+                    colorHex: Self.hex(from: cal.cgColor),
+                    isSubscribed: cal.isSubscribed || cal.type == .subscription
+                )
+            }
+            .sorted { ($0.sourceTitle, $0.title) < ($1.sourceTitle, $1.title) }
+    }
+
+    /// The EKCalendars to query, or `nil` for "all" (when nothing is excluded).
+    private func includedCalendars() -> [EKCalendar]? {
+        let excluded = excludedCalendarIdentifiers
+        guard !excluded.isEmpty else { return nil }
+        return store.calendars(for: .event)
+            .filter { !excluded.contains($0.calendarIdentifier) }
+    }
+
     // MARK: - Reads
 
     /// Busy windows (timed + all-day events) overlapping the `[from, to]` range,
-    /// across all of the athlete's calendars, ascending by start.
+    /// across the athlete's included calendars, ascending by start.
     func busyWindows(from: Date, to: Date) -> [BusyWindow] {
         guard accessState == .authorized else { return [] }
-        let predicate = store.predicateForEvents(withStart: from, end: to, calendars: nil)
+        let predicate = store.predicateForEvents(withStart: from, end: to, calendars: includedCalendars())
         return store.events(matching: predicate)
             // Skip events the athlete declined — they're not real commitments.
             .filter { $0.status != .canceled && !isDeclined($0) }
@@ -127,5 +175,14 @@ final class CalendarService {
         event.attendees?.contains {
             $0.isCurrentUser && $0.participantStatus == .declined
         } ?? false
+    }
+
+    /// `#RRGGBB` for an EKCalendar color, so the picker can render its swatch.
+    private static func hex(from cgColor: CGColor?) -> String {
+        guard let comps = cgColor?.components, comps.count >= 3 else { return "#3478F6" }
+        let r = Int((comps[0] * 255).rounded())
+        let g = Int((comps[1] * 255).rounded())
+        let b = Int((comps[2] * 255).rounded())
+        return String(format: "#%02X%02X%02X", r, g, b)
     }
 }

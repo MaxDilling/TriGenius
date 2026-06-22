@@ -134,11 +134,9 @@ struct TrainingDetailView: View {
 
     private var coachInsight: some View {
         HStack(alignment: .top, spacing: Theme.Spacing.s) {
-            Image(systemName: "brain.head.profile")
-                .font(.subheadline).foregroundStyle(family.color)
-            Text("Controlled aerobic session — pacing stayed in range for a solid endurance stimulus.")
-                .font(.subheadline)
-            Spacer(minLength: 0)
+            // Text("Controlled aerobic session — pacing stayed in range for a solid endurance stimulus.")
+            //     .font(.subheadline)
+            // Spacer(minLength: 0)
         }
         .padding(Theme.Spacing.m)
         .glassSurface(cornerRadius: Theme.Radius.m)

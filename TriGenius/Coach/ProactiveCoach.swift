@@ -104,6 +104,98 @@ enum ProactiveCoach {
         return lines.joined(separator: "\n")
     }
 
+    // MARK: - Training load & injury signals (source-agnostic)
+
+    /// System-prompt section for the source-agnostic derived load metrics
+    /// (`TrainingLoadAnalytics`). Mirrors `promptSection(from:)`. Returns "" when
+    /// there's no usable data yet, to keep the prompt clean.
+    static func loadPromptSection(_ summary: TrainingLoadSummary) -> String {
+        guard summary.hasData else { return "" }
+        var lines = [
+            "=== TRAINING LOAD & INJURY SIGNALS ===",
+            "Source-agnostic, locally derived from stored activities (heuristics, not hard thresholds). This week vs trailing 3-week average:"
+        ]
+        for m in summary.perSport where m.currentWeekSessions > 0 || m.avgSessionsPerWeek > 0 {
+            lines.append("- " + sportLine(m))
+        }
+        if let load = summary.load {
+            lines.append("Weekly load step change: this week ~\(rounded(load.currentWeekTSS)) TSS vs last week ~\(rounded(load.priorWeekTSS)) (\(signed(load.weekOverWeekTSSDelta))). Read acute (ATL) vs chronic (CTL) from the PMC section above separately — not as a single ACWR ratio.")
+        }
+        let sigs = loadSignals(summary)
+        if !sigs.isEmpty {
+            lines.append("\nInjury-load flags to weave in naturally when relevant (don't lecture):")
+            for s in sigs { lines.append("- \(s.severity == .warning ? "⚠️ " : "")\(s.message)") }
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Heuristic injury-load flags derived from the per-sport metrics. Thresholds
+    /// are coaching rules of thumb anchored to the embedded knowledge base.
+    static func loadSignals(_ summary: TrainingLoadSummary) -> [ProactiveSignal] {
+        var out: [ProactiveSignal] = []
+        for m in summary.perSport {
+            switch m.family {
+            case .run:
+                if let r = m.rampRate, r > 0.30 {
+                    out.append(ProactiveSignal(severity: .warning, message: "Run volume is up \(signedPct(r)) on the trailing 3-week average — past ~+30% week-on-week notably raises running injury risk (Nielsen 2014). Hold or ease this week's build."))
+                }
+                if let p = m.longestProgressionRatio, p > 1.10, let r = m.recentLongest {
+                    out.append(ProactiveSignal(severity: .warning, message: "Longest run jumped to \(km(r.distanceKm)) km — >10% over the prior 30-day longest. Single long-run spikes predict injury more than the weekly average; cap long-run growth near 10%."))
+                }
+                if let share = m.longSessionShare, share > 0.35 {
+                    out.append(ProactiveSignal(severity: .warning, message: "The long run is \(pct(share)) of weekly run volume (cap ~25–35%) — spread volume across more sessions to lower per-session impact load."))
+                }
+            case .bike:
+                if let r = m.rampRate, r > 0.30 {
+                    out.append(ProactiveSignal(severity: .info, message: "Bike volume is up \(signedPct(r)) vs the 3-week average — cycling tolerates more than running, but watch fatigue if it keeps climbing."))
+                }
+            case .swim:
+                if m.avgSessionsPerWeek > 0, m.avgSessionsPerWeek < 3 {
+                    out.append(ProactiveSignal(severity: .info, message: "Swim frequency is ~\(fmt1(m.avgSessionsPerWeek))×/wk — under ~3×/wk slows motor-skill retention for adult-onset swimmers (technique is the primary lever)."))
+                }
+            default:
+                break
+            }
+        }
+        return out
+    }
+
+    /// One compact per-sport line for the prompt section.
+    private static func sportLine(_ m: SportLoadMetrics) -> String {
+        var parts: [String] = []
+        switch m.family {
+        case .strength, .other:
+            parts.append("\(m.family.displayName): \(rounded(m.currentWeekDurationMinutes)) min / \(m.currentWeekSessions) sessions this week")
+        default:
+            parts.append("\(m.family.displayName): \(km(m.currentWeekDistanceKm)) km / \(m.currentWeekSessions) sessions this week")
+        }
+        if let r = m.rampRate { parts.append("\(signedPct(r)) vs 3-wk avg") }
+        if let recent = m.recentLongest {
+            var ls = "longest \(longestText(m.family, recent)) (last 7d)"
+            if let base = m.baselineLongest { ls += ", prior-30d max \(longestText(m.family, base))" }
+            parts.append(ls)
+        }
+        if let share = m.longSessionShare { parts.append("long-session \(pct(share)) of weekly volume") }
+        parts.append("~\(fmt1(m.avgSessionsPerWeek))×/wk")
+        return parts.joined(separator: "; ")
+    }
+
+    /// Longest session rendered in the sport's natural unit (m for swim, km for
+    /// bike/run, min for strength).
+    private static func longestText(_ family: SportFamily, _ s: LongestSession) -> String {
+        switch family {
+        case .swim: return "\(rounded(s.distanceKm * 1000)) m"
+        case .strength, .other: return "\(rounded(s.durationMinutes)) min"
+        case .bike, .run: return "\(km(s.distanceKm)) km"
+        }
+    }
+
+    private static func km(_ v: Double) -> String { String(format: "%.1f", v) }
+    private static func fmt1(_ v: Double) -> String { String(format: "%.1f", v) }
+    private static func pct(_ v: Double) -> String { "\(rounded(v * 100))%" }
+    private static func signedPct(_ v: Double) -> String { (v >= 0 ? "+" : "") + pct(v) }
+    private static func signed(_ v: Double) -> String { (v >= 0 ? "+" : "") + rounded(v) }
+
     private static func rounded(_ v: Double) -> String {
         String(Int(v.rounded()))
     }

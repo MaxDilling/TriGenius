@@ -42,6 +42,74 @@ struct ToolDebugView: View {
     }
 }
 
+// MARK: - System Prompt Viewer (Debug Mode)
+//
+// Shows the fully rendered system prompt for the current state — date/time,
+// athlete memory, PMC + training-load context, onboarding and data-source
+// sections — exactly as it's sent to the backend. Useful for verifying what the
+// coach actually "sees" each turn. Regenerated on appear and via Refresh, since
+// it depends on live state (memory, stored activities, time of day).
+
+struct SystemPromptDebugView: View {
+    let brain: CoachBrain
+
+    @State private var prompt: String = ""
+    @State private var didCopy = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("The fully rendered system prompt for the current state, exactly as sent to the backend. Regenerated each time you open or refresh.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text(prompt)
+                    .font(.system(.caption2, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+            }
+            .padding()
+        }
+        .navigationTitle("System Prompt")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    refresh()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                Button {
+                    copyToClipboard(prompt)
+                    didCopy = true
+                } label: {
+                    Label(didCopy ? "Copied" : "Copy",
+                          systemImage: didCopy ? "checkmark" : "doc.on.doc")
+                }
+            }
+        }
+        .onAppear(perform: refresh)
+    }
+
+    private func refresh() {
+        didCopy = false
+        prompt = brain.debugSystemPrompt
+    }
+
+    private func copyToClipboard(_ text: String) {
+        #if os(iOS)
+        UIPasteboard.general.string = text
+        #elseif os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #endif
+    }
+}
+
 // MARK: - Single Tool Runner
 
 struct ToolRunnerView: View {

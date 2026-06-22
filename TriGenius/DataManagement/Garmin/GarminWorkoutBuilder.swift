@@ -2,8 +2,12 @@ import Foundation
 
 // MARK: - Garmin Workout Payload Builder
 //
-// Ported from TriGenius_python/garmin/workout_payloads.py. Builds the JSON
-// payload Garmin's workout-service expects from the LLM's workout definition.
+// Ported from TriGenius_python/garmin/workout_payloads.py. Translates an
+// already-normalized workout model (see WorkoutNormalizer) into the JSON payload
+// Garmin's workout-service expects. All defaulting, step synthesis and target-band
+// expansion happen upstream in WorkoutNormalizer; this type is Garmin wire-format
+// only (sport/step/target lookups via GarminMappings + the sec/km → m/s pace
+// conversion).
 
 nonisolated enum GarminWorkoutBuilder {
 
@@ -33,12 +37,12 @@ nonisolated enum GarminWorkoutBuilder {
             if let distanceMeters { workoutJSON["estimatedDistanceInMeters"] = distanceMeters }
         }
 
-        let workoutSteps: [[String: Any]]
-        if !steps.isEmpty {
-            workoutSteps = buildStructuredSteps(steps, sport: sport)
-        } else {
-            workoutSteps = buildSimpleSteps(workoutData, sport: sport, durationSecs: durationSecs, distanceMeters: distanceMeters)
-        }
+        // Steps arrive already normalized (explicit, with resolved end conditions and
+        // expanded target bands). The fallback only guards against an empty list.
+        let normalizedSteps = steps.isEmpty
+            ? [["type": "interval", "end_condition": "time", "duration_seconds": durationSecs]]
+            : steps
+        let workoutSteps = buildStructuredSteps(normalizedSteps, sport: sport)
 
         var segment: [String: Any] = [
             "segmentOrder": 1,
@@ -51,44 +55,6 @@ nonisolated enum GarminWorkoutBuilder {
         }
         workoutJSON["workoutSegments"] = [segment]
         return workoutJSON
-    }
-
-    static func buildSimpleSteps(_ workoutData: [String: Any], sport: String, durationSecs: Int, distanceMeters: Double?) -> [[String: Any]] {
-        var steps: [[String: Any]] = []
-        var stepOrder = 1
-        var remaining = durationSecs
-        let includeWarmup = workoutData["include_warmup"] as? Bool ?? true
-        let includeCooldown = workoutData["include_cooldown"] as? Bool ?? true
-        let defaultStroke = workoutData["stroke"] as? String ?? "free"
-
-        if includeWarmup && remaining >= 600 {
-            let warmupSecs = min(Double(remaining) * 0.1, 300)
-            steps.append(createStep(order: stepOrder, stepTypeKey: "warmup", stepTypeId: 1, sport: sport,
-                                    endCondition: "time", endValue: warmupSecs, stroke: defaultStroke))
-            stepOrder += 1
-            remaining -= Int(warmupSecs)
-        }
-
-        var cooldownSecs = 0.0
-        if includeCooldown && remaining >= 600 {
-            cooldownSecs = min(Double(remaining) * 0.1, 300)
-            remaining -= Int(cooldownSecs)
-        }
-
-        if let distanceMeters, swimSportKeys.contains(sport) {
-            steps.append(createStep(order: stepOrder, stepTypeKey: "interval", stepTypeId: 3, sport: sport,
-                                    endCondition: "distance", endValue: distanceMeters, stroke: defaultStroke))
-        } else {
-            steps.append(createStep(order: stepOrder, stepTypeKey: "interval", stepTypeId: 3, sport: sport,
-                                    endCondition: "time", endValue: Double(remaining), stroke: defaultStroke))
-        }
-        stepOrder += 1
-
-        if cooldownSecs > 0 {
-            steps.append(createStep(order: stepOrder, stepTypeKey: "cooldown", stepTypeId: 2, sport: sport,
-                                    endCondition: "time", endValue: cooldownSecs, stroke: "any_stroke"))
-        }
-        return steps
     }
 
     static func buildStructuredSteps(_ steps: [[String: Any]], sport: String) -> [[String: Any]] {
@@ -107,7 +73,7 @@ nonisolated enum GarminWorkoutBuilder {
                 for child in step["repeat_steps"] as? [[String: Any]] ?? [] {
                     let childTypeStr = GarminMappings.normalizeToken(child["type"] as? String, default: "interval")
                     let childType = GarminMappings.workoutStepTypes[childTypeStr] ?? GarminMappings.workoutStepTypes["interval"]!
-                    let childEnd = inferEndCondition(child, stepTypeStr: childTypeStr)
+                    let childEnd = GarminMappings.normalizeToken(child["end_condition"] as? String, default: "time")
                     var childStep = createStep(
                         order: stepOrder + childOrder,
                         stepTypeKey: childType.key, stepTypeId: childType.id, sport: sport,
@@ -139,7 +105,7 @@ nonisolated enum GarminWorkoutBuilder {
                 continue
             }
 
-            let endCondition = inferEndCondition(step, stepTypeStr: stepTypeStr)
+            let endCondition = GarminMappings.normalizeToken(step["end_condition"] as? String, default: "time")
             workoutSteps.append(createStep(
                 order: stepOrder,
                 stepTypeKey: stepType.key, stepTypeId: stepType.id, sport: sport,
@@ -152,14 +118,6 @@ nonisolated enum GarminWorkoutBuilder {
             stepOrder += 1
         }
         return workoutSteps
-    }
-
-    static func inferEndCondition(_ step: [String: Any], stepTypeStr: String) -> String {
-        if let ec = step["end_condition"] as? String, !ec.isEmpty { return ec }
-        if step["distance_meters"] != nil { return "distance" }
-        if stepTypeStr == "rest" && step["duration_seconds"] != nil { return "fixed_rest" }
-        if step["end_on_lap"] as? Bool == true { return "lap_button" }
-        return "time"
     }
 
     static func createStep(

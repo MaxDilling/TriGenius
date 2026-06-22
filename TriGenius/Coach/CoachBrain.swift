@@ -95,7 +95,8 @@ Never replace medical evaluation with coaching advice. State clearly: "This is o
 
 === TOOL USAGE ===
 
-- `read_knowledge`: ALWAYS call first when answering sport-specific training questions
+- `read_knowledge`: ALWAYS call first when answering sport-specific training questions, and read the `workouts` topic before building a structured session
+- `add_workout`: build & schedule a concrete structured session. Pass ONE value per intensity target (units: pace = sec/km, HR = bpm, power = W, cadence = rpm) — the app widens it into a sensible band and fills defaults automatically, then reports what it applied. Never fake zero-width ranges. Relay the actual scheduled targets back to the athlete.
 - `get_health_metrics`: before recommending intensity (check recovery state)
 - `get_activities`: to analyze completed training
 - `get_athlete_profile`: to review current memory state
@@ -230,6 +231,8 @@ final class CoachBrain {
             registry.register(GarminToolHandler(memory: memory))
         }
         registry.register(ProfileToolHandler(memory: memory))
+        // Always-on, source-agnostic: derived training-load & injury-risk metrics.
+        registry.register(TrainingLoadToolHandler())
         // Always-on, source-independent: real-world schedule awareness.
         registry.register(CalendarToolHandler())
         // Always-on: configurable push reminders ("Erweiterte Reminder").
@@ -276,6 +279,11 @@ final class CoachBrain {
     func debugRunTool(name: String, arguments: [String: Any]) async -> String {
         await executeToolSafe(name: name, arguments: arguments)
     }
+
+    /// The fully rendered system prompt for the current state — date/time, athlete
+    /// memory, PMC + training-load context, onboarding and data-source sections.
+    /// Exposed for the Debug Mode prompt viewer; regenerated on each read.
+    var debugSystemPrompt: String { buildSystemPrompt() }
 
     /// Warm up a self-managing backend so the first turn responds faster.
     func prewarm() {
@@ -467,7 +475,13 @@ final class CoachBrain {
         let date = Self.dateFormatter.string(from: now)
         let time = Self.timeFormatter.string(from: now)
 
-        let pmc = ProactiveCoach.promptSection(from: PMCEngine.current().snapshot)
+        let pmcSnapshot = PMCEngine.current().snapshot
+        let pmc = ProactiveCoach.promptSection(from: pmcSnapshot)
+        // Source-agnostic derived load/injury metrics, injected alongside the PMC.
+        let loadSection = ProactiveCoach.loadPromptSection(
+            TrainingLoadAnalytics.summary(snapshot: pmcSnapshot)
+        )
+        let pmcContext = [pmc, loadSection].filter { !$0.isEmpty }.joined(separator: "\n\n")
         let performance = TrainingDataStore.shared.latestSnapshot()
 
         let onboarding = memory.onboardingComplete ? "" : ONBOARDING_SECTION
@@ -476,7 +490,7 @@ final class CoachBrain {
             .replacingOccurrences(of: "{current_date}", with: date)
             .replacingOccurrences(of: "{current_time}", with: time)
             .replacingOccurrences(of: "{athlete_context}", with: memory.contextSummary(performance: performance))
-            .replacingOccurrences(of: "{pmc_context}", with: pmc)
+            .replacingOccurrences(of: "{pmc_context}", with: pmcContext)
             .replacingOccurrences(of: "{onboarding_section}", with: onboarding)
             .replacingOccurrences(of: "{data_source_section}", with: dataSourceSection)
     }

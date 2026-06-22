@@ -167,13 +167,13 @@ final class ProfileToolHandler: CoachToolHandler {
             ),
             ToolDefinition(
                 name: "read_knowledge",
-                description: "Read coaching knowledge files on specific topics: cycling, running, swimming, or injuries. Always call this FIRST when answering sport-specific training questions.",
+                description: "Read coaching knowledge files on specific topics: cycling, running, swimming, injuries, or workouts. Always call this FIRST when answering sport-specific training questions, and read the 'workouts' topic before building a structured workout with add_workout.",
                 parameters: [
                     "type": "object",
                     "properties": [
                         "topic": [
                             "type": "string",
-                            "enum": ["cycling", "running", "swimming", "injuries"],
+                            "enum": ["cycling", "running", "swimming", "injuries", "workouts"],
                             "description": "The topic to read."
                         ]
                     ],
@@ -397,7 +397,8 @@ final class ProfileToolHandler: CoachToolHandler {
         "cycling":  ("CYCLING",  "md", CoachKnowledge.cycling),
         "running":  ("RUNNING",  "md", CoachKnowledge.running),
         "swimming": ("SWIMMING", "md", CoachKnowledge.swimming),
-        "injuries": ("INJURIES", "MD", CoachKnowledge.injuries)
+        "injuries": ("INJURIES", "MD", CoachKnowledge.injuries),
+        "workouts": ("WORKOUTS", "md", CoachKnowledge.workouts)
     ]
 
     private func knowledgeSummary(for topic: String) -> String {
@@ -496,11 +497,97 @@ final class CalendarToolHandler: CoachToolHandler {
     }()
 }
 
+// MARK: - Training Load Tool Handler
+//
+// Always-on and source-agnostic: the injury-relevant *derived* layer on top of
+// the local store, computed by `TrainingLoadAnalytics` so it reads the same
+// whether activities came from Garmin or Apple Health. Replaces Garmin's
+// `get_training_status` (which returned a single, Garmin-only ACWR number — the
+// framing INJURIES.MD / CYCLING.md §5 explicitly advise against).
+
+@MainActor
+final class TrainingLoadToolHandler: CoachToolHandler {
+
+    var definitions: [ToolDefinition] {
+        [
+            ToolDefinition(
+                name: "get_training_load",
+                description: "Source-agnostic training-load & injury-risk summary derived from stored activities (works for both Garmin and Apple Health). Per sport: weekly volume and week-over-week ramp rate, longest session in the last 7 days vs the prior 30-day longest (the long-session progression check), long-session share of weekly volume, and average sessions/week. Plus acute (ATL, 7d) and chronic (CTL, 42d) load reported SEPARATELY with a week-over-week TSS step change — deliberately not a single ACWR ratio. Use it to judge ramp/overload and long-session spikes before adjusting the plan.",
+                parameters: [
+                    "type": "object",
+                    "properties": [
+                        "weeks": ["type": "integer", "description": "How many recent weeks to analyse (3–12). Default 6."]
+                    ],
+                    "required": []
+                ]
+            )
+        ]
+    }
+
+    func execute(name: String, arguments: [String: Any]) async throws -> String {
+        guard name == "get_training_load" else { return "Unknown training-load tool: \(name)" }
+        let weeks = min(max((arguments["weeks"] as? Int) ?? 6, 3), 12)
+        let summary = TrainingLoadAnalytics.summary(weeks: weeks)
+        guard summary.hasData else {
+            return "No training-load data yet — the local activity history is empty. Sync activities first."
+        }
+        return String(prettyJSON: Self.dict(from: summary))
+    }
+
+    private static func dict(from s: TrainingLoadSummary) -> [String: Any] {
+        var sports: [[String: Any]] = []
+        for m in s.perSport {
+            var d: [String: Any] = [
+                "sport": m.family.displayName.lowercased(),
+                "current_week": [
+                    "distance_km": round1(m.currentWeekDistanceKm),
+                    "duration_minutes": round1(m.currentWeekDurationMinutes),
+                    "sessions": m.currentWeekSessions
+                ],
+                "baseline_weekly_avg": [
+                    "distance_km": round1(m.baselineWeeklyDistanceKm),
+                    "duration_minutes": round1(m.baselineWeeklyDurationMinutes)
+                ],
+                "avg_sessions_per_week": round1(m.avgSessionsPerWeek)
+            ]
+            if let r = m.rampRate { d["ramp_rate_pct"] = round1(r * 100) }
+            if let r = m.recentLongest { d["longest_last_7d"] = longestDict(r) }
+            if let b = m.baselineLongest { d["longest_prior_30d"] = longestDict(b) }
+            if let p = m.longestProgressionRatio { d["longest_progression_pct"] = round1((p - 1) * 100) }
+            if let share = m.longSessionShare { d["long_session_share_pct"] = round1(share * 100) }
+            sports.append(d)
+        }
+        var out: [String: Any] = ["weeks": s.weeks, "per_sport": sports]
+        if let l = s.load {
+            out["load"] = [
+                "fatigue_atl_7d": round1(l.atl),
+                "fitness_ctl_42d": round1(l.ctl),
+                "form_tsb": round1(l.tsb),
+                "current_week_tss": round1(l.currentWeekTSS),
+                "prior_week_tss": round1(l.priorWeekTSS),
+                "week_over_week_tss_delta": round1(l.weekOverWeekTSSDelta),
+                "note": "Acute (ATL) and chronic (CTL) are reported separately on purpose — do not collapse into an ACWR gate (Impellizzeri 2020/21). Watch for step changes."
+            ]
+        }
+        return out
+    }
+
+    private static func longestDict(_ s: LongestSession) -> [String: Any] {
+        [
+            "distance_km": round1(s.distanceKm),
+            "duration_minutes": round1(s.durationMinutes),
+            "date": DateFormatter.ymd.string(from: s.date),
+            "name": s.name
+        ]
+    }
+
+    private static func round1(_ v: Double) -> Double { (v * 10).rounded() / 10 }
+}
+
 // MARK: - Garmin Tool Handler
 //
-// Exposes the same 8 Garmin tools as the Python CLI. Tool names mirror the
-// HealthKit handler (get_activities / get_health_metrics) so the coach is
-// agnostic to the active data source.
+// Tool names mirror the HealthKit handler (get_activities / get_health_metrics)
+// so the coach is agnostic to the active data source.
 
 @MainActor
 final class GarminToolHandler: CoachToolHandler {
@@ -572,7 +659,7 @@ final class GarminToolHandler: CoachToolHandler {
             ),
             ToolDefinition(
                 name: "add_workout",
-                description: "Create and schedule a structured Garmin workout for running, cycling, swimming, or strength.",
+                description: "Create and schedule a structured workout (running, cycling, swimming, or strength). Call read_knowledge('workouts') first for the schema, target units, and conventions. The app fills sensible defaults and widens single-value intensity targets into bands automatically — pass one value per target, don't fake zero-width ranges.",
                 parameters: [
                     "type": "object",
                     "properties": [
@@ -584,10 +671,10 @@ final class GarminToolHandler: CoachToolHandler {
                                 "sport": ["type": "string", "enum": ["running", "cycling", "swimming", "strength", "yoga", "cardio", "other"], "description": "Workout sport."],
                                 "duration_minutes": ["type": "integer", "description": "Total duration in minutes."],
                                 "distance_meters": ["type": "number", "description": "Optional total distance in meters."],
-                                "pool_length": ["type": "integer", "description": "Pool length in meters for swim workouts."],
+                                "pool_length": ["type": "integer", "description": "Pool length in meters for swim workouts (default 25)."],
                                 "description": ["type": "string", "description": "Workout description."],
-                                "include_warmup": ["type": "boolean", "description": "Include a warm-up block."],
-                                "include_cooldown": ["type": "boolean", "description": "Include a cool-down block."],
+                                "include_warmup": ["type": "boolean", "description": "Include a warm-up block when no explicit steps are given (default true)."],
+                                "include_cooldown": ["type": "boolean", "description": "Include a cool-down block when no explicit steps are given (default true)."],
                                 "steps": [
                                     "type": "array",
                                     "description": "Optional structured workout steps.",
@@ -599,7 +686,7 @@ final class GarminToolHandler: CoachToolHandler {
                                             "distance_meters": ["type": "number", "description": "Step distance in meters."],
                                             "end_condition": ["type": "string", "enum": ["time", "distance", "lap_button", "fixed_rest"], "description": "How the step ends."],
                                             "stroke": ["type": "string", "enum": ["free", "breaststroke", "backstroke", "butterfly", "any_stroke", "drill", "im"], "description": "Swim stroke for swimming steps."],
-                                            "repeat_count": ["type": "integer", "description": "Iterations for repeat blocks."],
+                                            "repeat_count": ["type": "integer", "description": "Iterations for repeat blocks (default 4)."],
                                             "repeat_steps": [
                                                 "type": "array",
                                                 "description": "Child steps inside a repeat block.",
@@ -614,9 +701,9 @@ final class GarminToolHandler: CoachToolHandler {
                                                 ]
                                             ],
                                             "skip_last_rest": ["type": "boolean", "description": "Skip the last rest in a repeat block."],
-                                            "target_type": ["type": "string", "enum": ["no_target", "heart_rate", "power", "pace", "cadence"], "description": "Garmin target type."],
-                                            "target_low": ["type": "number", "description": "Lower target bound."],
-                                            "target_high": ["type": "number", "description": "Upper target bound."]
+                                            "target_type": ["type": "string", "enum": ["no_target", "heart_rate", "power", "pace", "cadence"], "description": "Intensity target type. Units: pace = seconds per km, heart_rate = bpm, power = watts, cadence = rpm."],
+                                            "target_low": ["type": "number", "description": "Target value. Pass a single value here (and/or in target_high) and the app expands it into a sensible band automatically — e.g. pace 300 (5:00/km) → 4:40–5:10."],
+                                            "target_high": ["type": "number", "description": "Optional explicit upper bound. Provide a distinct target_low/target_high pair only to override the automatic band."]
                                         ]
                                     ]
                                 ]
@@ -639,15 +726,6 @@ final class GarminToolHandler: CoachToolHandler {
                         "workout_id": ["type": "string", "description": "Optional specific workout ID."]
                     ],
                     "required": ["from_date", "to_date"]
-                ]
-            ),
-            ToolDefinition(
-                name: "get_training_status",
-                description: "Fetch Garmin training status for a specific date, including Chronic Load, Acute Load, and the distribution of Anaerobic, High Aerobic, and Low Aerobic training load balance.",
-                parameters: [
-                    "type": "object",
-                    "properties": ["target_date": ["type": "string", "description": "Target date in YYYY-MM-DD format."]],
-                    "required": ["target_date"]
                 ]
             ),
             ToolDefinition(
@@ -699,12 +777,15 @@ final class GarminToolHandler: CoachToolHandler {
             }
             return result
         case "add_workout":
-            guard let workoutData = arguments["workout_data"] as? [String: Any] else {
+            guard let rawWorkout = arguments["workout_data"] as? [String: Any] else {
                 return "✗ Error: workout_data is missing or invalid."
             }
+            // Fill defaults, synthesize structure, and widen single-value targets in a
+            // source-agnostic layer; the notes are surfaced back to the model.
+            let (workoutData, notes) = WorkoutNormalizer.normalize(rawWorkout)
             let result = await service.addWorkout(workoutData: workoutData, date: arguments["date"] as? String ?? "")
             ingestAddedWorkout(result, workoutData: workoutData)
-            return result
+            return appendDefaultsNotes(to: result, notes: notes)
         case "move_workout":
             let result = await service.moveWorkout(
                 fromDate: arguments["from_date"] as? String ?? "",
@@ -713,8 +794,6 @@ final class GarminToolHandler: CoachToolHandler {
             )
             applyMovedWorkout(result)
             return result
-        case "get_training_status":
-            return await service.getTrainingStatus(targetDate: arguments["target_date"] as? String ?? "")
         case "sync_user_settings":
             let (text, settings) = await service.syncUserSettings()
             if let settings { applySettingsToMemory(settings) }
@@ -744,6 +823,13 @@ final class GarminToolHandler: CoachToolHandler {
     // Keep the local scheduled-workout store in step with the coach's Garmin
     // scheduling actions so the dashboard/calendar update immediately, without
     // waiting for the next full calendar sync.
+
+    /// Append a transparent summary of the defaults/adjustments WorkoutNormalizer
+    /// applied, so the coach can relay exactly what was scheduled. Only on success.
+    private func appendDefaultsNotes(to result: String, notes: [String]) -> String {
+        guard result.hasPrefix("✓"), !notes.isEmpty else { return result }
+        return result + "\n\nℹ️ Applied defaults & adjustments:\n" + notes.map { "- \($0)" }.joined(separator: "\n")
+    }
 
     /// The JSON payload embedded in a "✓ message\n<json>" tool result.
     private func resultData(_ result: String) -> [String: Any]? {
@@ -942,5 +1028,47 @@ private enum CoachKnowledge {
     - DOMS (delayed onset muscle soreness): train gently through it
     - Minor tendon irritation: reduce load, avoid hills/intervals, address biomechanics
     - Never increase load while injured — maintain or reduce
+    """
+
+    static let workouts = """
+    === BUILDING STRUCTURED WORKOUTS (add_workout) ===
+
+    REQUIRED: workout_data.name, workout_data.sport, workout_data.duration_minutes, date (YYYY-MM-DD).
+
+    STEPS (optional): if you omit `steps`, the app builds warm-up / main / cool-down from the
+    duration. For real sessions, provide explicit `steps`. Each step has:
+    - type: warmup | interval | main | recovery | rest | cooldown | repeat
+    - end_condition: time | distance | lap_button | fixed_rest (inferred if omitted: distance when
+      distance_meters is set, else time)
+    - duration_seconds OR distance_meters
+    - target_type + target_low (see TARGETS)
+    Use a `repeat` step with repeat_count and repeat_steps[] for interval sets.
+
+    TARGET UNITS (critical — get these right):
+    - pace  → seconds per km (5:00/km = 300; 4:00/km = 240). Swimming pace is per 100 m.
+    - heart_rate → bpm
+    - power → watts
+    - cadence → rpm
+
+    RANGES — pass ONE value, not a zero-width range:
+    - Put a single value in target_low. The app expands it into a sensible band automatically:
+      pace −20/+10 s/km, HR ±3 bpm, power ±5%, cadence ±3 rpm.
+      e.g. pace 300 → 4:40–5:10/km. Only pass a distinct target_low/target_high to override.
+
+    DEFAULTS the app fills (and reports back): include_warmup/cooldown = true, repeat_count = 4,
+    pool_length = 25 m, skip_last_rest = true. The tool result lists every default and band it
+    applied — relay the actual targets to the athlete.
+
+    EXAMPLES (steps shown conceptually):
+    - Run intervals 5×1000 m @ 5:00/km, 90 s jog recovery:
+      repeat ×5 of [interval distance_meters 1000, target_type pace, target_low 300]
+      + [recovery duration_seconds 90].
+    - Bike sweet-spot 3×12 min @ 230 W:
+      repeat ×3 of [interval duration_seconds 720, target_type power, target_low 230]
+      + [recovery duration_seconds 300].
+    - Swim CSS 8×100 m @ 1:40/100m, 15 s rest (pool_length 25):
+      repeat ×8 of [interval distance_meters 100, target_type pace, target_low 100]
+      + [rest duration_seconds 15, end_condition fixed_rest].
+    - Strength: duration_minutes only, no targets (Garmin tracks it as a timed session).
     """
 }

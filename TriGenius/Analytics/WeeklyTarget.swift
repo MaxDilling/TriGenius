@@ -205,22 +205,25 @@ enum WeeklyTargets {
         var out: [SportFamily: WeeklyProjection] = [:]
 
         // Completed so far this week.
-        var completedTodayFamilies: Set<SportFamily> = []
-        for record in store.activities(from: weekStart, to: weekEnd) {
+        let weekCompleted = store.activities(from: weekStart, to: weekEnd)
+        for record in weekCompleted {
             let family = SportFamily(sportKey: record.sport)
             var p = out[family] ?? WeeklyProjection()
             p.actualTSS += record.tss ?? 0
             p.actualKm += record.distanceKm
             out[family] = p
-            if cal.isDate(record.date, inSameDayAs: todayStart) { completedTodayFamilies.insert(family) }
         }
 
-        // Still-planned for today + the remaining days.
-        for w in store.scheduledWorkouts(from: weekStart, to: weekEnd) {
+        // Still-planned for today + the remaining days. Plans already fulfilled by
+        // a completed activity (matched on day + sport + name) drop out so a done
+        // session isn't double-counted against the projection.
+        let stillPlanned = PlanReconciliation.unfulfilled(
+            planned: store.scheduledWorkouts(from: weekStart, to: weekEnd),
+            completed: weekCompleted)
+        for w in stillPlanned {
             let day = cal.startOfDay(for: w.date)
             let family = SportFamily(sportKey: w.sport)
             if day < todayStart { continue }                                   // past: can't still be done
-            if day == todayStart && completedTodayFamilies.contains(family) { continue } // already logged today
             var p = out[family] ?? WeeklyProjection()
             p.projectedTSS += w.targetTSS ?? estimatedTSS(family: family, minutes: w.targetDurationMinutes)
             p.projectedKm += estimatedDistanceKm(family: family, minutes: w.targetDurationMinutes)

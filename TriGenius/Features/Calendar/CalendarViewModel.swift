@@ -174,17 +174,21 @@ final class CalendarViewModel {
 
         let store = TrainingDataStore.shared
 
-        var planned: [Date: [ScheduledWorkoutRecord]] = [:]
-        for w in store.scheduledWorkouts(from: start, to: end) {
-            planned[cal.startOfDay(for: w.date), default: []].append(w)
-        }
-        plannedByDay = planned
-
         var completed: [Date: [ActivityRecord]] = [:]
         for r in store.activities(from: start, to: end) {
             completed[cal.startOfDay(for: r.date), default: []].append(r)
         }
         completedByDay = completed
+
+        // Drop plans already fulfilled by a completed activity on the same day so
+        // a done session doesn't render twice in the grid / day detail.
+        var planned: [Date: [ScheduledWorkoutRecord]] = [:]
+        for w in store.scheduledWorkouts(from: start, to: end) {
+            planned[cal.startOfDay(for: w.date), default: []].append(w)
+        }
+        plannedByDay = planned.mapValues {
+            PlanReconciliation.unfulfilled(planned: $0, completed: completed[cal.startOfDay(for: $0[0].date)] ?? [])
+        }
 
         loadCalendar(from: start, to: end)
     }

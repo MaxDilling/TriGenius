@@ -138,11 +138,6 @@ actor GarminClient {
         ) as? [String: Any]
     }
 
-    func getTrainingStatus(date: String) async throws -> [String: Any] {
-        let result = try await connectapi("/metrics-service/metrics/trainingstatus/aggregated/\(date)")
-        return result as? [String: Any] ?? [:]
-    }
-
     // MARK: - Settings
 
     func getCyclingFtp() async throws -> Any? {

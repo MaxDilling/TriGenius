@@ -2,11 +2,13 @@ import Foundation
 import SwiftData
 
 extension Notification.Name {
-    /// Posted (on the main actor) whenever the local scheduled-workout store is
-    /// mutated by a user action — a reschedule or delete. Views that render the
-    /// agenda from a cached snapshot (the Dashboard) observe this to reload
-    /// without triggering a full network re-sync.
-    static let scheduledWorkoutsDidChange = Notification.Name("trigenius.scheduledWorkoutsDidChange")
+    /// Posted (on the main actor) whenever the local training store is mutated —
+    /// activities, performance metrics or scheduled workouts, from any path
+    /// (coach tools, a sync, or a user action). Views that render from a cached
+    /// snapshot (Dashboard, Calendar, Performance Insights) observe this to reload
+    /// without triggering a full network re-sync. Emission is coalesced, so a
+    /// burst of mutations (one sync) yields a single notification.
+    static let trainingDataDidChange = Notification.Name("trigenius.trainingDataDidChange")
 }
 
 // MARK: - Local Time-Series Database
@@ -276,6 +278,19 @@ final class TrainingDataStore {
         }
     }
 
+    /// Coalesces change notifications: every mutating method calls this after its
+    /// `context.save()`, but a burst within one runloop tick (a sync that ingests
+    /// activities + scheduled + metrics in sequence) collapses into a single post.
+    private var changePending = false
+    private func markChanged() {
+        guard !changePending else { return }
+        changePending = true
+        DispatchQueue.main.async { [weak self] in
+            self?.changePending = false
+            NotificationCenter.default.post(name: .trainingDataDidChange, object: nil)
+        }
+    }
+
     /// Delete every stored record — activities, performance metrics and
     /// scheduled workouts. The `coach_memory.json` profile/settings are NOT
     /// touched; this only clears the local time-series database.
@@ -284,6 +299,7 @@ final class TrainingDataStore {
         try? context.delete(model: PerformanceMetricRecord.self)
         try? context.delete(model: ScheduledWorkoutRecord.self)
         try? context.save()
+        markChanged()
     }
 
     /// Upsert a batch of activities (insert new, update existing by id).
@@ -322,6 +338,7 @@ final class TrainingDataStore {
             }
         }
         try? context.save()
+        markChanged()
     }
 
     /// Delete `source`-originated activities on/after `from` whose id is not in
