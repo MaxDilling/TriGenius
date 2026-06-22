@@ -367,6 +367,7 @@ private struct VolumeMetricToggle: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 4)
             .glassEffect(.regular, in: .capsule)
+            .contentShape(.capsule)
         }
         .buttonStyle(.plain)
     }

@@ -253,6 +253,7 @@ private struct ToolCallBubble: View {
                         .font(.caption2)
                 }
                 .foregroundStyle(.orange)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
 
