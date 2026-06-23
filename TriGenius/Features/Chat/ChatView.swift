@@ -89,6 +89,29 @@ final class ChatViewModel {
         messages = []
         showGreeting = true
     }
+
+    /// File a bug/feedback report: snapshot the current conversation transcript
+    /// (plus the athlete's optional note) into the local `ReportStore`.
+    func fileReport(note: String) {
+        let transcript = messages.map { msg -> Report.Line in
+            let text: String
+            if msg.author == .tool, let e = msg.toolEvent {
+                text = "\(e.name)(\(e.argumentsJSON)) → \(e.resultPreview)"
+            } else {
+                text = msg.text
+            }
+            return Report.Line(author: authorToken(msg.author), text: text, timestamp: msg.timestamp)
+        }
+        ReportStore.shared.add(note: note, transcript: transcript)
+    }
+
+    private func authorToken(_ author: ChatMessage.Author) -> String {
+        switch author {
+        case .user: return "user"
+        case .coach: return "coach"
+        case .tool: return "tool"
+        }
+    }
 }
 
 // MARK: - Chat View
@@ -96,6 +119,7 @@ final class ChatViewModel {
 struct CoachChatView: View {
     @State private var viewModel: ChatViewModel
     @FocusState private var inputFocused: Bool
+    @State private var showReport = false
 
     init(brain: CoachBrain) {
         _viewModel = State(initialValue: ChatViewModel(brain: brain))
@@ -164,11 +188,67 @@ struct CoachChatView: View {
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
                 Button {
+                    showReport = true
+                } label: {
+                    Image(systemName: "exclamationmark.bubble")
+                }
+                .help("Report an issue")
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
                     viewModel.reset()
                 } label: {
                     Image(systemName: "arrow.counterclockwise")
                 }
                 .help("Reset session")
+            }
+        }
+        .sheet(isPresented: $showReport) {
+            ReportComposerView(messageCount: viewModel.messages.count) { note in
+                viewModel.fileReport(note: note)
+            }
+        }
+    }
+}
+
+// MARK: - Report Composer
+
+/// Sheet for filing a bug/feedback report from the chat. Captures the current
+/// conversation transcript plus the athlete's optional description; saved
+/// locally via `ReportStore` and copyable/resettable from Settings.
+private struct ReportComposerView: View {
+    let messageCount: Int
+    let onSubmit: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var note = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("What went wrong?", text: $note, axis: .vertical)
+                        .lineLimit(3...8)
+                } header: {
+                    Text("Description")
+                } footer: {
+                    Text("Optional. The current conversation (\(messageCount) message\(messageCount == 1 ? "" : "s")) is attached automatically. Reports are saved on this device only — copy or clear them in Settings.")
+                }
+            }
+            .navigationTitle("Report an issue")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Submit") {
+                        onSubmit(note)
+                        dismiss()
+                    }
+                }
             }
         }
     }

@@ -295,6 +295,11 @@ struct SettingsView: View {
                 } label: {
                     Label("Storage (coach_memory.json)", systemImage: "curlybraces")
                 }
+                NavigationLink {
+                    ReportsDebugView()
+                } label: {
+                    Label("Reports", systemImage: "exclamationmark.bubble")
+                }
             }
         }
         .navigationTitle("Settings")
@@ -639,6 +644,81 @@ struct MemoryDebugView: View {
         case .failure(let error):
             importFailed = true
             importStatus = error.localizedDescription
+        }
+    }
+}
+
+// MARK: - Reports Debug View
+
+/// Lists the locally-filed chat reports with Copy (all reports as text) and a
+/// Reset that wipes them — mirroring the coach_memory.json storage screen.
+struct ReportsDebugView: View {
+    @ObservedObject private var store = ReportStore.shared
+    @State private var didCopy = false
+    @State private var showResetConfirm = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("File path")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(store.storageFilePath)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+
+                Divider()
+
+                if store.isEmpty {
+                    Text("No reports filed yet. Use the report button in the chat to capture a conversation.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("\(store.reports.count) report\(store.reports.count == 1 ? "" : "s")")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(store.exportText)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding()
+        }
+        .navigationTitle("Reports")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .toolbar {
+            Button(role: .destructive) {
+                showResetConfirm = true
+            } label: {
+                Label("Reset", systemImage: "trash")
+            }
+            .disabled(store.isEmpty)
+            Button {
+                #if os(iOS)
+                UIPasteboard.general.string = store.prettyPrintedJSON
+                #elseif os(macOS)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(store.prettyPrintedJSON, forType: .string)
+                #endif
+                didCopy = true
+            } label: {
+                Label(didCopy ? "Copied" : "Copy",
+                      systemImage: didCopy ? "checkmark" : "doc.on.doc")
+            }
+            .disabled(store.isEmpty)
+        }
+        .confirmationDialog(
+            "Delete all reports?",
+            isPresented: $showResetConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) { store.clear() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("All locally-filed reports will be permanently deleted.")
         }
     }
 }
@@ -1165,6 +1245,7 @@ struct GarminBackfillSection: View {
     @State private var isWorking = false
     @State private var statusMessage: String?
     @State private var isError = false
+    @State private var isRecomputing = false
 
     /// How far back to pull. ~8 months comfortably covers the >42-day CTL warm-up
     /// plus several months of history for trend context.
@@ -1183,11 +1264,43 @@ struct GarminBackfillSection: View {
             }
             .disabled(isWorking)
 
+            Button {
+                Task { await runRecompute() }
+            } label: {
+                if isRecomputing {
+                    HStack { ProgressView(); Text("Recomputing…") }
+                } else {
+                    Label("Recompute all TSS & distances", systemImage: "arrow.triangle.2.circlepath")
+                }
+            }
+            .disabled(isRecomputing || isWorking)
+
             if let statusMessage {
                 Label(statusMessage, systemImage: isError ? "exclamationmark.triangle.fill" : "checkmark.circle")
                     .foregroundStyle(isError ? .orange : .secondary)
                     .font(.caption)
             }
+        }
+    }
+
+    private func runRecompute() async {
+        isRecomputing = true
+        statusMessage = nil
+        defer { isRecomputing = false }
+        guard await GarminAuth.shared.isAuthenticated else {
+            statusMessage = "Connect to Garmin first."
+            isError = true
+            return
+        }
+        // Force re-fetch + recompute so existing activities pick up the new fields
+        // (normalized pace, swim cleaning) and TSS. Manual overrides are preserved.
+        let count = await DataSyncCoordinator.shared.deepBackfill(source: .garmin, days: backfillDays, force: true)
+        if let count {
+            isError = false
+            statusMessage = "Recomputed \(count) activities (TSS + distances)."
+        } else {
+            isError = true
+            statusMessage = "Recompute failed — check your Garmin connection."
         }
     }
 

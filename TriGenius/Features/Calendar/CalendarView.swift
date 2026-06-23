@@ -346,38 +346,58 @@ private struct DayCell: View {
 
 // MARK: - Shared rows (used by detail panel + week view)
 
-/// A completed activity, shown solid/checked.
-struct CompletedRow: View {
-    let activity: ActivityRecord
-    private var family: SportFamily { SportFamily(sportKey: activity.sport) }
+/// The shared compact training row: sport icon, name, a one-line summary and a
+/// trailing accessory, on a discipline-tinted background that marks it as a
+/// training session (vs. flat life events). `CompletedRow` and `PlannedRow` are
+/// thin wrappers that supply their record-specific destination, summary and
+/// accessory — the layout lives here once.
+struct WorkoutRow<Destination: View, Trailing: View>: View {
+    let sport: String
+    let name: String
+    let summary: String
+    /// Tint strength of the discipline-colored background.
+    var tintOpacity: Double
+    @ViewBuilder let destination: () -> Destination
+    @ViewBuilder let trailing: () -> Trailing
+
+    private var family: SportFamily { SportFamily(sportKey: sport) }
 
     var body: some View {
         NavigationLink {
-            TrainingDetailView(record: activity)
+            destination()
         } label: {
-            card
+            HStack(spacing: Theme.Spacing.s) {
+                Image(systemName: family.icon)
+                    .font(.caption).foregroundStyle(family.color)
+                    .frame(width: 18)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(name).font(.subheadline.weight(.medium)).lineLimit(1)
+                    Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
+                Spacer(minLength: Theme.Spacing.xs)
+                trailing()
+            }
+            .padding(.vertical, Theme.Spacing.xs)
+            .padding(.horizontal, Theme.Spacing.s)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(family.color.opacity(tintOpacity), in: RoundedRectangle(cornerRadius: Theme.Radius.s))
         }
         .buttonStyle(.plain)
     }
+}
 
-    private var card: some View {
-        HStack(spacing: Theme.Spacing.s) {
-            Image(systemName: family.icon)
-                .font(.caption).foregroundStyle(family.color)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(activity.name).font(.subheadline.weight(.medium)).lineLimit(1)
-                Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer(minLength: Theme.Spacing.xs)
+/// A completed activity, shown solid/checked.
+struct CompletedRow: View {
+    let activity: ActivityRecord
+
+    var body: some View {
+        WorkoutRow(sport: activity.sport, name: activity.name, summary: summary,
+                   tintOpacity: 0.12) {
+            TrainingDetailView(record: activity)
+        } trailing: {
             Image(systemName: "checkmark.circle.fill")
                 .font(.caption).foregroundStyle(Theme.Palette.success)
         }
-        .padding(.vertical, Theme.Spacing.xs)
-        .padding(.horizontal, Theme.Spacing.s)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // Discipline tint marks this as a training session (vs. flat life events).
-        .background(family.color.opacity(0.12), in: RoundedRectangle(cornerRadius: Theme.Radius.s))
     }
 
     private var summary: String {
@@ -395,31 +415,13 @@ struct PlannedRow: View {
     var conflict: Bool = false
     var segment: TimeOfDaySegment? = nil
 
-    private var family: SportFamily { SportFamily(sportKey: workout.sport) }
-    private var targetTSS: Double {
-        workout.targetTSS ?? WeeklyTargets.estimatedTSS(family: family, minutes: workout.targetDurationMinutes)
-    }
-
     var body: some View {
         // Tap → planned-workout detail; the row stays draggable for rescheduling.
-        NavigationLink {
+        // Lighter tint than completed so the day's done training reads stronger.
+        WorkoutRow(sport: workout.sport, name: workout.name, summary: summaryLine,
+                   tintOpacity: 0.10) {
             PlannedWorkoutDetailView(workout: workout)
-        } label: {
-            card
-        }
-        .buttonStyle(.plain)
-    }
-
-    private var card: some View {
-        HStack(spacing: Theme.Spacing.s) {
-            Image(systemName: family.icon)
-                .font(.caption).foregroundStyle(family.color)
-                .frame(width: 18)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(workout.name).font(.subheadline.weight(.medium)).lineLimit(1)
-                Text(summaryLine).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            }
-            Spacer(minLength: Theme.Spacing.xs)
+        } trailing: {
             if conflict {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(Theme.Palette.warning)
@@ -427,20 +429,10 @@ struct PlannedRow: View {
             Image(systemName: "line.3.horizontal")
                 .font(.caption).foregroundStyle(.tertiary)
         }
-        .padding(.vertical, Theme.Spacing.xs)
-        .padding(.horizontal, Theme.Spacing.s)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // Planned training: same discipline tint as completed, lighter, so the
-        // day's training stands out from flat life events.
-        .background(family.color.opacity(0.10), in: RoundedRectangle(cornerRadius: Theme.Radius.s))
     }
 
     private var summaryLine: String {
-        var parts: [String] = []
-        if let segment { parts.append(segment.label) }
-        if workout.targetDurationMinutes > 0 { parts.append(durationHM(workout.targetDurationMinutes)) }
-        if targetTSS > 0 { parts.append("\(Int(targetTSS.rounded())) TSS target") }
-        return parts.isEmpty ? "Target not set" : parts.joined(separator: "  •  ")
+        workout.plannedSummaryLine(segment: segment, tssSuffix: "TSS target")
     }
 }
 

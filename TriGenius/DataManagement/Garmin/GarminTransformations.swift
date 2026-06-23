@@ -99,19 +99,20 @@ nonisolated enum GarminTransform {
         return out
     }
 
-    /// Extract contiguous directPower sample segments from Garmin activity details.
-    static func extractPowerSegments(_ details: [String: Any]) -> [[Double]] {
+    /// Contiguous sample segments for a named time-series metric (e.g. `directPower`,
+    /// `directSpeed`) from Garmin activity details, split on recording gaps (>1 s).
+    static func metricSegments(_ details: [String: Any], key: String) -> [[Double]] {
         guard let descriptors = details["metricDescriptors"] as? [[String: Any]],
               let rows = details["activityDetailMetrics"] as? [[String: Any]],
               !descriptors.isEmpty, !rows.isEmpty else { return [] }
 
         var descriptorIndexes: [String: Int] = [:]
         for d in descriptors {
-            if let key = d["key"] as? String, let idx = d["metricsIndex"] as? Int {
-                descriptorIndexes[key] = idx
+            if let k = d["key"] as? String, let idx = d["metricsIndex"] as? Int {
+                descriptorIndexes[k] = idx
             }
         }
-        guard let powerIdx = descriptorIndexes["directPower"] else { return [] }
+        guard let valueIdx = descriptorIndexes[key] else { return [] }
         let timestampIdx = descriptorIndexes["directTimestamp"]
 
         var segments: [[Double]] = []
@@ -119,14 +120,14 @@ nonisolated enum GarminTransform {
         var previousTimestamp: Double?
 
         for row in rows {
-            guard let metrics = row["metrics"] as? [Any], powerIdx < metrics.count else { continue }
-            let powerValue = (metrics[powerIdx] as? NSNumber)?.doubleValue
+            guard let metrics = row["metrics"] as? [Any], valueIdx < metrics.count else { continue }
+            let value = (metrics[valueIdx] as? NSNumber)?.doubleValue
             let timestampValue: Double? = {
                 if let ti = timestampIdx, ti < metrics.count { return (metrics[ti] as? NSNumber)?.doubleValue }
                 return nil
             }()
 
-            guard let power = powerValue else {
+            guard let v = value else {
                 if !current.isEmpty { segments.append(current); current = [] }
                 previousTimestamp = nil
                 continue
@@ -139,11 +140,54 @@ nonisolated enum GarminTransform {
                     current = []
                 }
             }
-            current.append(power)
+            current.append(v)
             previousTimestamp = timestampValue
         }
         if !current.isEmpty { segments.append(current) }
         return segments
+    }
+
+    /// Extract contiguous directPower sample segments (power-curve feature).
+    static func extractPowerSegments(_ details: [String: Any]) -> [[Double]] {
+        metricSegments(details, key: "directPower")
+    }
+
+    /// Normalized speed (m/s) — the pace analogue of normalized power: a 30-sample
+    /// (~30 s) rolling mean, raised to the 4th power, averaged, 4th-rooted. Grade is
+    /// ignored (a future NGP refinement, see FEATURES.md). Nil without samples; falls
+    /// back to the plain mean for very short streams.
+    static func normalizedSpeedMps(_ details: [String: Any]) -> Double? {
+        let samples = metricSegments(details, key: "directSpeed").flatMap { $0 }.filter { $0 >= 0 }
+        guard !samples.isEmpty else { return nil }
+        let window = 30
+        guard samples.count >= window else { return samples.reduce(0, +) / Double(samples.count) }
+        var rolled: [Double] = []
+        var windowSum = 0.0
+        for i in samples.indices {
+            windowSum += samples[i]
+            if i >= window { windowSum -= samples[i - window] }
+            if i >= window - 1 { rolled.append(windowSum / Double(window)) }
+        }
+        let fourth = rolled.reduce(0) { $0 + pow($1, 4) } / Double(rolled.count)
+        return pow(fourth, 0.25)
+    }
+
+    /// Flatten a swim's lap DTOs into the ACTIVE pool lengths (idle/rest lengths
+    /// carry no distance and are skipped) for `SwimLengthCleaner`.
+    static func activeSwimLengths(_ lapDTOs: [[String: Any]]) -> [SwimLength] {
+        var out: [SwimLength] = []
+        for lap in lapDTOs {
+            guard let lengths = lap["lengthDTOs"] as? [[String: Any]] else { continue }
+            for l in lengths {
+                let dur = Coerce.double(l["duration"]) ?? 0
+                let dist = Coerce.double(l["distance"]) ?? 0
+                guard dur > 0, dist > 0 else { continue }
+                out.append(SwimLength(durationSeconds: dur,
+                                      strokes: Int(Coerce.double(l["totalNumberOfStrokes"]) ?? 0),
+                                      distanceMeters: dist))
+            }
+        }
+        return out
     }
 
     /// Return the best rolling average for each requested duration.

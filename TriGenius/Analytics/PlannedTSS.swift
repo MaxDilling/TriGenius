@@ -32,25 +32,13 @@ enum PlannedTSS {
     /// duration-only fallback (`WeeklyTargets.tssPerHour`), so the two estimates
     /// stay consistent.
     static func defaultIF(_ family: SportFamily) -> Double {
-        switch family {
-        case .swim:     return 0.80   // ~64 TSS/h
-        case .bike:     return 0.80   // ~64 TSS/h
-        case .run:      return 0.84   // ~71 TSS/h
-        case .strength: return 0.60   // ~36 TSS/h
-        case .other:    return 0.72   // ~52 TSS/h
-        }
+        TSSConstants.defaultIF(family)
     }
 
     /// IF for a step that carries no resolvable target, by step type. Work steps
     /// fall back to the discipline default; warmups/cooldowns/rest are easier.
     private static func typeDefaultIF(_ typeKey: String, family: SportFamily) -> Double {
-        switch typeKey {
-        case "warmup", "warm-up", "warm_up",
-             "cooldown", "cool-down", "cool_down": return 0.55
-        case "rest":     return 0.40
-        case "recovery": return 0.50
-        default:         return defaultIF(family)   // interval / main / work / unknown
-        }
+        TSSConstants.typeDefaultIF(typeKey, family: family)
     }
 
     /// Typical speed (m/s) per discipline, to convert a distance-based step into a
@@ -66,7 +54,7 @@ enum PlannedTSS {
 
     /// Plausible IF bounds — guards against bad targets / thresholds producing
     /// absurd contributions.
-    private static let ifRange = 0.30 ... 1.30
+    private static let ifRange = TSSConstants.ifRange
 
     // MARK: Normalized step
 
@@ -105,6 +93,28 @@ enum PlannedTSS {
         return total.rounded()
     }
 
+    // MARK: Total distance (display)
+
+    /// Estimated total distance in meters for a planned workout, summing the
+    /// distance of every leaf step (expanding repeats). Distance-based steps use
+    /// their meters directly; time-based steps are converted via their pace target
+    /// when present, else the discipline's default speed. Nil when there are no
+    /// measurable steps. Used to show a "~16 km" figure for distance disciplines.
+    static func totalDistanceMeters(compactSteps: [[String: Any]], family: SportFamily) -> Double? {
+        let raw = flatten(compactSteps)
+        guard !raw.isEmpty else { return nil }
+        var meters = 0.0
+        for step in raw {
+            if step.isDistance {
+                meters += max(0, step.endValue)
+            } else {
+                let speed = paceSpeedMPS(for: step, family: family) ?? defaultSpeedMPS(family)
+                meters += max(0, step.endValue) * speed
+            }
+        }
+        return meters > 0 ? meters : nil
+    }
+
     // MARK: Step → duration
 
     private static func durationSeconds(for step: RawStep, family: SportFamily, thresholds: PerformanceSnapshot) -> Double {
@@ -139,7 +149,10 @@ enum PlannedTSS {
                              : family == .run  ? thresholds.runningFTP.map(Double.init)
                              : nil
             guard let ftp, ftp > 0 else { return (fallback, false) }
-            return (clamp(mid / ftp), true)
+            // Planned power targets are averages; realized TSS uses NP (NP/avg ≈ VI).
+            // Apply a small variability uplift to bike power targets (see TSSConstants).
+            let uplift = family == .bike ? TSSConstants.plannedBikeIFUplift : 1.0
+            return (clamp(mid / ftp * uplift), true)
         case "pace":
             let thr: Double? = family == .run  ? thresholds.lactateThrPaceSeconds
                              : family == .swim ? thresholds.cssPaceSeconds
@@ -172,14 +185,14 @@ enum PlannedTSS {
     // MARK: Compact dict → RawStep (handles repeat blocks)
 
     /// Flatten compact step dicts into leaf `RawStep`s, expanding repeat blocks
-    /// (`repeat_count` × `repeat_steps`). Garmin's adapter pre-flattens its repeats
-    /// so it never hits the repeat branch; the coach's `add_workout` payload does.
+    /// (`repeat_count` × `repeat_steps`). Both the Garmin adapter and the coach's
+    /// `add_workout` payload carry repeat blocks; recursion expands nested ones.
     private static func flatten(_ steps: [[String: Any]]) -> [RawStep] {
         var out: [RawStep] = []
         for step in steps {
             if let children = step["repeat_steps"] as? [[String: Any]] {
                 let count = max(1, Coerce.double(step["repeat_count"]).map { Int($0) } ?? 1)
-                let leaves = children.compactMap(leaf(from:))
+                let leaves = flatten(children)
                 for _ in 0 ..< count { out.append(contentsOf: leaves) }
             } else if let leaf = leaf(from: step) {
                 out.append(leaf)

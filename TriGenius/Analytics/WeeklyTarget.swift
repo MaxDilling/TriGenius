@@ -209,7 +209,7 @@ enum WeeklyTargets {
         for record in weekCompleted {
             let family = SportFamily(sportKey: record.sport)
             var p = out[family] ?? WeeklyProjection()
-            p.actualTSS += record.tss ?? 0
+            p.actualTSS += TSS.value(for: record) ?? 0
             p.actualKm += record.distanceKm
             out[family] = p
         }

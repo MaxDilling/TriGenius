@@ -140,6 +140,13 @@ final class ScheduledWorkoutRecord {
     var targetTSS: Double?
     /// Optional free-text description of the planned session.
     var notes: String
+    /// The workout's structured steps (warmup / repeat blocks / intervals /
+    /// cooldown with power/pace/HR targets), JSON-encoded in the compact shape
+    /// `PlannedWorkoutStructure` and `PlannedTSS` consume. Mirrors
+    /// `ActivityRecord.detailsJSON`. "[]" when the source carries no structure
+    /// (e.g. Garmin-Coach workouts, locally-created plans). Defaulted so the
+    /// SwiftData migration is purely additive.
+    var stepsJSON: String = "[]"
     /// Local-only planned start time as minutes after midnight (e.g. 420 = 07:00).
     /// Nil → no specific time-of-day. Stored day-independent so a day-move keeps
     /// the time-of-day. Set by dragging onto a calendar segment; lost if the
@@ -159,6 +166,7 @@ final class ScheduledWorkoutRecord {
         targetDurationMinutes: Double,
         targetTSS: Double?,
         notes: String = "",
+        stepsJSON: String = "[]",
         startMinute: Int? = nil,
         associatedActivityId: String? = nil
     ) {
@@ -170,6 +178,7 @@ final class ScheduledWorkoutRecord {
         self.targetDurationMinutes = targetDurationMinutes
         self.targetTSS = targetTSS
         self.notes = notes
+        self.stepsJSON = stepsJSON
         self.startMinute = startMinute
         self.associatedActivityId = associatedActivityId
     }
@@ -193,6 +202,13 @@ struct IngestedActivity: Sendable {
     let detailsJSON: String
 }
 
+/// The cached, already-computed result of a stored activity — lets a resync reuse
+/// it instead of re-fetching streams / recomputing TSS for a known workout.
+struct CachedActivity: Sendable {
+    let tss: Double?
+    let detailsJSON: String
+}
+
 /// Sendable snapshot used to hand planned workouts from the (non-MainActor)
 /// data sources to the MainActor-bound store. `date` is normalized to
 /// start-of-day on ingest.
@@ -205,6 +221,8 @@ struct IngestedScheduledWorkout: Sendable {
     let targetDurationMinutes: Double
     let targetTSS: Double?
     let notes: String
+    /// Compact structured steps, JSON-encoded (see `ScheduledWorkoutRecord.stepsJSON`).
+    var stepsJSON: String = "[]"
     var associatedActivityId: String? = nil
 }
 
@@ -348,6 +366,44 @@ final class TrainingDataStore {
         markChanged()
     }
 
+    /// Cached `(tss, detailsJSON)` for the given ids — a resync passes the ids it is
+    /// about to fetch so already-stored workouts can be reused without re-fetching
+    /// their streams / recomputing TSS (the per-new-activity work is the expensive
+    /// part). Manual swim-distance corrections survive resync this way too.
+    func cachedActivities(ids: Set<String>) -> [String: CachedActivity] {
+        guard !ids.isEmpty else { return [:] }
+        let all = (try? context.fetch(FetchDescriptor<ActivityRecord>())) ?? []
+        var out: [String: CachedActivity] = [:]
+        for r in all where ids.contains(r.id) {
+            out[r.id] = CachedActivity(tss: r.tss, detailsJSON: r.detailsJSON)
+        }
+        return out
+    }
+
+    /// Manually override one completed activity's distance (km). Persists the manual
+    /// value in `detailsJSON` (so it survives resync via the activity cache) and
+    /// recomputes the resolved distance + TSS.
+    func overrideDistance(activityId: String, distanceKm: Double) {
+        guard let r = (try? context.fetch(
+                  FetchDescriptor<ActivityRecord>(predicate: #Predicate { $0.id == activityId })))?.first,
+              var details = Self.jsonObject(r.detailsJSON) else { return }
+        details["manual_distance_m"] = distanceKm * 1000
+        let (km, tss) = TSSScoring.score(&details, snapshot: latestSnapshot())
+        r.distanceKm = km
+        r.tss = tss
+        r.detailsJSON = Self.jsonString(details) ?? r.detailsJSON
+        try? context.save()
+        markChanged()
+    }
+
+    private static func jsonObject(_ s: String) -> [String: Any]? {
+        guard let d = s.data(using: .utf8) else { return nil }
+        return (try? JSONSerialization.jsonObject(with: d)) as? [String: Any]
+    }
+    private static func jsonString(_ obj: [String: Any]) -> String? {
+        (try? JSONSerialization.data(withJSONObject: obj)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
     /// Delete `source`-originated activities on/after `from` whose id is not in
     /// `keep`. Used to reconcile the Apple Health import after dropping
     /// Garmin-mirrored workouts at the source: stale duplicates already stored
@@ -433,12 +489,13 @@ final class TrainingDataStore {
                 record.targetDurationMinutes = w.targetDurationMinutes
                 record.targetTSS = w.targetTSS
                 record.notes = w.notes
+                record.stepsJSON = w.stepsJSON
                 record.associatedActivityId = w.associatedActivityId
             } else {
                 context.insert(ScheduledWorkoutRecord(
                     id: w.id, source: w.source, date: day, sport: w.sport, name: w.name,
                     targetDurationMinutes: w.targetDurationMinutes, targetTSS: w.targetTSS, notes: w.notes,
-                    associatedActivityId: w.associatedActivityId
+                    stepsJSON: w.stepsJSON, associatedActivityId: w.associatedActivityId
                 ))
             }
         }

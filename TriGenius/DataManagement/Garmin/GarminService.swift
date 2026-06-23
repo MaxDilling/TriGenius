@@ -81,7 +81,7 @@ actor GarminService {
         }
 
         if ["running", "trail_running", "treadmill_running"].contains(activityType) {
-            data["running"] = [
+            var running: [String: Any] = [
                 "avg_pace_min_km": orNull(GarminTransform.speedToPace(Coerce.double(activity["averageSpeed"]), distanceM: 1000)),
                 "best_pace_min_km": orNull(GarminTransform.speedToPace(Coerce.double(activity["maxSpeed"]), distanceM: 1000)),
                 "avg_cadence_spm": orNull(Coerce.double(activity["averageRunningCadenceInStepsPerMinute"]).map { Int($0.rounded()) }),
@@ -89,6 +89,18 @@ actor GarminService {
                 "avg_power_w": orNull(Coerce.double(activity["avgPower"]).map { Int($0.rounded()) }),
                 "steps": orNull(activity["steps"])
             ]
+            // Normalized pace (sec/km) for rTSS — NGS from the 1 Hz speed stream,
+            // falling back to average speed. Grade ignored (future NGP, FEATURES.md).
+            // Only runs for NEW activities (callers gate on the activity cache).
+            let avgSpeed = Coerce.double(activity["averageSpeed"]) ?? 0
+            var normPaceSecPerKm: Double? = avgSpeed > 0 ? 1000.0 / avgSpeed : nil
+            if let activityId = activity["activityId"].map({ "\($0)" }),
+               let details = try? await client.getActivityDetails(id: activityId),
+               let ngs = GarminTransform.normalizedSpeedMps(details), ngs > 0 {
+                normPaceSecPerKm = 1000.0 / ngs
+            }
+            running["normalized_pace_s_per_km"] = normPaceSecPerKm.map { round1($0) } ?? NSNull()
+            data["running"] = running
         } else if ["cycling", "indoor_cycling", "virtual_ride"].contains(activityType) {
             let avgSpeed = Coerce.double(activity["averageSpeed"]) ?? 0
             var cycling: [String: Any] = [
@@ -107,21 +119,33 @@ actor GarminService {
             let poolLengthM = Coerce.double(activity["poolLength"]).map { $0 / 100 }
             let activityId = activity["activityId"].map { "\($0)" }
             var intervals: [[String: Any]]? = nil
+            var lengths: [[String: Any]] = []
             if let activityId {
                 if let splits = try? await client.getActivitySplits(id: activityId),
                    let lapDTOs = splits["lapDTOs"] as? [[String: Any]], !lapDTOs.isEmpty {
                     let built = GarminTransform.buildSwimIntervals(lapDTOs, poolLengthM: poolLengthM)
                     intervals = built.isEmpty ? nil : built
+                    // Store the per-length data so SwimLengthCleaner can rejoin Garmin's
+                    // over-counted lengths — at ingest (via TSSScoring) and on recompute.
+                    lengths = GarminTransform.activeSwimLengths(lapDTOs).map {
+                        ["d": round1($0.durationSeconds), "s": $0.strokes, "m": $0.distanceMeters]
+                    }
                 }
             }
-            data["swimming"] = [
+            let avgPace100 = GarminTransform.speedToPace(Coerce.double(activity["averageSpeed"]), distanceM: 100)
+            let garminDistanceM = Coerce.double(activity["distance"]).map { round1($0) }
+            var swimming: [String: Any] = [
                 "pool_length_m": poolLengthM ?? NSNull(),
                 "avg_swolf": activity["averageSwolf"] ?? NSNull(),
                 "avg_strokes_per_length": activity["avgStrokes"] ?? NSNull(),
                 "total_lengths": activity["activeLengths"] ?? NSNull(),
-                "avg_pace_per_100m": GarminTransform.speedToPace(Coerce.double(activity["averageSpeed"]), distanceM: 100) ?? NSNull(),
                 "intervals": intervals ?? NSNull()
             ]
+            swimming["avg_pace_per_100m"] = avgPace100 ?? NSNull()
+            swimming["garmin_distance_m"] = garminDistanceM ?? NSNull()
+            swimming["lengths"] = lengths.isEmpty ? NSNull() : lengths
+            data["swimming"] = swimming
+            // Effective distance + sTSS are resolved by `TSSScoring.score` at ingest.
         }
         return data
     }
@@ -130,7 +154,7 @@ actor GarminService {
     /// Stores the full record as `detailsJSON` (so `get_activities` can serve it
     /// verbatim) plus the training load (`activityTrainingLoad`), the
     /// TSS-equivalent the PMC engine relies on. Returns nil without an id/date.
-    private func ingestDTO(from rec: [String: Any]) -> IngestedActivity? {
+    private func ingestDTO(from rec: [String: Any], tss: Double?) -> IngestedActivity? {
         guard let idNum = rec["id"] as? NSNumber else { return nil }
         guard let dateStr = rec["date"] as? String, let date = GarminTransform.date(from: dateStr) else { return nil }
         let detailsJSON = (try? JSONSerialization.data(withJSONObject: rec))
@@ -143,7 +167,7 @@ actor GarminService {
             name: rec["name"] as? String ?? "Activity",
             durationMinutes: (rec["duration_minutes"] as? NSNumber)?.doubleValue ?? 0,
             distanceKm: (rec["distance_km"] as? NSNumber)?.doubleValue ?? 0,
-            tss: (rec["training_load"] as? NSNumber)?.doubleValue,
+            tss: tss,
             aerobicTE: (rec["aerobic_te"] as? NSNumber)?.doubleValue,
             anaerobicTE: (rec["anaerobic_te"] as? NSNumber)?.doubleValue,
             detailsJSON: detailsJSON
@@ -163,6 +187,12 @@ actor GarminService {
             }
             let targetIDs = sport.flatMap { GarminMappings.sportFilterIDs[$0.lowercased()] }
 
+            // Cache: reuse already-stored activities verbatim; only NEW workouts pay
+            // the extra stream/splits fetch + TSS compute.
+            let snapshot = await TrainingDataStore.shared.latestSnapshot()
+            let candidateIDs = Set(raw.compactMap { ($0["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" } })
+            let cache = await TrainingDataStore.shared.cachedActivities(ids: candidateIDs)
+
             var formatted: [[String: Any]] = []
             var toIngest: [IngestedActivity] = []
             for activity in raw {
@@ -173,9 +203,17 @@ actor GarminService {
                 if let cutoff, startTime.count >= 10, let aDate = GarminTransform.date(from: String(startTime.prefix(10))), aDate < cutoff {
                     continue
                 }
-                let rec = await formatActivityRecord(activity)
-                formatted.append(rec)
-                if let dto = ingestDTO(from: rec) { toIngest.append(dto) }
+                let gid = (activity["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" }
+                if let gid, let cached = cache[gid],
+                   let cachedData = cached.detailsJSON.data(using: .utf8),
+                   let cachedRec = (try? JSONSerialization.jsonObject(with: cachedData)) as? [String: Any] {
+                    formatted.append(cachedRec)            // already stored & computed
+                } else {
+                    var rec = await formatActivityRecord(activity)
+                    let (_, tss) = TSSScoring.score(&rec, snapshot: snapshot)
+                    formatted.append(rec)
+                    if let dto = ingestDTO(from: rec, tss: tss) { toIngest.append(dto) }
+                }
                 if formatted.count >= count { break }
             }
 
@@ -201,13 +239,27 @@ actor GarminService {
     // date range (paginated, not capped at 100) into the local database to give
     // the PMC engine a proper warm-up. Returns the number of activities ingested,
     // or nil on failure. FEATURES.md "Deeper Garmin history backfill".
-    func backfillActivities(startDate: String, endDate: String) async -> Int? {
+    /// `force` re-fetches & recomputes even already-stored activities (the
+    /// "recompute all" path); otherwise stored activities are skipped (the cache).
+    func backfillActivities(startDate: String, endDate: String, force: Bool = false) async -> Int? {
         do {
             let raw = try await client.getActivitiesByDate(start: startDate, end: endDate)
+            let snapshot = await TrainingDataStore.shared.latestSnapshot()
+            let candidateIDs = Set(raw.compactMap { ($0["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" } })
+            let cache = await TrainingDataStore.shared.cachedActivities(ids: candidateIDs)
             var toIngest: [IngestedActivity] = []
             for activity in raw {
-                let rec = await formatActivityRecord(activity)
-                if let dto = ingestDTO(from: rec) { toIngest.append(dto) }
+                let gid = (activity["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" }
+                if !force, let gid, cache[gid] != nil { continue }   // cache: skip known
+                var rec = await formatActivityRecord(activity)
+                // Preserve a prior manual distance override across a forced re-fetch.
+                if let gid, let cached = cache[gid],
+                   let data = cached.detailsJSON.data(using: .utf8),
+                   let prior = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["manual_distance_m"] {
+                    rec["manual_distance_m"] = prior
+                }
+                let (_, tss) = TSSScoring.score(&rec, snapshot: snapshot)
+                if let dto = ingestDTO(from: rec, tss: tss) { toIngest.append(dto) }
             }
             await TrainingDataStore.shared.ingest(toIngest)
             return toIngest.count
@@ -494,47 +546,56 @@ actor GarminService {
     private func compactSteps(fromDetails details: [String: Any], sport: String) -> [[String: Any]] {
         let segments = details["workoutSegments"] as? [[String: Any]] ?? []
         let isSwim = WorkoutNormalizer.swimSportKeys.contains(sport)
-        var out: [[String: Any]] = []
-        func walk(_ stepList: [[String: Any]]) {
+        // Repeat groups are PRESERVED (emitted as a `repeat` block with
+        // `repeat_count`/`repeat_steps`) rather than flattened, so the real
+        // "3×12 min" structure survives for the UI. `PlannedTSS` expands them and
+        // `GarminWorkoutBuilder` rebuilds them, so this stays symmetric.
+        func leaf(_ step: [String: Any]) -> [String: Any] {
+            var compact: [String: Any] = [
+                "type": (step["stepType"] as? [String: Any])?["stepTypeKey"] as? String ?? "interval"
+            ]
+            let endKey = (step["endCondition"] as? [String: Any])?["conditionTypeKey"] as? String ?? "time"
+            let endValue = Coerce.double(step["endConditionValue"]) ?? 0
+            if endKey.contains("distance") {
+                compact["distance_meters"] = endValue
+            } else {
+                compact["duration_seconds"] = endValue
+            }
+            let targetKey = (step["targetType"] as? [String: Any])?["workoutTargetTypeKey"] as? String ?? "no.target"
+            if let low = Coerce.double(step["targetValueOne"]), let high = Coerce.double(step["targetValueTwo"]) {
+                switch targetKey {
+                case "power.zone":
+                    compact["target_type"] = "power"
+                    compact["target_low"] = low; compact["target_high"] = high
+                case "heart.rate.zone":
+                    compact["target_type"] = "heart_rate"
+                    compact["target_low"] = low; compact["target_high"] = high
+                case "pace.zone" where low > 0 && high > 0:
+                    let factor = isSwim ? 100.0 : 1000.0
+                    compact["target_type"] = "pace"
+                    compact["target_low"] = factor / high   // faster speed ⇒ smaller seconds
+                    compact["target_high"] = factor / low
+                default:
+                    break
+                }
+            }
+            return compact
+        }
+        func walk(_ stepList: [[String: Any]]) -> [[String: Any]] {
+            var out: [[String: Any]] = []
             for step in stepList {
                 if (step["type"] as? String) == "RepeatGroupDTO" {
                     let iterations = max(1, Coerce.double(step["numberOfIterations"]).map { Int($0) } ?? 1)
-                    let children = step["workoutSteps"] as? [[String: Any]] ?? []
-                    for _ in 0 ..< iterations { walk(children) }
-                    continue
-                }
-                var compact: [String: Any] = [
-                    "type": (step["stepType"] as? [String: Any])?["stepTypeKey"] as? String ?? "interval"
-                ]
-                let endKey = (step["endCondition"] as? [String: Any])?["conditionTypeKey"] as? String ?? "time"
-                let endValue = Coerce.double(step["endConditionValue"]) ?? 0
-                if endKey.contains("distance") {
-                    compact["distance_meters"] = endValue
+                    let children = walk(step["workoutSteps"] as? [[String: Any]] ?? [])
+                    out.append(["type": "repeat", "repeat_count": iterations, "repeat_steps": children])
                 } else {
-                    compact["duration_seconds"] = endValue
+                    out.append(leaf(step))
                 }
-                let targetKey = (step["targetType"] as? [String: Any])?["workoutTargetTypeKey"] as? String ?? "no.target"
-                if let low = Coerce.double(step["targetValueOne"]), let high = Coerce.double(step["targetValueTwo"]) {
-                    switch targetKey {
-                    case "power.zone":
-                        compact["target_type"] = "power"
-                        compact["target_low"] = low; compact["target_high"] = high
-                    case "heart.rate.zone":
-                        compact["target_type"] = "heart_rate"
-                        compact["target_low"] = low; compact["target_high"] = high
-                    case "pace.zone" where low > 0 && high > 0:
-                        let factor = isSwim ? 100.0 : 1000.0
-                        compact["target_type"] = "pace"
-                        compact["target_low"] = factor / high   // faster speed ⇒ smaller seconds
-                        compact["target_high"] = factor / low
-                    default:
-                        break
-                    }
-                }
-                out.append(compact)
             }
+            return out
         }
-        for segment in segments { walk(segment["workoutSteps"] as? [[String: Any]] ?? []) }
+        var out: [[String: Any]] = []
+        for segment in segments { out.append(contentsOf: walk(segment["workoutSteps"] as? [[String: Any]] ?? [])) }
         return out
     }
 

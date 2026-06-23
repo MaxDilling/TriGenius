@@ -106,15 +106,20 @@ final class DataSyncCoordinator {
     /// CTL (Fitness, 42-day EWMA) has a proper >42-day warm-up. Garmin only — the
     /// Apple Health sync already backfills generously on its first run. Returns
     /// the number of activities ingested, or nil if unavailable / failed.
+    /// `force` re-fetches every activity in the window (ignoring the per-activity
+    /// cache) and recomputes its TSS + distance — used by the "recompute all" action
+    /// so existing activities pick up newly-computed fields (normalized pace, swim
+    /// length cleaning). Manual distance overrides are preserved.
     @discardableResult
-    func deepBackfill(source: DataSource, days: Int = 240) async -> Int? {
+    func deepBackfill(source: DataSource, days: Int = 240, force: Bool = false) async -> Int? {
         guard source == .garmin, await GarminAuth.shared.isAuthenticated else { return nil }
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         guard let from = cal.date(byAdding: .day, value: -days, to: today) else { return nil }
         let count = await GarminService.shared.backfillActivities(
             startDate: DateFormatter.ymd.string(from: from),
-            endDate: DateFormatter.ymd.string(from: today)
+            endDate: DateFormatter.ymd.string(from: today),
+            force: force
         )
         if count != nil { markSynced(source) }
         return count
@@ -165,13 +170,19 @@ final class DataSyncCoordinator {
         let id = item["workout_id"].map { "garmin:\($0)" } ?? "garmin:\(dateStr)"
         let data = item["workout_data"] as? [String: Any] ?? [:]
         let sport = data["sport"] as? String ?? "other"
+        let steps = data["steps"] as? [[String: Any]] ?? []
         // Intensity-based planned TSS from the workout's structured steps; nil falls
         // back to the duration heuristic at read time.
         let targetTSS = PlannedTSS.estimate(
-            compactSteps: data["steps"] as? [[String: Any]] ?? [],
+            compactSteps: steps,
             family: SportFamily(sportKey: sport),
             thresholds: thresholds
         )
+        // Persist the structure verbatim so the UI can render it (see
+        // `ScheduledWorkoutRecord.stepsJSON`). No extra API calls — these steps were
+        // already fetched for the TSS estimate above.
+        let stepsJSON = (try? JSONSerialization.data(withJSONObject: steps))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
         return IngestedScheduledWorkout(
             id: id,
             source: "garmin",
@@ -181,6 +192,7 @@ final class DataSyncCoordinator {
             targetDurationMinutes: (data["duration_minutes"] as? NSNumber)?.doubleValue ?? 0,
             targetTSS: targetTSS,
             notes: data["description"] as? String ?? "",
+            stepsJSON: stepsJSON,
             associatedActivityId: item["associated_activity_id"].map { "\($0)" }
         )
     }

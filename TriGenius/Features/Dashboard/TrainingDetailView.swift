@@ -21,6 +21,8 @@ struct TrainingDetailView: View {
     @State private var exportFile: ExportFile?
     @State private var isExporting = false
     @State private var exportError: String?
+    @State private var showDistanceEdit = false
+    @State private var distanceInput = ""
 
     private var family: SportFamily { SportFamily(sportKey: record.sport) }
     private var details: [String: Any] {
@@ -38,6 +40,7 @@ struct TrainingDetailView: View {
                 heroCapsule
                 coachInsight
                 secondaryMetrics
+                computedCard
                 if isHealthKit {
                     heartRateCard
                 }
@@ -57,6 +60,21 @@ struct TrainingDetailView: View {
             Button("OK", role: .cancel) { exportError = nil }
         } message: {
             Text(exportError ?? "")
+        }
+        .alert("Override distance", isPresented: $showDistanceEdit) {
+            TextField("Distance (km)", text: $distanceInput)
+                #if os(iOS)
+                .keyboardType(.decimalPad)
+                #endif
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                let cleaned = distanceInput.replacingOccurrences(of: ",", with: ".")
+                if let km = Double(cleaned), km >= 0 {
+                    Task { await TrainingDataStore.shared.overrideDistance(activityId: record.id, distanceKm: km) }
+                }
+            }
+        } message: {
+            Text("Manually set this activity's distance. Recomputes its TSS; survives the next Garmin sync.")
         }
     }
 
@@ -190,6 +208,64 @@ struct TrainingDetailView: View {
             }
             .cardSurface()
         }
+    }
+
+    // MARK: Computed values (our self-computed TSS inputs) + distance override
+
+    /// The normalized inputs we derive ourselves (vs Garmin's raw values).
+    private var computedRows: [SecondaryMetric] {
+        var rows: [SecondaryMetric] = []
+        if let pace = Coerce.double((details["running"] as? [String: Any])?["normalized_pace_s_per_km"]), pace > 0 {
+            rows.append(.init(label: "Normalized Pace", value: paceLabel(pace), icon: "speedometer"))
+        }
+        if let np = Coerce.double((details["cycling"] as? [String: Any])?["normalized_power_w"]), np > 0 {
+            rows.append(.init(label: "Normalized Power", value: "\(Int(np)) W", icon: "bolt"))
+        }
+        if let swim = details["swimming"] as? [String: Any],
+           let cleaned = Coerce.double(swim["cleaned_distance_m"]),
+           let garmin = Coerce.double(swim["garmin_distance_m"]), garmin > 0, cleaned > 0 {
+            let pct = Int(((garmin / cleaned) - 1) * 100)
+            rows.append(.init(label: "Cleaned lengths",
+                              value: "\(Int(cleaned)) m (Garmin \(Int(garmin)) m, \(pct >= 0 ? "+" : "")\(pct)%)",
+                              icon: "ruler"))
+        }
+        return rows
+    }
+
+    private var computedCard: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+            HStack {
+                Text("Computed").font(.headline)
+                Spacer()
+                Button {
+                    distanceInput = String(format: "%.2f", record.distanceKm)
+                    showDistanceEdit = true
+                } label: {
+                    Label("Edit distance", systemImage: "pencil")
+                }
+                .font(.caption)
+                .buttonStyle(.borderless)
+            }
+            metricRow("Distance", String(format: "%.2f km", record.distanceKm), "ruler")
+            ForEach(computedRows) { row in
+                metricRow(row.label, row.value, row.icon)
+            }
+        }
+        .cardSurface()
+    }
+
+    private func metricRow(_ label: String, _ value: String, _ icon: String) -> some View {
+        HStack {
+            Label(label, systemImage: icon).font(.subheadline)
+            Spacer()
+            Text(value).font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+        }
+        .padding(.vertical, Theme.Spacing.xs)
+    }
+
+    private func paceLabel(_ secPerKm: Double) -> String {
+        let s = Int(secPerKm.rounded())
+        return String(format: "%d:%02d /km", s / 60, s % 60)
     }
 
     // MARK: Heart rate

@@ -552,26 +552,12 @@ private struct AgendaCard: View {
 private struct PlannedAgendaCard: View {
     let workout: ScheduledWorkoutRecord
 
-    private var family: SportFamily { SportFamily(sportKey: workout.sport) }
-    private var isEstimatedTSS: Bool { workout.targetTSS == nil }
-    private var targetTSS: Double {
-        workout.targetTSS ?? WeeklyTargets.estimatedTSS(family: family, minutes: workout.targetDurationMinutes)
-    }
+    private var family: SportFamily { workout.family }
 
     var body: some View {
         AgendaWorkoutHeader(icon: family.icon, color: family.color,
-                            title: workout.name, summary: summaryLine)
+                            title: workout.name, summary: workout.plannedSummaryLine(uppercased: true))
             .dashCard()
-    }
-
-    private var summaryLine: String {
-        var parts: [String] = []
-        if workout.targetDurationMinutes > 0 { parts.append(durationHM(workout.targetDurationMinutes).uppercased()) }
-        if targetTSS > 0 {
-            // A "~" marks an estimated TSS (no explicit target from the source).
-            parts.append("\(isEstimatedTSS ? "~" : "")\(Int(targetTSS.rounded())) TSS")
-        }
-        return parts.isEmpty ? "Target not set" : parts.joined(separator: "  •  ")
     }
 }
 
