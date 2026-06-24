@@ -162,6 +162,11 @@ final class DashboardViewModel {
     }
 
     /// Build the compact data summary + a launch-stable signature for caching.
+    ///
+    /// The Form (TSB) line is PRE-CLASSIFIED here (not left to the model to
+    /// interpret) so a small on-device model can't misread a normal negative TSB as
+    /// "hard training / recover" — see BUGS.md. Trend deltas give it something to
+    /// say beyond the raw level.
     private static func insightInputs(
         pmc: PMCResult?,
         targets: [SportFamily: WeeklyTarget],
@@ -169,7 +174,9 @@ final class DashboardViewModel {
     ) -> (summary: String, signature: Int) {
         var lines: [String] = []
         if let s = pmc?.snapshot {
-            lines.append("Training load — Fitness (CTL) \(Int(s.ctl.rounded())), Fatigue (ATL) \(Int(s.atl.rounded())), Form (TSB) \(Int(s.tsb.rounded())).")
+            let ctlTrend = trendWord(delta: delta7(pmc) { $0.ctl })
+            lines.append("Fitness (CTL) \(Int(s.ctl.rounded())) (\(ctlTrend) over 7 days); Fatigue (ATL) \(Int(s.atl.rounded())); Form (TSB) \(Int(s.tsb.rounded())).")
+            lines.append("Form interpretation: \(formInterpretation(tsb: s.tsb, ctl: s.ctl))")
             for sig in ProactiveCoach.signals(from: s) {
                 lines.append("Flag: \(sig.message)")
             }
@@ -182,6 +189,38 @@ final class DashboardViewModel {
         }
         let summary = lines.joined(separator: "\n")
         return (summary, stableHash(summary))
+    }
+
+    /// Plain-language read of Form (TSB) so the model classifies it correctly.
+    /// Negative-while-building is the productive norm, not a recovery flag.
+    private static func formInterpretation(tsb: Double, ctl: Double) -> String {
+        switch tsb {
+        case ..<(-30):
+            return "fatigue is HIGH (deep negative) — recovery is genuinely warranted before adding load."
+        case ..<(-10):
+            return "productive training zone — this negative Form is normal and desirable while building fitness; NOT a recovery flag."
+        case ..<5:
+            return "neutral / maintenance — balanced load and recovery."
+        case ..<15:
+            return "fresh — well recovered, good for a key session."
+        default:
+            return ctl < 20
+                ? "very fresh but fitness (CTL) is low — this points to detraining, not race-readiness; consistent volume is the lever."
+                : "very fresh / tapered — race-ready."
+        }
+    }
+
+    /// 7-day change in a PMC metric, or 0 when history is too short.
+    private static func delta7(_ pmc: PMCResult?, _ metric: (PMCPoint) -> Double) -> Int {
+        guard let now = pmc?.points.last.map(metric),
+              let then = pmc?.value(daysAgo: 7, metric) else { return 0 }
+        return Int((now - then).rounded())
+    }
+
+    private static func trendWord(delta: Int) -> String {
+        if delta > 1 { return "rising +\(delta)" }
+        if delta < -1 { return "falling \(delta)" }
+        return "flat"
     }
 
     /// Deterministic djb2 hash — `String.hashValue` is per-process randomized,

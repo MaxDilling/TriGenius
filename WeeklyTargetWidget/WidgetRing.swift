@@ -36,7 +36,7 @@ struct WidgetRing: View {
                     Circle()
                         .trim(from: fraction, to: projectedFraction)
                         .stroke(color.opacity(0.40),
-                                style: StrokeStyle(lineWidth: lineWidth, lineCap: .butt, dash: [4, 4]))
+                                style: StrokeStyle(lineWidth: lineWidth, lineCap: .butt, dash: [2, 2]))
                         .rotationEffect(.degrees(-90))
                 }
                 Circle()

@@ -22,8 +22,9 @@ nonisolated enum WorkoutNormalizer {
     enum Band {
         static let paceFasterSeconds = 20.0   // sec/km subtracted -> faster bound
         static let paceSlowerSeconds = 10.0   // sec/km added -> slower bound
-        static let heartRateBpm = 3.0
+        static let heartRateBpm = 4.0
         static let powerFraction = 0.05       // ±5 %
+        static let speedFraction = 0.05       // ±5 % (km/h)
         static let cadenceRpm = 3.0
         /// Below this, a "pace" value can't be sec/km (faster than 1:00/km) — most
         /// likely the model sent m/s, so we skip expansion rather than emit garbage.
@@ -92,7 +93,7 @@ nonisolated enum WorkoutNormalizer {
         var remaining = (durationMinutes ?? 60) * 60
 
         if includeWarmup && remaining >= 600 {
-            let secs = Int(min(Double(remaining) * 0.1, 300))
+            let secs = min(remaining / 10, 300)
             steps.append(["type": "warmup", "end_condition": "time", "duration_seconds": secs])
             remaining -= secs
             notes.append("Warm-up: added \(secs / 60) min (default).")
@@ -100,7 +101,7 @@ nonisolated enum WorkoutNormalizer {
 
         var cooldownSecs = 0
         if includeCooldown && remaining >= 600 {
-            cooldownSecs = Int(min(Double(remaining) * 0.1, 300))
+            cooldownSecs = min(remaining / 10, 300)
             remaining -= cooldownSecs
         }
 
@@ -201,6 +202,10 @@ nonisolated enum WorkoutNormalizer {
             let low = (center * (1 - Band.powerFraction)).rounded()
             let high = (center * (1 + Band.powerFraction)).rounded()
             return (low, high, "power \(Int(center)) → \(Int(low))–\(Int(high)) W (±\(Int(Band.powerFraction * 100))%)")
+        case "speed":
+            let low = round1(center * (1 - Band.speedFraction))
+            let high = round1(center * (1 + Band.speedFraction))
+            return (low, high, "speed \(round1(center)) → \(low)–\(high) km/h (±\(Int(Band.speedFraction * 100))%)")
         case "cadence":
             let low = (center - Band.cadenceRpm).rounded()
             let high = (center + Band.cadenceRpm).rounded()
@@ -218,6 +223,8 @@ nonisolated enum WorkoutNormalizer {
         guard let s = value as? String, !s.isEmpty else { return nil }
         return Coerce.token(s)
     }
+
+    private static func round1(_ v: Double) -> Double { (v * 10).rounded() / 10 }
 
     private static func paceStr(_ secPerKm: Double) -> String {
         let total = Int(secPerKm.rounded())

@@ -26,14 +26,15 @@ struct WeeklyTargetWidgetView: View {
     // MARK: Medium — three labeled rings
 
     private var mediumBody: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             header
             HStack(spacing: 12) {
                 ForEach(disciplines, id: \.sport) { entry in
-                    WidgetRing(entry: entry, diameter: 56, lineWidth: 6, showLabels: true)
+                    WidgetRing(entry: entry, diameter: 50, lineWidth: 6, showLabels: true)
                         .frame(maxWidth: .infinity)
                 }
-            }
+            }.frame(maxHeight: .infinity)
+
         }
     }
 
@@ -46,7 +47,7 @@ struct WeeklyTargetWidgetView: View {
                 .foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 ForEach(disciplines, id: \.sport) { entry in
-                    WidgetRing(entry: entry, diameter: 40, lineWidth: 5, showLabels: false)
+                    WidgetRing(entry: entry, diameter: 34, lineWidth: 5, showLabels: false)
                         .frame(maxWidth: .infinity)
                 }
             }

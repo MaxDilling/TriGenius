@@ -396,6 +396,27 @@ final class TrainingDataStore {
         markChanged()
     }
 
+    /// Record the athlete's subjective feedback (feel 1–5, RPE 1–10, free-text
+    /// note) on a completed activity, stored in `detailsJSON` so it survives
+    /// resync (via the activity cache) and is served verbatim by get_activities.
+    /// The coach passes the id it saw in get_activities (the raw provider id), so
+    /// we match the stored record id (`garmin:<id>` / `healthkit:<id>`) too.
+    /// Returns false when no matching activity exists. Only the provided fields
+    /// are written; the rest are left untouched.
+    func setWorkoutFeedback(activityId: String, feel: Int?, rpe: Int?, note: String?) -> Bool {
+        let candidates = [activityId, "garmin:\(activityId)", "healthkit:\(activityId)"]
+        guard let r = (try? context.fetch(
+                  FetchDescriptor<ActivityRecord>(predicate: #Predicate { candidates.contains($0.id) })))?.first,
+              var details = Self.jsonObject(r.detailsJSON) else { return false }
+        if let feel { details["feel"] = feel }
+        if let rpe { details["rpe"] = rpe }
+        if let note { details["notes"] = note }
+        r.detailsJSON = Self.jsonString(details) ?? r.detailsJSON
+        try? context.save()
+        markChanged()
+        return true
+    }
+
     private static func jsonObject(_ s: String) -> [String: Any]? {
         guard let d = s.data(using: .utf8) else { return nil }
         return (try? JSONSerialization.jsonObject(with: d)) as? [String: Any]

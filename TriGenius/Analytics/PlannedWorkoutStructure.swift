@@ -21,9 +21,9 @@ struct PlannedStepLeaf: Identifiable {
     /// True when the step ends on distance — `endValue` is meters, else seconds.
     let isDistance: Bool
     let endValue: Double
-    /// "power" | "pace" | "heart_rate", or nil for an untargeted step.
+    /// "power" | "pace" | "speed" | "heart_rate" | "cadence", or nil for an untargeted step.
     let targetType: String?
-    /// power: watts · pace: seconds (sec/km run/bike, sec/100 m swim) · hr: bpm.
+    /// power: W · pace: sec (sec/km run/bike, sec/100 m swim) · speed: km/h · hr: bpm · cadence: rpm/spm.
     let targetLow: Double?
     let targetHigh: Double?
 
@@ -103,7 +103,7 @@ struct PlannedWorkoutStructure {
             return nil
         }
         var target = step["target_type"] as? String
-        if target == "no_target" || target == "cadence" { target = nil }
+        if target == "no_target" { target = nil }
         return PlannedStepLeaf(
             typeKey: typeKey, isDistance: isDistance, endValue: endValue,
             targetType: target,
@@ -114,16 +114,23 @@ struct PlannedWorkoutStructure {
 
     // MARK: Target formatting (needs family for pace units)
 
-    /// Full target string for a step, e.g. "250–265 W", "4:30–4:50 /km", "145–155 bpm".
+    /// Full target string for a step, e.g. "250–265 W", "4:30–4:50 /km",
+    /// "145–155 bpm", "30–32 km/h", "85–90 rpm".
     func targetText(_ leaf: PlannedStepLeaf) -> String? {
         guard let type = leaf.targetType else { return nil }
         switch type {
         case "power":      return PlannedWorkoutFormat.range(leaf.targetLow, leaf.targetHigh, unit: "W")
         case "heart_rate": return PlannedWorkoutFormat.range(leaf.targetLow, leaf.targetHigh, unit: "bpm")
         case "pace":       return PlannedWorkoutFormat.paceRange(leaf.targetLow, leaf.targetHigh, swim: family == .swim)
+        case "speed":      return PlannedWorkoutFormat.speedRange(leaf.targetLow, leaf.targetHigh)
+        case "cadence":    return PlannedWorkoutFormat.range(leaf.targetLow, leaf.targetHigh, unit: cadenceUnit)
         default:           return nil
         }
     }
+
+    /// Cadence unit per discipline: cycling counts crank revolutions (rpm),
+    /// running and swimming count steps / strokes per minute (spm).
+    private var cadenceUnit: String { family == .bike ? "rpm" : "spm" }
 
     // MARK: Summaries
 
@@ -274,6 +281,25 @@ enum PlannedWorkoutFormat {
     private static func mmss(_ seconds: Double) -> String {
         let s = Int(seconds.rounded())
         return String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    /// A speed target range in km/h, e.g. "30–32 km/h" (or "30 km/h" when low == high).
+    /// One decimal only when a value isn't whole, to stay compact.
+    static func speedRange(_ low: Double?, _ high: Double?) -> String? {
+        let lo = low.flatMap { $0 > 0 ? $0 : nil }
+        let hi = high.flatMap { $0 > 0 ? $0 : nil }
+        switch (lo, hi) {
+        case let (l?, h?) where abs(l - h) >= 0.1:
+            return "\(kmh(min(l, h)))–\(kmh(max(l, h))) km/h"
+        case let (l?, _): return "\(kmh(l)) km/h"
+        case let (_, h?): return "\(kmh(h)) km/h"
+        default:          return nil
+        }
+    }
+
+    private static func kmh(_ v: Double) -> String {
+        v.truncatingRemainder(dividingBy: 1) == 0
+            ? String(Int(v)) : String(format: "%.1f", v)
     }
 }
 

@@ -183,7 +183,7 @@ struct CoachChatView: View {
                 Task { await viewModel.sendMessage() }
             }
         }
-        .navigationTitle("TriGenius Coach")
+        .navigationTitle("Coach")
         .task { viewModel.prewarm() }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -260,10 +260,10 @@ private struct GreetingView: View {
     let text: String
 
     var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "figure.run.circle.fill")
+        VStack(alignment: .center, spacing: 16) {
+            Image(systemName: "apple.intelligence")
                 .font(.system(size: 48))
-                .foregroundStyle(.blue.gradient)
+                .foregroundStyle(.secondary)
             Text(text)
                 .font(.body)
                 .multilineTextAlignment(.center)

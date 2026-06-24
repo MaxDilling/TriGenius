@@ -41,7 +41,7 @@ final class HealthKitToolHandler: CoachToolHandler {
         [
             ToolDefinition(
                 name: "get_health_metrics",
-                description: "Fetch health metrics from Apple Health for the last N days. Returns steps, resting heart rate, HRV, sleep duration, and active energy.",
+                description: "Fetch health metrics from Apple Health for the last N days. Returns steps, resting heart rate, sleep duration, and active energy.",
                 parameters: [
                     "type": "object",
                     "properties": [
@@ -112,7 +112,7 @@ final class ProfileToolHandler: CoachToolHandler {
         [
             ToolDefinition(
                 name: "update_athlete_profile",
-                description: "Persist athlete profile changes, preferences, goals, sport limitations, and training-plan metadata in long-term memory.",
+                description: "Persist athlete profile changes, preferences, goals and sport limitations in long-term memory.",
                 parameters: [
                     "type": "object",
                     "properties": [
@@ -124,10 +124,6 @@ final class ProfileToolHandler: CoachToolHandler {
                         "preferred_rest_day": ["type": "string", "description": "Preferred rest day."],
                         "morning_workouts": ["type": "boolean", "description": "Whether morning workouts are preferred."],
                         "indoor_trainer_available": ["type": "boolean", "description": "Whether an indoor trainer is available."],
-                        "target_event": ["type": "string", "description": "Primary target race or event."],
-                        "event_date": ["type": "string", "description": "Event date in YYYY-MM-DD format."],
-                        "current_phase": ["type": "string", "description": "Current training phase (base/build/peak/taper/recovery)."],
-                        "monthly_focus": ["type": "string", "description": "Main focus for the current month."],
                         "feedback": ["type": "string", "description": "Athlete feedback to record."],
                         "feedback_category": ["type": "string", "description": "Feedback category: schedule, intensity, recovery, injury, or progress."],
                         "sport": [
@@ -320,22 +316,6 @@ final class ProfileToolHandler: CoachToolHandler {
         if let trainer = arguments["indoor_trainer_available"] as? Bool {
             memory.updatePreferences { $0.indoorTrainerAvailable = trainer }
             updates.append("indoor trainer → \(trainer)")
-        }
-        if let ev = arguments["target_event"] as? String {
-            memory.updateTrainingPlan { $0.targetEvent = ev }
-            updates.append("target event → \(ev)")
-        }
-        if let dt = arguments["event_date"] as? String {
-            memory.updateTrainingPlan { $0.eventDate = dt }
-            updates.append("event date → \(dt)")
-        }
-        if let phase = arguments["current_phase"] as? String {
-            memory.updateTrainingPlan { $0.currentPhase = phase }
-            updates.append("phase → \(phase)")
-        }
-        if let focus = arguments["monthly_focus"] as? String {
-            memory.updateTrainingPlan { $0.monthlyFocus = focus }
-            updates.append("monthly focus → \(focus)")
         }
         if let fb = arguments["feedback"] as? String {
             let cat = arguments["feedback_category"] as? String ?? "general"
@@ -581,6 +561,63 @@ final class TrainingLoadToolHandler: CoachToolHandler {
     private static func round1(_ v: Double) -> Double { (v * 10).rounded() / 10 }
 }
 
+// MARK: - Workout Feedback Tool Handler
+//
+// Always-on and source-agnostic. Lets the coach record the athlete's subjective
+// post-session feedback (Garmin's "How did you feel?" + perceived-effort prompt)
+// against a completed activity, stored as a local override on the activity record
+// so get_activities surfaces it — independent of whether the activity came from
+// Garmin or Apple Health. The matching read-side fields (feel / rpe / notes) are
+// populated from Garmin directly in GarminService.formatActivityRecord.
+
+@MainActor
+final class WorkoutFeedbackToolHandler: CoachToolHandler {
+
+    var definitions: [ToolDefinition] {
+        [
+            ToolDefinition(
+                name: "log_workout_feedback",
+                description: "Record the athlete's subjective feedback on a completed activity, mirroring Garmin's post-workout prompt. Pass the activity's `id` from get_activities. `feel` is a 1–5 scale (1 = very weak, 3 = normal, 5 = very strong), `rpe` is the session perceived effort on a 1–10 scale (Borg CR10), and `note` is an optional free-text comment. Stored locally on the activity and returned by get_activities. Provide at least one of feel / rpe / note.",
+                parameters: [
+                    "type": "object",
+                    "properties": [
+                        "activity_id": ["type": "string", "description": "Activity id from get_activities."],
+                        "feel": ["type": "integer", "description": "How the session felt, 1–5 (1 very weak … 5 very strong)."],
+                        "rpe": ["type": "integer", "description": "Session perceived effort, 1–10 (Borg CR10)."],
+                        "note": ["type": "string", "description": "Optional free-text comment on the session."]
+                    ],
+                    "required": ["activity_id"]
+                ]
+            )
+        ]
+    }
+
+    func execute(name: String, arguments: [String: Any]) async throws -> String {
+        guard name == "log_workout_feedback" else { return "Unknown feedback tool: \(name)" }
+        guard let id = Coerce.string(arguments["activity_id"]), !id.isEmpty else {
+            return "✗ Error: activity_id is required."
+        }
+        let feel = Coerce.int(arguments["feel"])
+        let rpe = Coerce.int(arguments["rpe"])
+        let note = (Coerce.string(arguments["note"])?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+        guard feel != nil || rpe != nil || note != nil else {
+            return "✗ Error: provide at least one of feel (1–5), rpe (1–10), or note."
+        }
+        if let feel, !(1...5).contains(feel) { return "✗ Error: feel must be between 1 and 5." }
+        if let rpe, !(1...10).contains(rpe) { return "✗ Error: rpe must be between 1 and 10." }
+
+        let ok = TrainingDataStore.shared.setWorkoutFeedback(activityId: id, feel: feel, rpe: rpe, note: note)
+        guard ok else {
+            return "✗ No completed activity found for id \(id). List it with get_activities first."
+        }
+        var saved: [String] = []
+        if let feel { saved.append("feel \(feel)/5") }
+        if let rpe { saved.append("RPE \(rpe)/10") }
+        if note != nil { saved.append("note") }
+        return "✓ Saved feedback for \(id): \(saved.joined(separator: ", "))."
+    }
+}
+
 // MARK: - Garmin Tool Handler
 //
 // Tool names mirror the HealthKit handler (get_activities / get_health_metrics)
@@ -632,7 +669,7 @@ final class GarminToolHandler: CoachToolHandler {
                         ]
                     ],
                     "skip_last_rest": ["type": "boolean", "description": "Skip the last rest in a repeat block."],
-                    "target_type": ["type": "string", "enum": ["no_target", "heart_rate", "power", "pace", "cadence"], "description": "Intensity target type. Units: pace = seconds per km, heart_rate = bpm, power = watts, cadence = rpm."],
+                    "target_type": ["type": "string", "enum": ["no_target", "heart_rate", "power", "pace", "speed", "cadence"], "description": "Intensity target type. Units: pace = seconds per km (seconds per 100 m for swim), speed = km/h, heart_rate = bpm, power = watts, cadence = rpm (cycling) or spm (run/swim)."],
                     "target_low": ["type": "number", "description": "Target value. Pass a single value here (and/or in target_high) and the app expands it into a sensible band automatically — e.g. pace 300 (5:00/km) → 4:40–5:10."],
                     "target_high": ["type": "number", "description": "Optional explicit upper bound. Provide a distinct target_low/target_high pair only to override the automatic band."]
                 ]
@@ -644,7 +681,7 @@ final class GarminToolHandler: CoachToolHandler {
         [
             ToolDefinition(
                 name: "get_health_metrics",
-                description: "Fetch recovery data from Garmin: HRV, sleep, and short-term trends.",
+                description: "Fetch recovery data from Garmin: sleep (duration + score) and resting heart rate, with short-term trends. Secondary signals — weigh against the load/form trend, not in isolation.",
                 parameters: [
                     "type": "object",
                     "properties": ["days": ["type": "integer", "description": "Number of days to fetch. Default 7."]],
@@ -755,11 +792,6 @@ final class GarminToolHandler: CoachToolHandler {
                     ],
                     "required": ["workout_id", "workout_data"]
                 ]
-            ),
-            ToolDefinition(
-                name: "sync_user_settings",
-                description: "Sync Garmin-derived athlete settings such as FTP, HR zones, VO2max, weight, and CSS.",
-                parameters: ["type": "object", "properties": [:], "required": []]
             )
         ]
     }

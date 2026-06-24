@@ -23,22 +23,51 @@ import Foundation
 
 enum TSSCalculator {
 
+    /// How a completed activity's TSS was derived — so the UI can tell the athlete
+    /// where the number came from (BUGS.md "show where the TSS calculation comes
+    /// from"). Mirrors the dispatch in `compute(details:snapshot:)`.
+    enum Basis {
+        case power, runPace, swimPace, swimDuration, hrZones
+
+        /// Short, athlete-facing provenance label.
+        var label: String {
+            switch self {
+            case .power:        return "normalized power vs FTP"
+            case .runPace:      return "normalized pace vs threshold pace"
+            case .swimPace:     return "swim pace vs CSS (cleaned distance)"
+            case .swimDuration: return "duration × typical swim intensity"
+            case .hrZones:      return "heart-rate zone load"
+            }
+        }
+    }
+
     static func tss(details: [String: Any], snapshot: PerformanceSnapshot) -> Double? {
+        compute(details: details, snapshot: snapshot).tss
+    }
+
+    /// The TSS value plus how it was derived. `basis` is nil only when no number
+    /// could be produced at all (no usable inputs).
+    static func compute(details: [String: Any], snapshot: PerformanceSnapshot) -> (tss: Double?, basis: Basis?) {
         let family = SportFamily(sportKey: details["sport"] as? String ?? "other")
         let hours = (Coerce.double(details["duration_minutes"]) ?? 0) / 60.0
-        guard hours > 0 else { return nil }
+        guard hours > 0 else { return (nil, nil) }
 
         switch family {
         case .bike:
-            if let t = powerTSS(details, ftp: snapshot.cyclingFTP, hours: hours) { return t }
+            if let t = powerTSS(details, ftp: snapshot.cyclingFTP, hours: hours) { return (t, .power) }
         case .run:
-            if let t = runPaceTSS(details, thresholdPace: snapshot.lactateThrPaceSeconds, hours: hours) { return t }
+            if let t = runPaceTSS(details, thresholdPace: snapshot.lactateThrPaceSeconds, hours: hours) { return (t, .runPace) }
         case .swim:
-            if let t = swimTSS(details, css: snapshot.cssPaceSeconds, fallbackHours: hours) { return t }
+            // Swim resolves either to a CSS-paced score or a duration floor.
+            if let (t, basis) = swimResult(details, css: snapshot.cssPaceSeconds, fallbackHours: hours) {
+                return (t, basis)
+            }
         case .strength, .other:
             break
         }
-        return hrZoneTSS(details, hours: hours)   // fallback for any path with missing inputs
+        // Fallback for any path with missing inputs.
+        if let t = hrZoneTSS(details, hours: hours) { return (t, .hrZones) }
+        return (nil, nil)
     }
 
     // MARK: Power (bike)
@@ -62,8 +91,10 @@ enum TSSCalculator {
     }
 
     /// Swim sTSS from the CLEANED distance + active swim time, with a duration
-    /// floor so slow technique sessions aren't under-scored.
-    private static func swimTSS(_ details: [String: Any], css: Double?, fallbackHours: Double) -> Double? {
+    /// floor so slow technique sessions aren't under-scored. Returns the value plus
+    /// whether it came from a CSS pace (`.swimPace`) or the duration floor
+    /// (`.swimDuration`).
+    private static func swimResult(_ details: [String: Any], css: Double?, fallbackHours: Double) -> (Double, Basis)? {
         let swim = sub(details, "swimming")
         let swimTime = Coerce.double(swim?["swim_time_s"])
         // Effective (resolved manual/cleaned/Garmin) distance — set by TSSScoring.
@@ -73,10 +104,12 @@ enum TSSCalculator {
         let floor = TSSConstants.swimDefaultIF * TSSConstants.swimDefaultIF * hours * 100
 
         guard let css, css > 0, let swimTime, swimTime > 0,
-              let distance, distance > 0 else { return round(floor) }   // floor-only
+              let distance, distance > 0 else { return (round(floor), .swimDuration) }   // floor-only
         let pace = swimTime / (distance / 100.0)           // sec / 100 m
         let intensity = clamp(css / pace)
-        return round(max(intensity * intensity * hours * 100, floor))
+        let value = round(max(intensity * intensity * hours * 100, floor))
+        // If the floor dominated, the CSS pace didn't actually drive the score.
+        return (value, value > round(floor) ? .swimPace : .swimDuration)
     }
 
     // MARK: HR zone-load (fallback)

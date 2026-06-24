@@ -31,6 +31,7 @@ struct PlannedWorkoutDetailView: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                 header
                 heroCapsule
+                tssBasisNote
                 if let structure, !structure.steps.isEmpty {
                     structureCard(structure)
                 }
@@ -130,6 +131,25 @@ struct PlannedWorkoutDetailView: View {
         .glassSurface(cornerRadius: Theme.Radius.l)
     }
 
+    // MARK: TSS provenance
+    //
+    // BUGS.md: surface where the planned TSS came from. A structured session gets
+    // an intensity-based estimate from its steps; otherwise it's estimated from
+    // duration × the discipline's typical intensity (see `PlannedTSS`).
+
+    @ViewBuilder
+    private var tssBasisNote: some View {
+        if targetTSS > 0 {
+            let basis = isEstimatedTSS
+                ? "estimated from duration × typical intensity"
+                : "computed from the planned structure & intensity targets"
+            Label("TSS target \(basis)", systemImage: "function")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, Theme.Spacing.xs)
+        }
+    }
+
     // MARK: Detail rows
 
     private struct DetailRow: Identifiable {
@@ -154,9 +174,6 @@ struct PlannedWorkoutDetailView: View {
             rows.append(.init(label: "This week",
                               value: "Session \(context.index) of \(context.count) · \(percent)% load",
                               icon: "calendar.badge.clock"))
-        }
-        if isEstimatedTSS, targetTSS > 0 {
-            rows.append(.init(label: "TSS", value: "estimated from duration", icon: "wand.and.stars"))
         }
         return rows
     }

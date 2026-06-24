@@ -86,14 +86,12 @@ final class HealthKitService {
 
         async let steps = fetchDailySteps(predicate: predicate, days: days)
         async let avgHR = fetchAverageHeartRate(predicate: predicate)
-        async let hrv = fetchLatestHRV()
         async let sleep = fetchSleepHours(days: days)
         async let energy = fetchActiveEnergy(predicate: predicate, days: days)
 
         return try await HealthMetricsSummary(
             dailySteps: steps,
             averageHRbpm: avgHR,
-            latestHRVms: hrv,
             avgSleepHours: sleep,
             avgActiveEnergyKcal: energy,
             periodDays: days
@@ -219,22 +217,6 @@ final class HealthKitService {
         let unit = HKUnit.count().unitDivided(by: HKUnit.minute())
         let value = try await fetchDiscreteAverage(type: type, unit: unit, predicate: predicate)
         return value > 0 ? value : nil
-    }
-
-    private func fetchLatestHRV() async throws -> Double? {
-        guard let type = HKQuantityType.quantityType(forIdentifier: .heartRateVariabilitySDNN) else { return nil }
-        let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
-        return try await withCheckedThrowingContinuation { continuation in
-            let query = HKSampleQuery(
-                sampleType: type, predicate: nil, limit: 1, sortDescriptors: [sort]
-            ) { _, samples, error in
-                if let error { continuation.resume(throwing: error); return }
-                let value = (samples?.first as? HKQuantitySample)
-                    .map { $0.quantity.doubleValue(for: HKUnit.secondUnit(with: .milli)) }
-                continuation.resume(returning: value)
-            }
-            store.execute(query)
-        }
     }
 
     // MARK: - Performance metrics
@@ -372,7 +354,6 @@ nonisolated struct WorkoutSummary: Codable {
 struct HealthMetricsSummary: Codable {
     let dailySteps: Double
     let averageHRbpm: Double?
-    let latestHRVms: Double?
     let avgSleepHours: Double
     let avgActiveEnergyKcal: Double
     let periodDays: Int
@@ -381,7 +362,6 @@ struct HealthMetricsSummary: Codable {
         var parts: [String] = ["Health Metrics (last \(periodDays) days):"]
         parts.append("  Daily Steps (avg): \(Int(dailySteps))")
         if let hr = averageHRbpm { parts.append("  Avg. Resting HR: \(Int(hr)) bpm") }
-        if let hrv = latestHRVms { parts.append("  Latest HRV: \(Int(hrv)) ms") }
         parts.append("  Avg. Sleep: \(String(format: "%.1f", avgSleepHours)) hours")
         parts.append("  Avg. Active Energy: \(Int(avgActiveEnergyKcal)) kcal")
         return parts.joined(separator: "\n")

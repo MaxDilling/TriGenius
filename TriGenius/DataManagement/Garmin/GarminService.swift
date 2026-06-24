@@ -80,6 +80,18 @@ actor GarminService {
             data["hr_zones_seconds"] = zoneSeconds(activity, prefix: "hrTimeInZone")
         }
 
+        // Athlete's subjective post-workout feedback, mirroring Garmin's "How did
+        // you feel?" / perceived-effort prompt. Garmin stores feel as 0/25/50/75/100
+        // → mapped to a 1–5 scale, and RPE as 0–100 (×10) → a 1–10 scale. A local
+        // edit via log_workout_feedback overwrites these same keys.
+        // NOTE: validate `workoutFeel`/`workoutRpe`/`description` against a real
+        // synced activity — these are the documented Garmin activity DTO keys.
+        if let feel = Self.mappedFeel(activity["workoutFeel"]) { data["feel"] = feel }
+        if let rpe = Self.mappedRpe(activity["workoutRpe"]) { data["rpe"] = rpe }
+        if let desc = (activity["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !desc.isEmpty {
+            data["notes"] = desc
+        }
+
         if ["running", "trail_running", "treadmill_running"].contains(activityType) {
             var running: [String: Any] = [
                 "avg_pace_min_km": orNull(GarminTransform.speedToPace(Coerce.double(activity["averageSpeed"]), distanceM: 1000)),
@@ -148,6 +160,18 @@ actor GarminService {
             // Effective distance + sTSS are resolved by `TSSScoring.score` at ingest.
         }
         return data
+    }
+
+    /// Garmin feel buckets (0/25/50/75/100) → 1–5. Nil when not rated.
+    private static func mappedFeel(_ raw: Any?) -> Int? {
+        guard let v = Coerce.double(raw) else { return nil }
+        return min(5, max(1, Int((v / 25).rounded()) + 1))
+    }
+
+    /// Garmin RPE (0–100, i.e. RPE ×10) → 1–10. Nil/0 means not rated.
+    private static func mappedRpe(_ raw: Any?) -> Int? {
+        guard let v = Coerce.double(raw), v > 0 else { return nil }
+        return min(10, max(1, Int((v / 10).rounded())))
     }
 
     /// Build the local-DB ingest snapshot from a *formatted* coach record.
@@ -358,17 +382,12 @@ actor GarminService {
                 let dateStr = GarminTransform.ymd(current)
                 var day: [String: Any] = ["date": dateStr]
 
-                // HRV
-                if let hrv = try? await client.getHrvData(date: dateStr),
-                   let summary = hrv["hrvSummary"] as? [String: Any] {
-                    day["hrv"] = [
-                        "status": summary["status"] as? String ?? "Unknown",
-                        "baseline": summary["baseline"] ?? NSNull(),
-                        "last_night": summary["lastNightAvg"] ?? NSNull(),
-                        "weekly_avg": summary["weeklyAvg"] ?? NSNull(),
-                        "last_night_5min_high": summary["lastNight5MinHigh"] ?? NSNull()
-                    ]
-                } else { day["hrv"] = NSNull() }
+                // Resting heart rate (lower trend = recovered / fitter; spikes flag
+                // fatigue or illness). A secondary signal, not a driver.
+                if let hr = try? await client.getDailyHeartRate(date: dateStr),
+                   let rhr = Coerce.double(hr["restingHeartRate"]), rhr > 0 {
+                    day["resting_hr"] = Int(rhr.rounded())
+                } else { day["resting_hr"] = NSNull() }
 
                 // Sleep
                 if let sleep = try? await client.getSleepData(date: dateStr),
@@ -395,7 +414,7 @@ actor GarminService {
                     return Coerce.double(sub[path.1])
                 }
             }
-            let hrvValues = collect(("hrv", "last_night"))
+            let restingHRs = dailyMetrics.compactMap { Coerce.double($0["resting_hr"]) }
             let sleepScores = collect(("sleep", "score"))
             let sleepDurations = collect(("sleep", "duration_hours"))
 
@@ -411,10 +430,10 @@ actor GarminService {
                            "end": GarminTransform.ymd(end), "days": days],
                 "daily_metrics": dailyMetrics,
                 "summary": [
-                    "avg_hrv": avg(hrvValues, 1),
+                    "avg_resting_hr": avg(restingHRs, 0),
                     "avg_sleep_score": avg(sleepScores, 1),
                     "avg_sleep_hours": avg(sleepDurations, 1),
-                    "trend": hrvValues.isEmpty ? "Unknown" : GarminTransform.analyzeTrend(hrvValues)
+                    "resting_hr_trend": restingHRs.isEmpty ? "Unknown" : GarminTransform.analyzeTrend(restingHRs)
                 ]
             ]
             return resultString(success: true, data: metrics, message: "Retrieved health metrics for the last \(days) days")
@@ -434,80 +453,89 @@ actor GarminService {
         var completed: [[String: Any]] = []
         var seen = Set<String>()
 
-        // Calendar items (scheduled workouts, activities, garmin coach)
-        let parts = start.split(separator: "-")
-        if parts.count >= 2, let year = Int(parts[0]), let month = Int(parts[1]),
-           let calData = try? await client.connectapi("/calendar-service/year/\(year)/month/\(month - 1)") as? [String: Any],
-           let items = calData["calendarItems"] as? [[String: Any]] {
-            for item in items {
-                let itemDate = item["date"] as? String ?? ""
-                guard !itemDate.isEmpty, itemDate >= start, itemDate <= end else { continue }
-                let itemType = item["itemType"] as? String
-                if itemType == "workout", let workoutId = item["workoutId"] {
-                    let id = "\(workoutId)"
-                    if seen.contains(id) { continue }
-                    seen.insert(id)
-                    var durationMinutes: Any = NSNull()
-                    var steps: [[String: Any]] = []
-                    let sportKey = item["sportTypeKey"] as? String ?? "other"
-                    // Prefer the schedule detail: it embeds the same `workout`
-                    // payload AND the `associatedActivityId` Garmin sets once the
-                    // session is completed (used to suppress the redundant plan).
-                    // Fall back to the plain workout detail if no schedule id.
-                    var associatedActivityId: Any?
-                    let scheduleId = item["id"].map { "\($0)" }
-                    var details: [String: Any]?
-                    if let scheduleId, let schedule = try? await client.getScheduledWorkout(scheduleId: scheduleId) {
-                        details = schedule["workout"] as? [String: Any]
-                        associatedActivityId = schedule["associatedActivityId"].flatMap { $0 is NSNull ? nil : $0 }
-                    }
-                    if details == nil { details = try? await client.getWorkoutDetails(workoutId: id) }
-                    if let details {
-                        if let est = Coerce.double(details["estimatedDurationInSecs"]) {
-                            durationMinutes = Int((est / 60).rounded())
-                        }
-                        steps = compactSteps(fromDetails: details, sport: sportKey)
-                    }
-                    // workout_data mirrors the add_workouts/modify_workout shape, so
-                    // an item can be passed straight back to modify_workout.
-                    var entry: [String: Any] = [
-                        "workout_id": id, "date": itemDate, "editable": true,
-                        "workout_data": [
-                            "name": item["title"] as? String ?? "Scheduled Workout",
-                            "sport": sportKey, "duration_minutes": durationMinutes,
-                            "description": "", "steps": steps
-                        ]
-                    ]
-                    if let associatedActivityId { entry["associated_activity_id"] = "\(associatedActivityId)" }
-                    scheduled.append(entry)
-                } else if itemType == "activity" {
-                    let id = item["id"].map { "\($0)" } ?? ""
-                    if id.isEmpty || seen.contains(id) { continue }
-                    seen.insert(id)
-                    let elapsed = Coerce.double(item["elapsedDuration"])
-                    let durMs = Coerce.double(item["duration"])
-                    let durationMinutes: Any = elapsed.map { Int(($0 / 60).rounded()) }
-                        ?? durMs.map { Int(($0 / 60000).rounded()) } ?? NSNull()
-                    let sport = item["sportTypeKey"] as? String ?? activityTypeToSport((item["activityTypeId"] as? NSNumber)?.intValue) ?? "other"
-                    completed.append([
-                        "id": id, "name": item["title"] as? String ?? "Activity",
-                        "date": itemDate, "sport": sport, "duration_minutes": durationMinutes,
-                        "description": ""
-                    ])
-                } else if itemType == "fbtAdaptiveWorkout" {
-                    let uuid = item["workoutUuid"] as? String ?? ""
-                    if uuid.isEmpty || seen.contains(uuid) { continue }
-                    seen.insert(uuid)
-                    // Garmin-coach workouts are planned but not editable via our API.
-                    scheduled.append([
-                        "workout_id": uuid, "date": itemDate, "editable": false,
-                        "workout_data": [
-                            "name": "[GC] \(item["title"] as? String ?? "Training Plan Workout")",
-                            "sport": item["sportTypeKey"] as? String ?? "other",
-                            "duration_minutes": NSNull(), "description": "", "steps": []
-                        ]
-                    ])
+        // Calendar items across every month the window spans — Garmin's calendar
+        // endpoint is per-month, so a window crossing a boundary (the default
+        // look-ahead does) needs one call per month or the other month's items are
+        // lost. A failed fetch must surface as an error, never an empty result:
+        // `syncScheduledWorkouts` mirrors this list verbatim, so a silent empty
+        // would wipe every planned workout (see BUGS.md).
+        var calendarItems: [[String: Any]] = []
+        do {
+            for (year, month) in Self.monthsSpanned(start: start, end: end) {
+                let calData = try await client.connectapi("/calendar-service/year/\(year)/month/\(month - 1)") as? [String: Any]
+                calendarItems += calData?["calendarItems"] as? [[String: Any]] ?? []
+            }
+        } catch {
+            return resultString(success: false, data: nil, message: "Failed to fetch calendar: \(authMessage(error))")
+        }
+        for item in calendarItems {
+            let itemDate = item["date"] as? String ?? ""
+            guard !itemDate.isEmpty, itemDate >= start, itemDate <= end else { continue }
+            let itemType = item["itemType"] as? String
+            if itemType == "workout", let workoutId = item["workoutId"] {
+                let id = "\(workoutId)"
+                if seen.contains(id) { continue }
+                seen.insert(id)
+                var durationMinutes: Any = NSNull()
+                var steps: [[String: Any]] = []
+                let sportKey = item["sportTypeKey"] as? String ?? "other"
+                // Prefer the schedule detail: it embeds the same `workout`
+                // payload AND the `associatedActivityId` Garmin sets once the
+                // session is completed (used to suppress the redundant plan).
+                // Fall back to the plain workout detail if no schedule id.
+                var associatedActivityId: Any?
+                let scheduleId = item["id"].map { "\($0)" }
+                var details: [String: Any]?
+                if let scheduleId, let schedule = try? await client.getScheduledWorkout(scheduleId: scheduleId) {
+                    details = schedule["workout"] as? [String: Any]
+                    associatedActivityId = schedule["associatedActivityId"].flatMap { $0 is NSNull ? nil : $0 }
                 }
+                if details == nil { details = try? await client.getWorkoutDetails(workoutId: id) }
+                if let details {
+                    if let est = Coerce.double(details["estimatedDurationInSecs"]) {
+                        durationMinutes = Int((est / 60).rounded())
+                    }
+                    steps = compactSteps(fromDetails: details, sport: sportKey)
+                }
+                // workout_data mirrors the add_workouts/modify_workout shape, so
+                // an item can be passed straight back to modify_workout.
+                var entry: [String: Any] = [
+                    "workout_id": id, "date": itemDate, "editable": true,
+                    "workout_data": [
+                        "name": item["title"] as? String ?? "Scheduled Workout",
+                        "sport": sportKey, "duration_minutes": durationMinutes,
+                        "description": "", "steps": steps
+                    ]
+                ]
+                if let associatedActivityId { entry["associated_activity_id"] = "\(associatedActivityId)" }
+                scheduled.append(entry)
+            } else if itemType == "activity" {
+                let id = item["id"].map { "\($0)" } ?? ""
+                if id.isEmpty || seen.contains(id) { continue }
+                seen.insert(id)
+                let elapsed = Coerce.double(item["elapsedDuration"])
+                let durMs = Coerce.double(item["duration"])
+                let durationMinutes: Any = elapsed.map { Int(($0 / 60).rounded()) }
+                    ?? durMs.map { Int(($0 / 60000).rounded()) } ?? NSNull()
+                let sport = item["sportTypeKey"] as? String ?? activityTypeToSport((item["activityTypeId"] as? NSNumber)?.intValue) ?? "other"
+                completed.append([
+                    "id": id, "name": item["title"] as? String ?? "Activity",
+                    "date": itemDate, "sport": sport, "duration_minutes": durationMinutes,
+                    "description": ""
+                ])
+            } else if itemType == "fbtAdaptiveWorkout" {
+                let uuid = item["workoutUuid"] as? String ?? ""
+                if uuid.isEmpty || seen.contains(uuid) { continue }
+                seen.insert(uuid)
+                // Garmin-coach workouts are planned but not editable via our API.
+                scheduled.append([
+                    "workout_id": uuid, "date": itemDate, "editable": false,
+                    "workout_data": [
+                        "name": "[GC] \(item["title"] as? String ?? "Training Plan Workout")",
+                        "sport": item["sportTypeKey"] as? String ?? "other",
+                        "duration_minutes": NSNull(), "description": "", "steps": []
+                    ]
+                ])
             }
         }
 
@@ -536,6 +564,19 @@ actor GarminService {
             "scheduled_count": scheduled.count, "completed_count": completed.count
         ]
         return resultString(success: true, data: data, message: "Found \(scheduled.count) scheduled and \(completed.count) completed between \(start) and \(end)")
+    }
+
+    /// Every `(year, month)` pair the inclusive `[start, end]` window touches, where
+    /// both bounds are `YYYY-MM-DD`. Garmin's calendar endpoint is per-month, so a
+    /// window crossing a boundary needs one call per month.
+    private static func monthsSpanned(start: String, end: String) -> [(year: Int, month: Int)] {
+        func monthIndex(_ ymd: String) -> Int? {
+            let parts = ymd.split(separator: "-")
+            guard parts.count >= 2, let y = Int(parts[0]), let m = Int(parts[1]) else { return nil }
+            return y * 12 + (m - 1)
+        }
+        guard let lo = monthIndex(start), let hi = monthIndex(end), lo <= hi else { return [] }
+        return (lo...hi).map { (year: $0 / 12, month: $0 % 12 + 1) }
     }
 
     /// Flatten a Garmin workout-details payload into the compact step shape
@@ -575,6 +616,13 @@ actor GarminService {
                     compact["target_type"] = "pace"
                     compact["target_low"] = factor / high   // faster speed ⇒ smaller seconds
                     compact["target_high"] = factor / low
+                case "speed.zone" where low > 0 && high > 0:
+                    compact["target_type"] = "speed"   // Garmin stores m/s → km/h
+                    compact["target_low"] = round1(low * 3.6)
+                    compact["target_high"] = round1(high * 3.6)
+                case "cadence.zone":
+                    compact["target_type"] = "cadence"
+                    compact["target_low"] = low; compact["target_high"] = high
                 default:
                     break
                 }
@@ -738,21 +786,13 @@ actor GarminService {
                 }
             }
 
-            if let lactate = try? await client.getLactateThreshold() {
-                if let speedHR = lactate["speed_and_heart_rate"] as? [String: Any] {
-                    if let hr = (speedHR["heartRate"] as? NSNumber)?.intValue {
-                        settings["lactate_threshold_hr"] = hr
-                    }
-                    // Running threshold speed (m/s) → pace per km ("m:ss").
-                    if let speed = (speedHR["speed"] as? NSNumber)?.doubleValue,
-                       let pace = GarminTransform.speedToPace(speed, distanceM: 1000) {
-                        settings["lactate_threshold_pace"] = pace
-                    }
-                }
-                if let power = lactate["power"] as? [String: Any],
-                   let runFtp = (power["functionalThresholdPower"] as? NSNumber)?.intValue {
-                    settings["running_ftp"] = runFtp
-                }
+            if let hr = try? await client.getLactateThresholdHR() {
+                settings["lactate_threshold_hr"] = hr
+            }
+            // Running threshold speed (m/s) → pace per km ("m:ss").
+            if let speed = try? await client.getRunningThresholdSpeed(),
+               let pace = GarminTransform.speedToPace(speed, distanceM: 1000) {
+                settings["lactate_threshold_pace"] = pace
             }
 
             if let hrZones = try? await client.connectapi("/biometric-service/heartRateZones") as? [[String: Any]], !hrZones.isEmpty {

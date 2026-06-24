@@ -146,7 +146,9 @@ final class DataSyncCoordinator {
             startDate: DateFormatter.ymd.string(from: from),
             endDate: DateFormatter.ymd.string(from: to)
         )
-        guard let scheduled = Self.parseScheduledWorkouts(result) else { return }
+        // A failed fetch returns "✗ …"; feeding that to replaceScheduled would wipe
+        // the local mirror to match an empty result, so bail before touching it.
+        guard !result.hasPrefix("✗"), let scheduled = Self.parseScheduledWorkouts(result) else { return }
         let thresholds = store.latestSnapshot()
         let planned = scheduled.compactMap { Self.scheduledDTO(from: $0, thresholds: thresholds) }
         store.replaceScheduled(source: "garmin", from: from, to: to, with: planned)
@@ -318,17 +320,26 @@ final class DataSyncCoordinator {
 
     // MARK: - Response building
 
+    /// Garmin's proprietary load/training-effect estimates are kept in storage for
+    /// the activity-detail UI but hidden from the coach: self-computed TSS is the
+    /// load spine, and these EPOC-derived numbers only invite over-trust.
+    private static let coachHiddenActivityKeys: Set<String> = ["training_load", "aerobic_te", "anaerobic_te"]
+
     private func response(for records: [ActivityRecord], sport: String?, days: Int?) -> String {
         let formatted: [[String: Any]] = records.compactMap { rec in
             guard let data = rec.detailsJSON.data(using: .utf8),
-                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+                  var obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            for key in Self.coachHiddenActivityKeys { obj.removeValue(forKey: key) }
             return obj
         }
+
+        var summary = GarminTransform.calculateActivitySummary(formatted)
+        summary.removeValue(forKey: "avg_training_effect")   // derived from aerobic_te (hidden above)
 
         var data: [String: Any] = [
             "activities": formatted,
             "count": formatted.count,
-            "summary": GarminTransform.calculateActivitySummary(formatted)
+            "summary": summary
         ]
         data["filter"] = (sport != nil || days != nil) ? ["sport": sport as Any, "days": days as Any] : NSNull()
 

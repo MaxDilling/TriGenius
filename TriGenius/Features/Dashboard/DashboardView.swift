@@ -5,10 +5,12 @@ import Combine
 //
 // The athlete's home screen. Card-based layout (see the design mockups):
 //   • Header: greeting + calendar shortcut.
-//   • Performance Insights: CTL / ATL / TSB stat cards → "Details" opens the
-//     full PMC chart (PerformanceInsightsView).
-//   • Weekly Target (Volume): per-discipline rings, actual vs. (dummy) target.
-//   • Agenda: today's workouts (future/scheduled workouts → see FEATURES.md).
+//   • Performance Insights: CTL / ATL / TSB stat cards — each tile taps through
+//     to the full PMC chart (PerformanceInsightsView).
+//   • Weekly Target (Volume): per-discipline rings, actual vs. target.
+//   • AI insight: the coach's one-line read on the week, in the Apple
+//     Intelligence look (its own tile).
+//   • Up Next: today's completed + upcoming planned workouts, one tile.
 //
 // Everything reads from the local DB via DashboardViewModel (source-agnostic).
 
@@ -19,6 +21,12 @@ struct DashboardView: View {
     let trainingPlan: TrainingPlan
     @ObservedObject var memory: CoachMemory
     let makeBackend: () -> LLMBackend
+    // Settings is reached from the dashboard header (BUGS.md: the calendar moved to
+    // the tab bar, settings took its place here), so the screen needs what
+    // `SettingsView` requires.
+    let brain: CoachBrain
+    @ObservedObject var settings: AppSettings
+    let onBackendChanged: () -> Void
 
     @State private var viewModel = DashboardViewModel()
     @State private var volumeMetric: VolumeMetric = .tss
@@ -45,7 +53,8 @@ struct DashboardView: View {
                         planBanner
                         performanceInsights
                         weeklyTarget
-                        agenda
+                        aiInsightCard
+                        upNext
                     }
                 }
             }
@@ -98,9 +107,14 @@ struct DashboardView: View {
             Spacer()
 
             NavigationLink {
-                CalendarView(dataSource: dataSource)
+                SettingsView(
+                    brain: brain,
+                    settings: settings,
+                    memory: memory,
+                    onBackendChanged: onBackendChanged
+                )
             } label: {
-                Image(systemName: "calendar")
+                Image(systemName: "gearshape")
                     .font(.title3)
                     .frame(width: 44, height: 44)
                     .glassEffect(.regular, in: .circle)
@@ -138,33 +152,27 @@ struct DashboardView: View {
 
     private var performanceInsights: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Performance Insights").font(.headline)
-                Spacer()
-                if let result = viewModel.pmc, result.snapshot != nil {
-                    NavigationLink {
-                        PerformanceInsightsView(result: result)
-                    } label: {
-                        HStack(spacing: 2) {
-                            Text("Details")
-                            Image(systemName: "chevron.right")
-                        }
-                        .font(.subheadline)
-                    }
-                }
-            }
+            Text("Performance Insights").font(.headline)
 
-            if let s = viewModel.pmc?.snapshot {
+            // The whole stat-card row navigates to the full PMC chart — no
+            // separate "Details" affordance; each card is the tap target.
+            if let result = viewModel.pmc, let s = result.snapshot {
                 HStack(spacing: 10) {
-                    PMCStatCard(title: "Fitness", caption: "CTL", dot: .blue,
-                                value: Int(s.ctl.rounded()), delta: viewModel.ctlDelta,
-                                status: fitnessStatus(delta: viewModel.ctlDelta))
-                    PMCStatCard(title: "Fatigue", caption: "ATL", dot: .pink,
-                                value: Int(s.atl.rounded()), delta: viewModel.atlDelta,
-                                status: fatigueStatus(atl: s.atl, ctl: s.ctl))
-                    PMCStatCard(title: "Form", caption: "TSB", dot: .orange,
-                                value: Int(s.tsb.rounded()), delta: viewModel.tsbDelta,
-                                status: formStatus(tsb: s.tsb))
+                    pmcLink(result) {
+                        PMCStatCard(title: "Fitness", caption: "CTL", dot: .blue,
+                                    value: Int(s.ctl.rounded()), delta: viewModel.ctlDelta,
+                                    status: fitnessStatus(delta: viewModel.ctlDelta))
+                    }
+                    pmcLink(result) {
+                        PMCStatCard(title: "Fatigue", caption: "ATL", dot: .pink,
+                                    value: Int(s.atl.rounded()), delta: viewModel.atlDelta,
+                                    status: fatigueStatus(atl: s.atl, ctl: s.ctl))
+                    }
+                    pmcLink(result) {
+                        PMCStatCard(title: "Form", caption: "TSB", dot: .orange,
+                                    value: Int(s.tsb.rounded()), delta: viewModel.tsbDelta,
+                                    status: formStatus(tsb: s.tsb))
+                    }
                 }
             } else {
                 Text("No training-load data yet. Sync your activities to see CTL / ATL / TSB.")
@@ -172,6 +180,16 @@ struct DashboardView: View {
                     .dashCard()
             }
         }
+    }
+
+    /// Wraps a stat card so the entire tile is the tap target for the PMC chart.
+    private func pmcLink<Label: View>(_ result: PMCResult, @ViewBuilder label: () -> Label) -> some View {
+        NavigationLink {
+            PerformanceInsightsView(result: result)
+        } label: {
+            label()
+        }
+        .buttonStyle(.plain)
     }
 
     private func fitnessStatus(delta: Int) -> String {
@@ -217,83 +235,170 @@ struct DashboardView: View {
                                projectedKm: projection.projectedKm)
                 }
             }
-
-            insightBox
         }
         .dashCard()
     }
 
-    // AI-generated insight (FEATURES.md "AI-generated dashboard insight"), with a
-    // heuristic fallback surfaced instantly while the model line is generated.
-    @ViewBuilder private var insightBox: some View {
+    // MARK: AI insight
+
+    // AI-generated insight (FEATURES.md "AI-generated dashboard insight") in its
+    // own tile, styled in the Apple Intelligence look — the `apple.intelligence`
+    // glyph and an iridescent gradient hairline around the card. A heuristic
+    // fallback is surfaced instantly while the model line is generated.
+    @ViewBuilder private var aiInsightCard: some View {
         if let insight = viewModel.insight, !insight.isEmpty {
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "sparkles")
-                    .foregroundStyle(.orange)
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "apple.intelligence")
+                    .font(.title2)
+                    .foregroundStyle(Self.appleIntelligenceGradient)
                 Text(insight)
-                    .font(.footnote)
+                    .font(.callout)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.04)))
+            .dashCard()
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.Radius.l, style: .continuous)
+                    .strokeBorder(Self.appleIntelligenceGradient, lineWidth: 1.5)
+                    .opacity(0.9)
+            )
         }
     }
 
-    // MARK: Agenda
+    /// Apple Intelligence's signature iridescent gradient, reused for the glyph
+    /// and the card's hairline border.
+    private static let appleIntelligenceGradient = AngularGradient(
+        colors: [.pink, .purple, .blue, .cyan, .orange, .pink],
+        center: .center
+    )
 
-    private var agenda: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            Text("Agenda").font(.headline)
+    // MARK: Up Next
 
-            if viewModel.agendaDays.isEmpty {
+    /// Every upcoming/today workout — completed and planned — flattened into a
+    /// single list so they can share one tile with hairline dividers between rows.
+    private var upNextItems: [UpNextItem] {
+        var items: [UpNextItem] = []
+        for day in viewModel.agendaDays {
+            for record in day.completed {
+                items.append(UpNextItem(date: day.date, record: record))
+            }
+            for planned in day.planned {
+                items.append(UpNextItem(date: day.date, planned: planned))
+            }
+        }
+        return items
+    }
+
+    private var upNext: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Up Next").font(.headline)
+
+            let items = upNextItems
+            if items.isEmpty {
                 Text("No workouts logged or planned.")
                     .font(.subheadline).foregroundStyle(.secondary)
                     .dashCard()
             } else {
-                ForEach(viewModel.agendaDays) { day in
-                    agendaRow(day)
+                VStack(spacing: 0) {
+                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                        if index > 0 {
+                            Divider().padding(.leading, 64)
+                        }
+                        upNextRow(item)
+                    }
                 }
+                .dashCard(padding: 0)
             }
         }
     }
 
-    /// One agenda day: the date stacked on the left, its workout cards on the right.
-    @ViewBuilder private func agendaRow(_ day: AgendaDay) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            dateColumn(day.date)
+    /// One compact row in the Up Next tile: date column, sport dot, title + summary.
+    @ViewBuilder private func upNextRow(_ item: UpNextItem) -> some View {
+        NavigationLink {
+            if let record = item.record {
+                TrainingDetailView(record: record)
+            } else if let planned = item.planned {
+                PlannedWorkoutDetailView(workout: planned)
+            }
+        } label: {
+            HStack(spacing: 14) {
+                dateColumn(item.date)
 
-            VStack(spacing: 12) {
-                ForEach(day.completed) { record in
-                    NavigationLink {
-                        TrainingDetailView(record: record)
-                    } label: {
-                        AgendaCard(record: record)
-                    }
-                    .buttonStyle(.plain)
+                ZStack {
+                    Circle().fill(item.family.color.opacity(0.25))
+                    Image(systemName: item.family.icon)
+                        .font(.headline)
+                        .foregroundStyle(item.family.color)
                 }
-                ForEach(day.planned) { planned in
-                    NavigationLink {
-                        PlannedWorkoutDetailView(workout: planned)
-                    } label: {
-                        PlannedAgendaCard(workout: planned)
-                    }
-                    .buttonStyle(.plain)
+                .frame(width: 44, height: 44)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(item.title).font(.headline).lineLimit(1)
+                    Text(item.summary).font(.subheadline).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+
+                if item.completed {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
                 }
             }
+            .padding(.vertical, 12)
+            .padding(.horizontal, 16)
+            .contentShape(.rect)
         }
+        .buttonStyle(.plain)
     }
 
     private func dateColumn(_ date: Date) -> some View {
         let isToday = Calendar.current.isDateInToday(date)
         return VStack(spacing: 2) {
             Text(date.formatted(.dateTime.weekday(.abbreviated)).uppercased())
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption).foregroundStyle(isToday ? Color.accentColor : .secondary)
             Text(date.formatted(.dateTime.day()))
-                .font(.title.bold())
+                .font(.title2.bold())
                 .foregroundStyle(isToday ? Color.accentColor : .primary)
         }
-        .frame(width: 40)
-        .padding(.top, 14)
+        .frame(width: 34)
+    }
+}
+
+// MARK: - Up Next item
+
+/// A flattened Up Next entry — either a completed activity or a planned workout —
+/// exposing the common fields the shared row needs plus the source for navigation.
+private struct UpNextItem: Identifiable {
+    let date: Date
+    let record: ActivityRecord?
+    let planned: ScheduledWorkoutRecord?
+
+    init(date: Date, record: ActivityRecord) {
+        self.date = date
+        self.record = record
+        self.planned = nil
+    }
+    init(date: Date, planned: ScheduledWorkoutRecord) {
+        self.date = date
+        self.record = nil
+        self.planned = planned
+    }
+
+    var id: String { record.map { "c-\($0.id)" } ?? planned.map { "p-\($0.id)" } ?? UUID().uuidString }
+    var completed: Bool { record != nil }
+    var family: SportFamily {
+        if let record { return SportFamily(sportKey: record.sport) }
+        return planned?.family ?? .other
+    }
+    var title: String { record?.name ?? planned?.name ?? "" }
+
+    /// "{TSS} TSS · {duration}" — matches the compact mockup row.
+    var summary: String {
+        if let record {
+            var parts: [String] = []
+            if let tss = record.tss, tss > 0 { parts.append("\(Int(tss.rounded())) TSS") }
+            parts.append(durationHM(record.durationMinutes))
+            return parts.joined(separator: " · ")
+        }
+        return planned?.plannedSummaryLine() ?? ""
     }
 }
 
@@ -364,10 +469,7 @@ private struct VolumeMetricToggle: View {
                     .foregroundStyle(.secondary)
                 segment(.distance)
             }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 4)
-            .glassEffect(.regular, in: .capsule)
-            .contentShape(.capsule)
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
     }
@@ -412,7 +514,7 @@ private struct VolumeRing: View {
 
     /// True once the projected close still falls short of the target — the visible
     /// gap that signals an at-risk week.
-    private var fallsShort: Bool { target > 0 && projectedFraction < 0.999 }
+    private var fallsShort: Bool { target > 0 && projectedFraction < 0.99 }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -426,7 +528,7 @@ private struct VolumeRing: View {
                     Circle()
                         .trim(from: fraction, to: projectedFraction)
                         .stroke(family.color.opacity(0.40),
-                                style: StrokeStyle(lineWidth: 7, lineCap: .butt, dash: [4, 4]))
+                                style: StrokeStyle(lineWidth: 7, lineCap: .butt, dash: [2, 2]))
                         .rotationEffect(.degrees(-90))
                 }
                 Circle()
@@ -450,11 +552,10 @@ private struct VolumeRing: View {
                         .foregroundStyle(fallsShort ? Theme.Palette.warning : Color.secondary.opacity(0.6))
                         .padding(.top, 1)
                 }
-                if secondaryActual > 0 {
-                    Text(label(secondaryMetric, secondaryActual))
-                        .font(.caption.weight(.semibold)).foregroundStyle(family.color)
-                        .padding(.top, 2)
-                }
+                
+                Text(label(secondaryMetric, secondaryActual))
+                    .font(.caption.weight(.semibold)).foregroundStyle(family.color)
+                    .padding(.top, 2)
             }
         }
         .frame(maxWidth: .infinity)
@@ -471,117 +572,6 @@ private struct VolumeRing: View {
             return value >= 10
                 ? "\(Int(value.rounded())) km"
                 : String(format: "%.1f km", value)
-        }
-    }
-}
-
-// MARK: - Agenda Card
-
-private struct AgendaCard: View {
-    let record: ActivityRecord
-
-    private var family: SportFamily { SportFamily(sportKey: record.sport) }
-    private var details: [String: Any] {
-        guard let data = record.detailsJSON.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        else { return [:] }
-        return obj
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            AgendaWorkoutHeader(icon: family.icon, color: family.color,
-                                title: record.name, summary: summaryLine)
-
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "checkmark")
-                    .font(.footnote.weight(.bold))
-                    .foregroundStyle(.green)
-                    .frame(width: 28, height: 28)
-                    .background(Circle().fill(Color.green.opacity(0.15)))
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(timeLine).font(.subheadline).foregroundStyle(.secondary)
-                    if let metrics = metricsLine {
-                        Text(metrics).font(.subheadline).foregroundStyle(.secondary)
-                    }
-                }
-                Spacer()
-            }
-            .padding(.leading, 2)
-        }
-        .dashCard()
-    }
-
-    private var summaryLine: String {
-        var parts = [durationHM(record.durationMinutes).uppercased()]
-        if let tss = record.tss { parts.append("\(Int(tss.rounded())) TSS") }
-        return parts.joined(separator: "  •  ")
-    }
-
-    /// Start time and elapsed duration, e.g. "07:30  –  1h 15m".
-    private var timeLine: String {
-        let duration = durationHM(record.durationMinutes)
-        if let time = details["time"] as? String, !time.isEmpty {
-            return "\(time)  –  \(duration)"
-        }
-        return duration
-    }
-
-    /// Distance and the headline intensity metric (power, else HR).
-    private var metricsLine: String? {
-        var parts: [String] = []
-        if record.distanceKm > 0 { parts.append(String(format: "%.1f KM", record.distanceKm)) }
-        if let power = avgPower { parts.append("\(power)W") }
-        else if let hr = details["avg_hr"] as? Int { parts.append("\(hr) BPM") }
-        return parts.isEmpty ? nil : parts.joined(separator: "  |  ")
-    }
-
-    private var avgPower: Int? {
-        for key in ["cycling", "running"] {
-            if let sub = details[key] as? [String: Any], let p = sub["avg_power_w"] as? Int { return p }
-        }
-        return nil
-    }
-}
-
-// MARK: - Planned Agenda Card
-
-/// A planned (not-yet-completed) workout in the Agenda — shows its target rather
-/// than achieved metrics, the way TrainingPeaks previews a scheduled session.
-private struct PlannedAgendaCard: View {
-    let workout: ScheduledWorkoutRecord
-
-    private var family: SportFamily { workout.family }
-
-    var body: some View {
-        AgendaWorkoutHeader(icon: family.icon, color: family.color,
-                            title: workout.name, summary: workout.plannedSummaryLine(uppercased: true))
-            .dashCard()
-    }
-}
-
-// MARK: - Agenda Workout Header
-
-/// The shared top row of an Agenda card: sport icon, workout name, and a
-/// "duration • TSS" summary line. Used by both completed and planned cards.
-private struct AgendaWorkoutHeader: View {
-    let icon: String
-    let color: Color
-    let title: String
-    let summary: String
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Image(systemName: icon)
-                .font(.title3)
-                .foregroundStyle(color)
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.headline).lineLimit(1)
-                Text(summary).font(.subheadline).foregroundStyle(.secondary)
-            }
-            Spacer()
         }
     }
 }

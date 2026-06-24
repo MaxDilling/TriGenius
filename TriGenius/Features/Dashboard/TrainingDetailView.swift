@@ -38,6 +38,7 @@ struct TrainingDetailView: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                 header
                 heroCapsule
+                tssBasisNote
                 coachInsight
                 secondaryMetrics
                 computedCard
@@ -143,6 +144,28 @@ struct TrainingDetailView: View {
         .padding(.vertical, Theme.Spacing.l)
         .padding(.horizontal, Theme.Spacing.m)
         .glassSurface(cornerRadius: Theme.Radius.l)
+    }
+
+    // MARK: TSS provenance
+    //
+    // Surface where the TSS came from. Completed activities derive TSS
+    // from their stored stream data via `TSSCalculator` — we re-run the same
+    // dispatch (read-only) against the current thresholds to label the source.
+
+    private var tssBasis: String? {
+        guard record.tss != nil else { return nil }
+        let snapshot = TrainingDataStore.shared.latestSnapshot()
+        return TSSCalculator.compute(details: details, snapshot: snapshot).basis?.label
+    }
+
+    @ViewBuilder
+    private var tssBasisNote: some View {
+        if let tssBasis {
+            Label("TSS computed from \(tssBasis)", systemImage: "function")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, Theme.Spacing.xs)
+        }
     }
 
     // MARK: Coach insight ("Silent AI")

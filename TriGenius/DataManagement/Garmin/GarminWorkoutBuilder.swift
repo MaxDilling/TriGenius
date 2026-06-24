@@ -136,6 +136,12 @@ nonisolated enum GarminWorkoutBuilder {
             convertedHigh = 1000.0 / low
         }
 
+        // Speed targets given as km/h are converted to m/s for Garmin.
+        if targetType == "speed", let low = targetLow, let high = targetHigh, low > 0, high > 0 {
+            convertedLow = low / 3.6
+            convertedHigh = high / 3.6
+        }
+
         var step: [String: Any] = [
             "type": "ExecutableStepDTO",
             "stepId": NSNull(),

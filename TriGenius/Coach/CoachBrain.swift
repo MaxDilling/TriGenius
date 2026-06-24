@@ -22,7 +22,7 @@ This rule overrides every other behavior in this prompt. A good question is alwa
 
 {onboarding_section}=== CORE PRINCIPLES ===
 
-1. **Health-first**: Always consider recovery state before suggesting intensity. Low HRV, poor sleep, or accumulated stress → recommend recovery or reduced load.
+1. **Health-first**: Consider recovery state before prescribing hard intensity. Persistent poor sleep or an elevated resting-HR trend are *secondary* signals — weigh them against the load/form trend (PMC) and the athlete's own sensation, not in isolation. A single bad night is not a reason to overhaul the week.
 
 2. **Athlete autonomy**: You suggest, the athlete decides. Offer options, not mandates.
 
@@ -99,8 +99,9 @@ Never replace medical evaluation with coaching advice. State clearly: "This is o
 - `get_workouts`: list workouts for a date range — returns `scheduled` (planned, editable, each with a `workout_id` + ready-to-reuse `workout_data`) and `completed` (activities). This is where the `workout_id` for modify/move/delete comes from. (Athlete's real-world schedule is `read_calendar_availability`, a different tool.)
 - `add_workouts`: build & schedule one or more structured sessions in a single call — one session is a one-element list, a whole week is several. Pass ONE value per intensity target (units: pace = sec/km, HR = bpm, power = W, cadence = rpm) — the app widens it into a band and fills defaults automatically, then reports per item. Never fake zero-width ranges. Relay the actual scheduled targets back to the athlete.
 - `modify_workout`: edit an existing session's content in place (get its id + current `workout_data` from `get_workouts` first). Send a full `steps` array to replace the structure, or just top-level fields (e.g. description) to tweak. Same target/band rules as `add_workouts`. To change the DATE, use `move_workout` (id-first: `workout_id` + `to_date`).
-- `get_health_metrics`: before recommending intensity (check recovery state)
-- `get_activities`: to analyze completed training
+- `get_health_metrics`: a secondary recovery check (sleep + resting HR) — context for, not a veto on, intensity
+- `get_activities`: to analyze completed training (includes the athlete's feel / RPE / notes when recorded)
+- `log_workout_feedback`: record the athlete's subjective `feel` (1–5), `rpe` (1–10), and/or a `note` on a completed activity (id from get_activities) when they tell you how a session went
 - `get_athlete_profile`: to review current memory state
 - `update_athlete_profile`: to persist limitations, injuries, goals, preferences
 - `read_calendar_availability`: before proposing or rescheduling sessions on specific days — plan around the athlete's busy real-world schedule
@@ -108,7 +109,7 @@ Never replace medical evaluation with coaching advice. State clearly: "This is o
 {data_source_section}
 
 
-**Before any calendar change, training-phase transition (e.g., base→build→peak→taper, mesocycle restructuring), or deletion**: explain what you found and exactly what you propose to change, then get the athlete's explicit confirmation before executing. Never apply such changes unilaterally — the athlete decides.
+**Before any major calendar change, training-phase transition (e.g., base→build→peak→taper, mesocycle restructuring), or deletion**: explain what you found and exactly what you propose to change, then get the athlete's explicit confirmation before executing. Never apply such changes unilaterally — the athlete decides.
 **On tool failure**: inform the athlete clearly, suggest alternatives.
 
 === COMMUNICATION RULES ===
@@ -237,6 +238,8 @@ final class CoachBrain {
         registry.register(TrainingLoadToolHandler())
         // Always-on, source-independent: real-world schedule awareness.
         registry.register(CalendarToolHandler())
+        // Always-on, source-agnostic: subjective post-session feedback (feel / RPE / note).
+        registry.register(WorkoutFeedbackToolHandler())
         // Always-on: configurable push reminders ("Erweiterte Reminder").
         registry.register(ReminderToolHandler())
         toolRegistry = registry
@@ -446,7 +449,7 @@ final class CoachBrain {
         if hour < 12 { timeGreeting = "Good morning" }
         else if hour < 17 { timeGreeting = "Good afternoon" }
         else { timeGreeting = "Good evening" }
-        return "\(timeGreeting), \(name)! 🏊🚴🏃 I'm TriGenius, your AI triathlon coach. How can I help you today?"
+        return "\(timeGreeting), \(name)!\nHow can I help you today?"
     }
 
     func reset() {

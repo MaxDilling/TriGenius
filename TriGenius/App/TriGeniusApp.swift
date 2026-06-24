@@ -98,7 +98,10 @@ struct RootTabView: View {
                     weeklyStructure: memory.weeklyStructure,
                     trainingPlan: memory.trainingPlan,
                     memory: memory,
-                    makeBackend: { settings.makeBackend() }
+                    makeBackend: { settings.makeBackend() },
+                    brain: brain,
+                    settings: settings,
+                    onBackendChanged: onBackendChanged
                 )
             }
             .tabItem {
@@ -111,16 +114,12 @@ struct RootTabView: View {
             .tabItem {
                 Label("Coach", systemImage: "bubble.left.and.bubble.right.fill")
             }
+
             NavigationStack {
-                SettingsView(
-                    brain: brain,
-                    settings: settings,
-                    memory: memory,
-                    onBackendChanged: onBackendChanged
-                )
+                CalendarView(dataSource: settings.dataSource)
             }
             .tabItem {
-                Label("Settings", systemImage: "gearshape.fill")
+                Label("Calendar", systemImage: "calendar")
             }
         }
     }

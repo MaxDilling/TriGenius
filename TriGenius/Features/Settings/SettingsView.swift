@@ -238,6 +238,11 @@ struct SettingsView: View {
                 }
                 if settings.debugMode {
                     NavigationLink {
+                        ReminderTestView()
+                    } label: {
+                        Label("Test Reminders", systemImage: "bell.badge.waveform")
+                    }
+                    NavigationLink {
                         ToolDebugView(brain: brain)
                     } label: {
                         Label("Tool Runner", systemImage: "wrench.and.screwdriver")
@@ -247,11 +252,16 @@ struct SettingsView: View {
                     } label: {
                         Label("System Prompt", systemImage: "text.alignleft")
                     }
-                }
-                NavigationLink {
-                    ReminderTestView()
-                } label: {
-                    Label("Test Reminders", systemImage: "bell.badge.waveform")
+                    NavigationLink {
+                        MemoryDebugView(memory: memory)
+                    } label: {
+                        Label("Storage (coach_memory.json)", systemImage: "curlybraces")
+                    }
+                    NavigationLink {
+                        ReportsDebugView()
+                    } label: {
+                        Label("Reports", systemImage: "exclamationmark.bubble")
+                    }
                 }
                 Button(role: .destructive) {
                     showClearDataConfirm = true
@@ -273,7 +283,7 @@ struct SettingsView: View {
             } header: {
                 Text("Developer")
             } footer: {
-                Text("Shows the coach's hidden tool calls as messages in the chat and logs the full prompt to the console.")
+                Text("Debug mode shows the coach's hidden tool calls as messages in the chat and logs the full prompt to the console.")
             }
 
             // About section
@@ -283,22 +293,6 @@ struct SettingsView: View {
                     Spacer()
                     Text("AI Triathlon Coach")
                         .foregroundStyle(.secondary)
-                }
-                HStack {
-                    Text("Data")
-                    Spacer()
-                    Text(settings.dataSource == .garmin ? "Garmin Connect" : "Apple HealthKit")
-                        .foregroundStyle(.secondary)
-                }
-                NavigationLink {
-                    MemoryDebugView(memory: memory)
-                } label: {
-                    Label("Storage (coach_memory.json)", systemImage: "curlybraces")
-                }
-                NavigationLink {
-                    ReportsDebugView()
-                } label: {
-                    Label("Reports", systemImage: "exclamationmark.bubble")
                 }
             }
         }

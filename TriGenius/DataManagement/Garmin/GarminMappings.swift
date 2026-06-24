@@ -117,6 +117,7 @@ nonisolated enum GarminMappings {
         "heart_rate": ["workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone", "displayOrder": 4],
         "power": ["workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone", "displayOrder": 2],
         "pace": ["workoutTargetTypeId": 6, "workoutTargetTypeKey": "pace.zone", "displayOrder": 6],
+        "speed": ["workoutTargetTypeId": 5, "workoutTargetTypeKey": "speed.zone", "displayOrder": 5],
         "cadence": ["workoutTargetTypeId": 3, "workoutTargetTypeKey": "cadence.zone", "displayOrder": 3]
     ]
 }

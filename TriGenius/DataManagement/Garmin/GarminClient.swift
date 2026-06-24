@@ -126,15 +126,21 @@ actor GarminClient {
 
     // MARK: - Health / recovery
 
-    func getHrvData(date: String) async throws -> [String: Any]? {
-        try await connectapi("/hrv-service/hrv/\(date)") as? [String: Any]
-    }
-
     func getSleepData(date: String) async throws -> [String: Any]? {
         let name = try await displayName()
         return try await connectapi(
             "/wellness-service/wellness/dailySleepData/\(name)",
             query: [("date", date), ("nonSleepBufferMinutes", "60")]
+        ) as? [String: Any]
+    }
+
+    /// Daily heart-rate summary (carries `restingHeartRate`, min/max, and a
+    /// 2-minute time series). We read only the resting value.
+    func getDailyHeartRate(date: String) async throws -> [String: Any]? {
+        let name = try await displayName()
+        return try await connectapi(
+            "/wellness-service/wellness/dailyHeartRate/\(name)",
+            query: [("date", date)]
         ) as? [String: Any]
     }
 
@@ -144,34 +150,56 @@ actor GarminClient {
         try await connectapi("/biometric-service/biometric/latestFunctionalThresholdPower/CYCLING")
     }
 
-    /// Best-effort port of get_lactate_threshold(latest=True): returns the
-    /// combined speed/heart-rate and power dictionaries the service expects.
+    /// Latest lactate-threshold **heart rate** (bpm).
     ///
     /// Garmin's `/latestLactateThreshold` returns a *list* of near-identical
-    /// dicts — one carries `speed`, one the heart rate — so we merge them. The HR
-    /// field also appears under Garmin's historical typo key `hearRate` (missing
-    /// "t"); reading only `heartRate` is why LTHR previously never updated.
-    func getLactateThreshold() async throws -> [String: Any]? {
+    /// dicts, so we scan all of them. The HR field also appears under Garmin's
+    /// historical typo key `hearRate` (missing "t"); reading only `heartRate` is
+    /// why LTHR previously never updated. The `speed` here is unreliable (wrong
+    /// unit) — running threshold *pace* comes from `getRunningThresholdSpeed()`.
+    func getLactateThresholdHR() async throws -> Int? {
         let response = try await connectapi("/biometric-service/biometric/latestLactateThreshold")
         var heartRate: Int?
-        var speed: Double?
         func absorb(_ entry: [String: Any]) {
             // Prefer the correct key; fall back to Garmin's typo ("hearRate").
             if let hr = ((entry["heartRate"] as? NSNumber) ?? (entry["hearRate"] as? NSNumber))?.intValue {
                 heartRate = hr
             }
-            if let s = (entry["speed"] as? NSNumber)?.doubleValue, s > 0 { speed = s }
         }
         if let entries = response as? [[String: Any]] {
             for entry in entries { absorb(entry) }
         } else if let dict = response as? [String: Any] {
             absorb(dict)
         }
-        guard heartRate != nil || speed != nil else { return nil }
-        var speedHR: [String: Any] = [:]
-        if let heartRate { speedHR["heartRate"] = heartRate }
-        if let speed { speedHR["speed"] = speed }
-        return ["speed_and_heart_rate": speedHR, "power": [:]]
+        return heartRate
+    }
+
+    /// Latest running lactate-threshold **speed**, in m/s.
+    ///
+    /// Mirrors the source Garmin Connect's own UI reads:
+    /// `/biometric-service/stats/lactateThresholdSpeed/range/{start}/{end}` with the
+    /// daily `LATEST` aggregation, filtered to running. The endpoint reports the
+    /// value in units of 0.1 m/s (verified: `0.38055` ↔ Garmin-displayed 4:23/km),
+    /// so we multiply by 10 to return true m/s. Returns the most recent non-zero
+    /// entry in the window.
+    func getRunningThresholdSpeed() async throws -> Double? {
+        let end = Date()
+        let start = end.addingTimeInterval(-30 * 24 * 3600)
+        let path = "/biometric-service/stats/lactateThresholdSpeed/range/"
+            + "\(GarminTransform.ymd(start))/\(GarminTransform.ymd(end))"
+        let response = try await connectapi(path, query: [
+            ("aggregation", "daily"),
+            ("aggregationStrategy", "LATEST"),
+            ("sport", "RUNNING"),
+        ])
+        guard let entries = response as? [[String: Any]] else { return nil }
+        // Entries are ordered ascending by date; take the latest with a real value.
+        for entry in entries.reversed() {
+            if let raw = (entry["value"] as? NSNumber)?.doubleValue, raw > 0 {
+                return raw * 10
+            }
+        }
+        return nil
     }
 
     func getUserProfile() async throws -> [String: Any]? {

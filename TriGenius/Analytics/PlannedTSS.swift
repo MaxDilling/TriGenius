@@ -63,9 +63,9 @@ enum PlannedTSS {
         /// `endValue` is meters when `isDistance`, else seconds.
         var isDistance: Bool
         var endValue: Double
-        /// "power" | "pace" | "heart_rate" | nil
+        /// "power" | "pace" | "speed" | "heart_rate" | nil (cadence isn't an intensity)
         var targetType: String?
-        /// power: watts · pace: seconds (sec/km run, sec/100 m swim) · hr: bpm
+        /// power: watts · pace: seconds (sec/km run, sec/100 m swim) · speed: km/h · hr: bpm
         var targetLow: Double?
         var targetHigh: Double?
     }
@@ -108,7 +108,7 @@ enum PlannedTSS {
             if step.isDistance {
                 meters += max(0, step.endValue)
             } else {
-                let speed = paceSpeedMPS(for: step, family: family) ?? defaultSpeedMPS(family)
+                let speed = targetSpeedMPS(for: step, family: family) ?? defaultSpeedMPS(family)
                 meters += max(0, step.endValue) * speed
             }
         }
@@ -120,13 +120,16 @@ enum PlannedTSS {
     private static func durationSeconds(for step: RawStep, family: SportFamily, thresholds: PerformanceSnapshot) -> Double {
         guard step.isDistance else { return max(0, step.endValue) }
         let meters = max(0, step.endValue)
-        let speed = paceSpeedMPS(for: step, family: family) ?? defaultSpeedMPS(family)
+        let speed = targetSpeedMPS(for: step, family: family) ?? defaultSpeedMPS(family)
         guard speed > 0 else { return 0 }
         return meters / speed
     }
 
-    /// Speed (m/s) implied by a pace-targeted step, if any.
-    private static func paceSpeedMPS(for step: RawStep, family: SportFamily) -> Double? {
+    /// Speed (m/s) implied by a pace- or speed-targeted step, if any.
+    private static func targetSpeedMPS(for step: RawStep, family: SportFamily) -> Double? {
+        if step.targetType == "speed", let kmh = midpoint(step.targetLow, step.targetHigh), kmh > 0 {
+            return kmh / 3.6
+        }
         guard step.targetType == "pace", let pace = midpoint(step.targetLow, step.targetHigh), pace > 0 else { return nil }
         switch family {
         case .swim: return 100.0 / pace   // pace is sec / 100 m
@@ -159,6 +162,16 @@ enum PlannedTSS {
                              : nil
             guard let thr, thr > 0 else { return (fallback, false) }
             return (clamp(thr / mid), true)   // faster pace (smaller seconds) ⇒ higher IF
+        case "speed":
+            // Speed (km/h) → pace (sec/km, or sec/100 m for swim), then reuse the
+            // threshold-pace ratio. Cycling has no threshold pace ⇒ falls back.
+            let thr: Double? = family == .run  ? thresholds.lactateThrPaceSeconds
+                             : family == .swim ? thresholds.cssPaceSeconds
+                             : nil
+            guard let thr, thr > 0 else { return (fallback, false) }
+            let pace = (family == .swim ? 360.0 : 3600.0) / mid
+            guard pace > 0 else { return (fallback, false) }
+            return (clamp(thr / pace), true)
         case "heart_rate":
             guard let lthr = thresholds.lactateThrHR.map(Double.init), lthr > 0 else { return (fallback, false) }
             return (clamp(mid / lthr), true)
