@@ -8,7 +8,17 @@ import SwiftUI
 // the dashboard Agenda or the calendar's day detail / week view.
 
 struct PlannedWorkoutDetailView: View {
-    let workout: ScheduledWorkoutRecord
+    let initialWorkout: ScheduledWorkoutRecord
+    /// Live record, re-fetched on data changes so coach edits to the structure /
+    /// targets appear without re-opening the screen (the handed-in record can be
+    /// a stale snapshot once a sync replaces it). Falls back to `initialWorkout`.
+    @State private var live: ScheduledWorkoutRecord?
+
+    init(workout: ScheduledWorkoutRecord) {
+        self.initialWorkout = workout
+    }
+
+    private var workout: ScheduledWorkoutRecord { live ?? initialWorkout }
 
     private var family: SportFamily { workout.family }
     private var isEstimatedTSS: Bool { workout.isEstimatedTSS }
@@ -46,6 +56,12 @@ struct PlannedWorkoutDetailView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
+            // Keep the last known record if the workout was deleted out from under us.
+            if let fresh = TrainingDataStore.shared.scheduledWorkout(id: initialWorkout.id) {
+                live = fresh
+            }
+        }
     }
 
     // MARK: Header
@@ -96,12 +112,16 @@ struct PlannedWorkoutDetailView: View {
         var metrics: [HeroMetric] = []
         if workout.targetDurationMinutes > 0 {
             metrics.append(HeroMetric(value: durationHM(workout.targetDurationMinutes), label: "Duration"))
+        } else if let estimated = structure?.estimatedDurationMinutes, estimated > 0 {
+            // Distance-prescribed sessions carry no explicit duration target — show
+            // the structure-derived estimate so duration is always present.
+            metrics.append(HeroMetric(value: "~" + durationHM(estimated), label: "Duration"))
         }
         if let distanceText {
             metrics.append(HeroMetric(value: distanceText, label: "Distance"))
         }
         if targetTSS > 0 {
-            metrics.append(HeroMetric(value: "\(isEstimatedTSS ? "~" : "")\(Int(targetTSS.rounded()))", label: "TSS target"))
+            metrics.append(HeroMetric(value: "\(Int(targetTSS.rounded()))", label: "TSS target"))
         }
         if metrics.isEmpty {
             metrics.append(HeroMetric(value: "—", label: "No target set"))

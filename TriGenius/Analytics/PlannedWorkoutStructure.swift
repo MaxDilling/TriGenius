@@ -53,6 +53,10 @@ struct PlannedWorkoutStructure {
     /// Estimated total distance in meters (pace-derived where possible). Surface
     /// only for distance disciplines (run / swim) where it reads naturally.
     let totalDistanceMeters: Double?
+    /// Estimated total duration in minutes, derived from the steps (distance steps
+    /// converted via their pace target). Used as a duration fallback when the
+    /// record carries no explicit `targetDurationMinutes`.
+    let estimatedDurationMinutes: Double?
 
     /// Build from a record's persisted `stepsJSON`. Nil when there is no usable
     /// structure (empty steps, Garmin-Coach workouts, locally-created plans).
@@ -65,7 +69,8 @@ struct PlannedWorkoutStructure {
         return PlannedWorkoutStructure(
             family: family,
             steps: steps,
-            totalDistanceMeters: PlannedTSS.totalDistanceMeters(compactSteps: compact, family: family)
+            totalDistanceMeters: PlannedTSS.totalDistanceMeters(compactSteps: compact, family: family),
+            estimatedDurationMinutes: PlannedTSS.totalDurationSeconds(compactSteps: compact, family: family).map { $0 / 60 }
         )
     }
 
@@ -139,11 +144,28 @@ struct PlannedWorkoutStructure {
         steps.map(summaryPart).filter { !$0.isEmpty }.joined(separator: " · ")
     }
 
-    /// A short interval hint for compact rows, e.g. "3×12'", or nil when the
-    /// workout has no repeat block.
+    /// A short hint for compact rows describing the main set, e.g. "3×12'" or
+    /// "5k + 4×20\"". Only shown for structured sessions with a repeat block (a
+    /// plain steady session is already covered by its duration/distance + TSS);
+    /// lists every work segment, skipping warm-up / cool-down / recovery.
     var compactHint: String? {
-        guard let group = steps.first(where: { $0.isGroup }), let work = group.primaryWork else { return nil }
-        return "\(group.repeatCount)×\(PlannedWorkoutFormat.abbrev(work))"
+        guard steps.contains(where: { $0.isGroup }) else { return nil }
+        let tokens = steps.compactMap(workToken)
+        return tokens.isEmpty ? nil : tokens.joined(separator: " + ")
+    }
+
+    /// Compact token for a single step's work portion: "N×<abbrev>" for a repeat
+    /// block, the bare abbrev for a standalone work leaf, nil for warm-up /
+    /// cool-down / recovery / rest (kept out of the compact hint).
+    private func workToken(_ step: PlannedDisplayStep) -> String? {
+        if step.isGroup {
+            guard let work = step.primaryWork else { return nil }
+            return "\(step.repeatCount)×\(PlannedWorkoutFormat.abbrev(work))"
+        }
+        guard let leaf = step.leaf, !leaf.isRest,
+              !leaf.typeKey.contains("warm"), !leaf.typeKey.contains("cool"),
+              !leaf.typeKey.contains("recover") else { return nil }
+        return PlannedWorkoutFormat.abbrev(leaf)
     }
 
     private func summaryPart(_ step: PlannedDisplayStep) -> String {

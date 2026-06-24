@@ -550,6 +550,14 @@ final class TrainingDataStore {
         return (try? context.fetch(descriptor)) ?? []
     }
 
+    /// Fetch a single planned workout by id, or nil if it no longer exists. Used
+    /// by the detail view to re-read the live record after a coach edit.
+    func scheduledWorkout(id: String) -> ScheduledWorkoutRecord? {
+        try? context.fetch(
+            FetchDescriptor<ScheduledWorkoutRecord>(predicate: #Predicate { $0.id == id })
+        ).first
+    }
+
     /// Reschedule a planned workout to a new day. Returns the updated record.
     @discardableResult
     func moveScheduledWorkout(id: String, to newDate: Date) -> ScheduledWorkoutRecord? {

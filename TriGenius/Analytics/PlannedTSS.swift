@@ -85,7 +85,7 @@ enum PlannedTSS {
         for step in rawSteps {
             let (ifValue, resolved) = intensity(for: step, family: family, thresholds: thresholds)
             if resolved { anyResolvedTarget = true }
-            let secs = durationSeconds(for: step, family: family, thresholds: thresholds)
+            let secs = durationSeconds(for: step, family: family)
             guard secs > 0 else { continue }
             total += ifValue * ifValue * (secs / 3600.0) * 100.0
         }
@@ -115,9 +115,28 @@ enum PlannedTSS {
         return meters > 0 ? meters : nil
     }
 
+    // MARK: Total duration (display)
+
+    /// Estimated total duration in seconds for a planned workout, summing each
+    /// leaf step's time (expanding repeats). Time-based steps contribute their
+    /// seconds directly; distance-based steps are converted via their pace target
+    /// when present, else the discipline's default speed. Mirror of
+    /// `totalDistanceMeters`; nil when there are no measurable steps. Used to show
+    /// a "~45 min" duration for distance-prescribed sessions that carry no explicit
+    /// duration target.
+    static func totalDurationSeconds(compactSteps: [[String: Any]], family: SportFamily) -> Double? {
+        let raw = flatten(compactSteps)
+        guard !raw.isEmpty else { return nil }
+        var seconds = 0.0
+        for step in raw {
+            seconds += durationSeconds(for: step, family: family)
+        }
+        return seconds > 0 ? seconds : nil
+    }
+
     // MARK: Step → duration
 
-    private static func durationSeconds(for step: RawStep, family: SportFamily, thresholds: PerformanceSnapshot) -> Double {
+    private static func durationSeconds(for step: RawStep, family: SportFamily) -> Double {
         guard step.isDistance else { return max(0, step.endValue) }
         let meters = max(0, step.endValue)
         let speed = targetSpeedMPS(for: step, family: family) ?? defaultSpeedMPS(family)
