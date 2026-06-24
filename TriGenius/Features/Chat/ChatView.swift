@@ -34,6 +34,16 @@ final class ChatViewModel {
     init(brain: CoachBrain) {
         self.brain = brain
         self.greeting = brain.greeting()
+    }
+
+    /// Wire this view model up as the brain's tool-event observer. Called from
+    /// the view's `onAppear` — NOT from `init` — so the handler always points at
+    /// the live `@State` instance. SwiftUI re-evaluates `CoachChatView.init` (and
+    /// thus constructs throwaway view models) on every parent re-render; doing
+    /// this in `init` would let a discarded model hijack the single handler slot
+    /// with a `[weak self]` that immediately deallocates, silently dropping tool
+    /// bubbles. `attach()` is idempotent and self-healing on each appearance.
+    func attach() {
         // Debug Mode: render the coach's hidden tool calls inline. The handler
         // only fires when Debug Mode is on (gated in CoachBrain).
         brain.toolEventHandler = { [weak self] event in
@@ -184,6 +194,7 @@ struct CoachChatView: View {
             }
         }
         .navigationTitle("Coach")
+        .onAppear { viewModel.attach() }
         .task { viewModel.prewarm() }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
