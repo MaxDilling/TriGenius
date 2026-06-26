@@ -35,13 +35,11 @@ final class CoachToolRegistry {
 
 @MainActor
 final class HealthKitToolHandler: CoachToolHandler {
-    private let healthKit = HealthKitService.shared
-
     var definitions: [ToolDefinition] {
         [
             ToolDefinition(
                 name: "get_health_metrics",
-                description: "Fetch health metrics from Apple Health for the last N days. Returns steps, resting heart rate, sleep duration, and active energy.",
+                description: "Fetch recovery data for the last N days: sleep (duration + score), resting heart rate and overnight HRV, with a short-term resting-HR trend. Secondary signals — weigh against the load/form trend, not in isolation.",
                 parameters: [
                     "type": "object",
                     "properties": [
@@ -73,8 +71,9 @@ final class HealthKitToolHandler: CoachToolHandler {
     func execute(name: String, arguments: [String: Any]) async throws -> String {
         switch name {
         case "get_health_metrics":
+            // Served from the local wellness time series (DB-backed, source-agnostic).
             let days = arguments["days"] as? Int ?? 7
-            return try await fetchHealthMetrics(days: days)
+            return await DataSyncCoordinator.shared.healthMetrics(source: .appleHealth, days: days)
         case "get_activities":
             // Served from the local database (synced on launch), not live HealthKit.
             let count = arguments["count"] as? Int ?? 10
@@ -83,16 +82,6 @@ final class HealthKitToolHandler: CoachToolHandler {
             )
         default:
             return "Unknown health tool: \(name)"
-        }
-    }
-
-    private func fetchHealthMetrics(days: Int) async throws -> String {
-        do {
-            try await healthKit.requestAuthorization()
-            let metrics = try await healthKit.fetchHealthMetrics(days: days)
-            return metrics.toJSONString()
-        } catch {
-            return "HealthKit error: \(error.localizedDescription). Make sure health permissions are granted."
         }
     }
 
@@ -681,7 +670,7 @@ final class GarminToolHandler: CoachToolHandler {
         [
             ToolDefinition(
                 name: "get_health_metrics",
-                description: "Fetch recovery data from Garmin: sleep (duration + score) and resting heart rate, with short-term trends. Secondary signals — weigh against the load/form trend, not in isolation.",
+                description: "Fetch recovery data for the last N days: sleep (duration + score), resting heart rate and overnight HRV, with a short-term resting-HR trend. Secondary signals — weigh against the load/form trend, not in isolation.",
                 parameters: [
                     "type": "object",
                     "properties": ["days": ["type": "integer", "description": "Number of days to fetch. Default 7."]],
@@ -815,7 +804,7 @@ final class GarminToolHandler: CoachToolHandler {
 
         switch name {
         case "get_health_metrics":
-            return await service.getHealthMetrics(days: Coerce.int(arguments["days"]) ?? 7)
+            return await DataSyncCoordinator.shared.healthMetrics(source: .garmin, days: Coerce.int(arguments["days"]) ?? 7)
         case "get_power_curve":
             let durations = (arguments["durations_seconds"] as? [Any])?.compactMap { Coerce.int($0) }
             return await service.getPowerCurve(
@@ -867,9 +856,8 @@ final class GarminToolHandler: CoachToolHandler {
             ingestModifiedWorkout(result, workoutData: workoutData, editsSteps: editsSteps)
             return appendDefaultsNotes(to: result, notes: notes)
         case "sync_user_settings":
-            let (text, settings) = await service.syncUserSettings()
-            if let settings { applySettingsToMemory(settings) }
-            return text
+            // Full refresh: wellness + historical-performance series + training zones.
+            return await DataSyncCoordinator.shared.refreshGarminMetrics()
         default:
             return "Unknown Garmin tool: \(name)"
         }
@@ -990,15 +978,5 @@ final class GarminToolHandler: CoachToolHandler {
               let toStr = data["to_date"] as? String,
               let date = DateFormatter.ymd.date(from: toStr) else { return }
         TrainingDataStore.shared.moveScheduledWorkout(id: "garmin:\(workoutId)", to: date)
-    }
-
-    // MARK: - Persist synced settings
-
-    private func applySettingsToMemory(_ settings: [String: Any]) {
-        // All performance/biometric values (FTP, CSS, LTHR, max HR, VO2max,
-        // weight, HR/power zones) go into the DB time series.
-        TrainingDataStore.shared.ingestMetrics(
-            DataSyncCoordinator.metrics(fromGarminSettings: settings, date: Date())
-        )
     }
 }

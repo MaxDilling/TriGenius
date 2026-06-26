@@ -96,6 +96,37 @@ extension ActivityRecord {
     }
 }
 
+// MARK: - Metric-key namespace
+//
+// Canonical snake_case keys for the `PerformanceMetricRecord` time series, split
+// by purpose. Shared by ingest, the Performance Insights UI and the
+// "delete historical performance data" dev action so the sets never drift.
+enum MetricKeys {
+    /// Physiological capacity markers (FTP, VO2max, thresholds, zones, weight).
+    /// Speeds are stored as raw m/s under `*_speed` keys (not pace-seconds); the
+    /// pace conversion happens only when building `PerformanceSnapshot` / the UI.
+    static let performance: Set<String> = {
+        var keys: Set<String> = [
+            "cycling_ftp", "running_ftp",
+            "vo2max_running", "vo2max_cycling",
+            "lactate_threshold_hr", "lactate_threshold_speed",
+            "swim_css_speed", "max_hr", "weight_kg",
+        ]
+        for n in 1...5 {
+            keys.insert("hr_zone\(n)_upper")
+            keys.insert("power_zone\(n)_upper")
+        }
+        return keys
+    }()
+
+    /// Daily recovery / wellness signals (sleep, resting HR, HRV).
+    static let wellness: Set<String> = [
+        "resting_hr", "hrv_overnight",
+        "sleep_score", "sleep_duration_h",
+        "sleep_deep_h", "sleep_light_h", "sleep_rem_h", "sleep_awake_h",
+    ]
+}
+
 // MARK: - Performance metric model
 //
 // FEATURES.md "Performance data in the database (with history)": performance
@@ -103,7 +134,8 @@ extension ActivityRecord {
 // `coach_memory.json` as overwrite-in-place scalars. They are now stored here as
 // a timestamped, append-only time series — the same way Garmin tracks them — so
 // the progression over time can be charted and the coach reads the latest value
-// per metric from the DB instead of the JSON.
+// per metric from the DB instead of the JSON. Daily wellness signals (sleep,
+// resting HR, HRV) are stored in the same series under `MetricKeys.wellness`.
 
 /// One performance value at a point in time. Keyed by a composite
 /// "<metricKey>:<source>:<yyyy-MM-dd>" id so repeated same-day syncs upsert
@@ -111,7 +143,7 @@ extension ActivityRecord {
 @Model
 final class PerformanceMetricRecord {
     @Attribute(.unique) var id: String
-    /// snake_case metric key, e.g. "cycling_ftp", "swim_css_pace".
+    /// snake_case metric key, e.g. "cycling_ftp", "swim_css_speed", "resting_hr".
     var metricKey: String
     var value: Double
     /// Unit token, e.g. "watts", "bpm", "ml_kg_min", "sec_per_100m".
@@ -219,10 +251,13 @@ struct IngestedActivity: Sendable {
     let sport: String
     let name: String
     let durationMinutes: Double
+    /// Source-declared distance (km); a fallback only — the store re-derives the
+    /// effective distance (swim cleaning / manual override) when it scores.
     let distanceKm: Double
-    let tss: Double?
     let aerobicTE: Double?
     let anaerobicTE: Double?
+    /// Normalized, *unscored* activity JSON. The store computes TSS + the resolved
+    /// distance from this at ingest (see `TrainingDataStore.ingest`).
     let detailsJSON: String
 }
 
@@ -307,6 +342,59 @@ struct PerformanceSnapshot: Sendable {
     }
 }
 
+/// The full performance-metric history, queryable as a `PerformanceSnapshot` *as
+/// of any date*. A completed activity must be scored against the thresholds that
+/// were current on its OWN date — an FTP bump today must not retroactively rescore
+/// a January ride — so TSS at ingest reads `snapshot(asOf: activity.date)`, not the
+/// latest values. Built once from the store and queried per activity in an ingest
+/// loop (avoids a DB round-trip per activity).
+struct PerformanceHistory: Sendable {
+    /// One dated metric reading, pre-ranked by source so ties resolve the same way
+    /// `latestSnapshot` does.
+    struct Entry: Sendable {
+        let date: Date
+        let value: Double
+        let rank: Int
+    }
+
+    /// metricKey → readings, ascending by date.
+    private let byKey: [String: [Entry]]
+
+    init(byKey: [String: [Entry]]) {
+        self.byKey = byKey.mapValues { $0.sorted { $0.date < $1.date } }
+    }
+
+    /// Value of one metric as it stood on `date`: the newest reading on or before
+    /// `date`, ties broken by source rank. Nil when no reading exists yet by then.
+    private func value(_ key: String, asOf date: Date) -> Double? {
+        guard let entries = byKey[key] else { return nil }
+        var best: Entry?
+        for e in entries where e.date <= date {
+            guard let b = best else { best = e; continue }
+            if e.date > b.date || (e.date == b.date && e.rank > b.rank) { best = e }
+        }
+        return best?.value
+    }
+
+    /// The metric snapshot as it stood on `date`, assembled for the TSS engine.
+    /// Pass `.distantFuture` to get the latest value of every metric.
+    func snapshot(asOf date: Date) -> PerformanceSnapshot {
+        var snap = PerformanceSnapshot()
+        snap.cyclingFTP = value("cycling_ftp", asOf: date).map { Int($0.rounded()) }
+        snap.runningFTP = value("running_ftp", asOf: date).map { Int($0.rounded()) }
+        // CSS / LT thresholds are stored as raw speed (m/s); convert to the
+        // pace-seconds the snapshot (and the TSS engine) consume.
+        if let s = value("swim_css_speed", asOf: date), s > 0 { snap.cssPaceSeconds = 100.0 / s }
+        snap.lactateThrHR = value("lactate_threshold_hr", asOf: date).map { Int($0.rounded()) }
+        snap.maxHR = value("max_hr", asOf: date).map { Int($0.rounded()) }
+        if let s = value("lactate_threshold_speed", asOf: date), s > 0 { snap.lactateThrPaceSeconds = 1000.0 / s }
+        snap.vo2maxRunning = value("vo2max_running", asOf: date)
+        snap.vo2maxCycling = value("vo2max_cycling", asOf: date)
+        snap.weightKg = value("weight_kg", asOf: date)
+        return snap
+    }
+}
+
 // MARK: - Store
 
 /// Owns the `ModelContainer` and provides upsert + query helpers.
@@ -353,10 +441,31 @@ final class TrainingDataStore {
         markChanged()
     }
 
-    /// Upsert a batch of activities (insert new, update existing by id).
+    /// Delete every stored historical performance metric (FTP, VO2max,
+    /// thresholds, zones, weight — `MetricKeys.performance`), leaving daily
+    /// wellness metrics and activities intact. Dev action for clearing
+    /// noisy/incorrect backfilled performance history.
+    func deletePerformanceMetrics() {
+        let all = (try? context.fetch(FetchDescriptor<PerformanceMetricRecord>())) ?? []
+        let stale = all.filter { MetricKeys.performance.contains($0.metricKey) }
+        guard !stale.isEmpty else { return }
+        for r in stale { context.delete(r) }
+        try? context.save()
+        markChanged()
+    }
+
+    /// Upsert a batch of activities (insert new, update existing by id), scoring
+    /// each one's TSS + effective distance here — the single place it happens, so
+    /// every data source gets consistent TSS without knowing about it. Each activity
+    /// is scored against `snapshot(asOf: a.date)`, i.e. the thresholds current on
+    /// its own date, NOT today's — so a later FTP change can't retroactively rescore
+    /// old workouts. This relies on the performance-metric history already being in
+    /// the store; the sync ingests metrics before activities for exactly this reason.
     func ingest(_ activities: [IngestedActivity]) {
         guard !activities.isEmpty else { return }
+        let history = performanceHistory()
         for a in activities {
+            let scored = Self.score(a, history: history)
             let id = a.id
             let existing = try? context.fetch(
                 FetchDescriptor<ActivityRecord>(predicate: #Predicate { $0.id == id })
@@ -367,11 +476,11 @@ final class TrainingDataStore {
                 record.sport = a.sport
                 record.name = a.name
                 record.durationMinutes = a.durationMinutes
-                record.distanceKm = a.distanceKm
-                record.tss = a.tss
+                record.distanceKm = scored.distanceKm
+                record.tss = scored.tss
                 record.aerobicTE = a.aerobicTE
                 record.anaerobicTE = a.anaerobicTE
-                record.detailsJSON = a.detailsJSON
+                record.detailsJSON = scored.detailsJSON
             } else {
                 context.insert(ActivityRecord(
                     id: a.id,
@@ -380,16 +489,29 @@ final class TrainingDataStore {
                     sport: a.sport,
                     name: a.name,
                     durationMinutes: a.durationMinutes,
-                    distanceKm: a.distanceKm,
-                    tss: a.tss,
+                    distanceKm: scored.distanceKm,
+                    tss: scored.tss,
                     aerobicTE: a.aerobicTE,
                     anaerobicTE: a.anaerobicTE,
-                    detailsJSON: a.detailsJSON
+                    detailsJSON: scored.detailsJSON
                 ))
             }
         }
         try? context.save()
         markChanged()
+    }
+
+    /// Score one incoming activity against the thresholds current on its date.
+    /// Mutates a working copy of its details (resolved distance, cleaned swim) and
+    /// returns the values to persist. Falls back to the source distance + no TSS
+    /// when the details JSON can't be parsed.
+    private static func score(_ a: IngestedActivity, history: PerformanceHistory)
+        -> (tss: Double?, distanceKm: Double, detailsJSON: String) {
+        guard var details = jsonObject(a.detailsJSON) else {
+            return (nil, a.distanceKm, a.detailsJSON)
+        }
+        let (km, tss) = TSSScoring.score(&details, snapshot: history.snapshot(asOf: a.date))
+        return (tss, km, jsonString(details) ?? a.detailsJSON)
     }
 
     /// Cached `(tss, detailsJSON)` for the given ids — a resync passes the ids it is
@@ -414,7 +536,9 @@ final class TrainingDataStore {
                   FetchDescriptor<ActivityRecord>(predicate: #Predicate { $0.id == activityId })))?.first,
               var details = Self.jsonObject(r.detailsJSON) else { return }
         details["manual_distance_m"] = distanceKm * 1000
-        let (km, tss) = TSSScoring.score(&details, snapshot: latestSnapshot())
+        // Re-score against the thresholds current on the activity's own date, the
+        // same basis it was ingested with (not today's).
+        let (km, tss) = TSSScoring.score(&details, snapshot: performanceHistory().snapshot(asOf: r.date))
         r.distanceKm = km
         r.tss = tss
         r.detailsJSON = Self.jsonString(details) ?? r.detailsJSON
@@ -713,31 +837,23 @@ final class TrainingDataStore {
         }
     }
 
+    /// The full performance-metric history as a point-in-time–queryable resolver.
+    /// Backs both `latestSnapshot()` and the as-of-date scoring at ingest.
+    func performanceHistory() -> PerformanceHistory {
+        let records = (try? context.fetch(FetchDescriptor<PerformanceMetricRecord>())) ?? []
+        var byKey: [String: [PerformanceHistory.Entry]] = [:]
+        for r in records {
+            byKey[r.metricKey, default: []].append(
+                .init(date: r.date, value: r.value, rank: Self.sourceRank(r.source))
+            )
+        }
+        return PerformanceHistory(byKey: byKey)
+    }
+
     /// Latest value per metric key — the source for the coach's prompt context
     /// and the Settings display. Newest date wins; ties break by source rank.
     func latestSnapshot() -> PerformanceSnapshot {
-        let records = (try? context.fetch(FetchDescriptor<PerformanceMetricRecord>())) ?? []
-        var latest: [String: PerformanceMetricRecord] = [:]
-        for r in records {
-            if let cur = latest[r.metricKey] {
-                let better = r.date > cur.date ||
-                    (r.date == cur.date && Self.sourceRank(r.source) > Self.sourceRank(cur.source))
-                if better { latest[r.metricKey] = r }
-            } else {
-                latest[r.metricKey] = r
-            }
-        }
-        var snap = PerformanceSnapshot()
-        snap.cyclingFTP = latest["cycling_ftp"].map { Int($0.value.rounded()) }
-        snap.runningFTP = latest["running_ftp"].map { Int($0.value.rounded()) }
-        snap.cssPaceSeconds = latest["swim_css_pace"]?.value
-        snap.lactateThrHR = latest["lactate_threshold_hr"].map { Int($0.value.rounded()) }
-        snap.maxHR = latest["max_hr"].map { Int($0.value.rounded()) }
-        snap.lactateThrPaceSeconds = latest["lactate_threshold_pace"]?.value
-        snap.vo2maxRunning = latest["vo2max_running"]?.value
-        snap.vo2maxCycling = latest["vo2max_cycling"]?.value
-        snap.weightKg = latest["weight_kg"]?.value
-        return snap
+        performanceHistory().snapshot(asOf: .distantFuture)
     }
 
     /// Ascending day-by-day history for one metric key — the progression the

@@ -208,6 +208,119 @@ nonisolated enum GarminTransform {
         return best
     }
 
+    // MARK: - Metric-history range parsers
+    //
+    // Pure shaping of the Garmin range/daily/weekly wellness + performance
+    // endpoints into `(day, value)` samples. `GarminService.fetchMetricHistory`
+    // maps each list onto a `metricKey`/`unit`. A `calendarDate`/`summaryDate`/
+    // `updatedDate` (`YYYY-MM-DD`) or an ISO `measurementTimestampLocal`
+    // (`…THH:mm:ss`) anchors each sample to its local day.
+
+    typealias DatedValue = (date: Date, value: Double)
+
+    /// Parse a `YYYY-MM-DD` or ISO `YYYY-MM-DDT…` string to a start-of-day date.
+    private static func day(_ raw: Any?) -> Date? {
+        guard let s = raw as? String, s.count >= 10 else { return nil }
+        return date(from: String(s.prefix(10)))
+    }
+
+    /// HRV: `hrvSummaries[].lastNightAvg` @ `calendarDate` (ms).
+    static func parseHrvOvernight(_ obj: [String: Any]?) -> [DatedValue] {
+        guard let rows = obj?["hrvSummaries"] as? [[String: Any]] else { return [] }
+        return rows.compactMap { row in
+            guard let d = day(row["calendarDate"]), let v = Coerce.double(row["lastNightAvg"]), v > 0 else { return nil }
+            return (d, v)
+        }
+    }
+
+    /// Sleep daily stats: `individualStats[].values` → per-metric `(day, value)`
+    /// lists keyed by the stored metric key. Carries the full overnight picture:
+    /// score, total duration, the four sleep-stage durations (deep / light / REM
+    /// / awake), and the night's resting HR — the sleep endpoint is the reliable
+    /// per-day source for `resting_hr` (the standalone heart-rate range endpoint
+    /// returns a different envelope and yielded no history).
+    static func parseSleepStats(_ obj: [String: Any]?) -> [String: [DatedValue]] {
+        guard let rows = obj?["individualStats"] as? [[String: Any]] else { return [:] }
+        var out: [String: [DatedValue]] = [:]
+        for row in rows {
+            guard let d = day(row["calendarDate"]), let values = row["values"] as? [String: Any] else { continue }
+            func add(_ key: String, _ raw: Any?, scale: Double = 1) {
+                guard let v = Coerce.double(raw), v > 0 else { return }
+                out[key, default: []].append((d, v * scale))
+            }
+            add("sleep_score", values["sleepScore"])
+            add("sleep_duration_h", values["totalSleepTimeInSeconds"], scale: 1.0 / 3600)
+            add("sleep_deep_h", values["deepTime"], scale: 1.0 / 3600)
+            add("sleep_light_h", values["lightTime"], scale: 1.0 / 3600)
+            add("sleep_rem_h", values["remTime"], scale: 1.0 / 3600)
+            add("sleep_awake_h", values["awakeTime"], scale: 1.0 / 3600)
+            add("resting_hr", values["restingHeartRate"])
+        }
+        return out
+    }
+
+    /// Weight range: `dailyWeightSummaries[].latestWeight.weight` (grams) → kg.
+    static func parseWeightKg(_ obj: [String: Any]?) -> [DatedValue] {
+        guard let rows = obj?["dailyWeightSummaries"] as? [[String: Any]] else { return [] }
+        return rows.compactMap { row in
+            guard let d = day(row["summaryDate"]),
+                  let g = Coerce.double((row["latestWeight"] as? [String: Any])?["weight"]), g > 0 else { return nil }
+            return (d, (g / 1000 * 10).rounded() / 10)
+        }
+    }
+
+    /// VO2max weekly: each entry's `generic`/`cycling` sub-object carries its own
+    /// `calendarDate` + `vo2MaxPreciseValue`. `subKey` selects run (`generic`) vs cycle.
+    static func parseVo2Max(_ arr: [[String: Any]]?, subKey: String) -> [DatedValue] {
+        guard let arr else { return [] }
+        return arr.compactMap { entry in
+            guard let sub = entry[subKey] as? [String: Any],
+                  let d = day(sub["calendarDate"]),
+                  let v = Coerce.double(sub["vo2MaxPreciseValue"]), v > 0 else { return nil }
+            return (d, v)
+        }
+    }
+
+    /// FTP range: `[]{series, value, updatedDate}` filtered to one `series` (watts).
+    static func parseFtp(_ arr: [[String: Any]]?, series: String) -> [DatedValue] {
+        guard let arr else { return [] }
+        return arr.compactMap { row in
+            guard (row["series"] as? String) == series,
+                  let d = day(row["updatedDate"]), let v = Coerce.double(row["value"]), v > 0 else { return nil }
+            return (d, v)
+        }
+    }
+
+    /// CSS range: `criticalSwimSpeedDTOList[].criticalSwimSpeed` (mm/s) → m/s @
+    /// `measurementTimestampLocal`.
+    static func parseCssSpeed(_ obj: [String: Any]?) -> [DatedValue] {
+        guard let rows = obj?["criticalSwimSpeedDTOList"] as? [[String: Any]] else { return [] }
+        return rows.compactMap { row in
+            guard let d = day(row["measurementTimestampLocal"]),
+                  let mm = Coerce.double(row["criticalSwimSpeed"]), mm > 0 else { return nil }
+            return (d, mm / 1000)
+        }
+    }
+
+    /// Lactate-threshold HR range: `[].value` @ `updatedDate` (bpm).
+    static func parseThresholdHR(_ arr: [[String: Any]]?) -> [DatedValue] {
+        guard let arr else { return [] }
+        return arr.compactMap { row in
+            guard let d = day(row["updatedDate"]), let v = Coerce.double(row["value"]), v > 0 else { return nil }
+            return (d, v)
+        }
+    }
+
+    /// Lactate-threshold speed range: `value` is in 0.1 m/s units (×10 → m/s),
+    /// @ `updatedDate`. See `GarminClient` notes on this endpoint's scaling.
+    static func parseThresholdSpeed(_ arr: [[String: Any]]?) -> [DatedValue] {
+        guard let arr else { return [] }
+        return arr.compactMap { row in
+            guard let d = day(row["updatedDate"]), let v = Coerce.double(row["value"]), v > 0 else { return nil }
+            return (d, v * 10)
+        }
+    }
+
     /// Build normalized swim interval data from Garmin lap DTOs.
     static func buildSwimIntervals(_ lapDTOs: [[String: Any]], poolLengthM: Double?) -> [[String: Any]] {
         var intervals: [[String: Any]] = []

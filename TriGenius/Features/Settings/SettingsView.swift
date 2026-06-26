@@ -104,6 +104,7 @@ struct SettingsView: View {
     @State private var showAPIKey = false
     @State private var showClearConfirm = false
     @State private var showClearDataConfirm = false
+    @State private var showDeletePerfConfirm = false
 
     var body: some View {
         List {
@@ -291,6 +292,23 @@ struct SettingsView: View {
                     Button("Cancel", role: .cancel) {}
                 } message: {
                     Text("Deletes all synced workouts, performance metrics and scheduled workouts from the local database and resets the sync state. Your profile and settings are kept; data re-syncs on next launch.")
+                }
+                Button(role: .destructive) {
+                    showDeletePerfConfirm = true
+                } label: {
+                    Label("Delete historical performance data", systemImage: "chart.line.downtrend.xyaxis")
+                }
+                .confirmationDialog(
+                    "Delete historical performance data?",
+                    isPresented: $showDeletePerfConfirm,
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete", role: .destructive) {
+                        TrainingDataStore.shared.deletePerformanceMetrics()
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Removes the stored performance history (FTP, VO₂max, thresholds, zones, weight). Daily wellness (sleep, resting HR, HRV) and your activities are kept; values re-sync from Garmin on the next sync or backfill.")
                 }
             } header: {
                 Text("Developer")

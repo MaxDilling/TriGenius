@@ -206,14 +206,14 @@ final class BackgroundCoordinator {
         }
     }
 
-    /// Best-effort recent sleep duration. Only Apple Health exposes it cheaply
-    /// here; for other sources we return nil and fall back to load-only advice.
+    /// Best-effort most-recent night's sleep duration from the local wellness
+    /// time series (populated by the data-source sync). Returns the latest stored
+    /// night within the last two days, or nil for load-only advice when none.
     private func recentSleepHours() async -> Double? {
-        let source = DataSource(rawValue: UserDefaults.standard.string(forKey: "data_source") ?? "")
-            ?? .appleHealth
-        guard source == .appleHealth else { return nil }
-        let hours = (try? await HealthKitService.shared.fetchHealthMetrics(days: 2).avgSleepHours) ?? 0
-        return hours > 0 ? hours : nil
+        let cutoff = Calendar.current.date(byAdding: .day, value: -2, to: Calendar.current.startOfDay(for: Date()))!
+        let recent = TrainingDataStore.shared.metricHistory("sleep_duration_h").filter { $0.date >= cutoff }
+        guard let last = recent.last, last.value > 0 else { return nil }
+        return last.value
     }
 
     private static func clockString(_ minutesAfterMidnight: Int) -> String {

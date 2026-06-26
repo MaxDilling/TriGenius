@@ -80,24 +80,6 @@ final class HealthKitService {
 
     // MARK: - Daily Health Metrics
 
-    func fetchHealthMetrics(days: Int = 7) async throws -> HealthMetricsSummary {
-        let startDate = Calendar.current.date(byAdding: .day, value: -days, to: Date())!
-        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: Date())
-
-        async let steps = fetchDailySteps(predicate: predicate, days: days)
-        async let avgHR = fetchAverageHeartRate(predicate: predicate)
-        async let sleep = fetchSleepHours(days: days)
-        async let energy = fetchActiveEnergy(predicate: predicate, days: days)
-
-        return try await HealthMetricsSummary(
-            dailySteps: steps,
-            averageHRbpm: avgHR,
-            avgSleepHours: sleep,
-            avgActiveEnergyKcal: energy,
-            periodDays: days
-        )
-    }
-
     // MARK: - Heart Rate for Workout
 
     func fetchHeartRateSamples(during workout: HKWorkout) async throws -> [HeartRateSample] {
@@ -205,20 +187,6 @@ final class HealthKitService {
         return rows.joined(separator: "\n") + "\n"
     }
 
-    // MARK: - Private helpers
-
-    private func fetchDailySteps(predicate: NSPredicate, days: Int) async throws -> Double {
-        guard let type = HKQuantityType.quantityType(forIdentifier: .stepCount) else { return 0 }
-        return try await fetchDailyAverage(type: type, unit: .count(), predicate: predicate)
-    }
-
-    private func fetchAverageHeartRate(predicate: NSPredicate) async throws -> Double? {
-        guard let type = HKQuantityType.quantityType(forIdentifier: .heartRate) else { return nil }
-        let unit = HKUnit.count().unitDivided(by: HKUnit.minute())
-        let value = try await fetchDiscreteAverage(type: type, unit: unit, predicate: predicate)
-        return value > 0 ? value : nil
-    }
-
     // MARK: - Performance metrics
 
     /// Fetch the latest performance values Apple Health exposes (FTP, VO2max).
@@ -256,62 +224,6 @@ final class HealthKitService {
         }
     }
 
-    private func fetchSleepHours(days: Int) async throws -> Double {
-        guard let type = HKCategoryType.categoryType(forIdentifier: .sleepAnalysis) else { return 0 }
-        let startDate = Calendar.current.date(byAdding: .day, value: -days, to: Date())!
-        let predicate = HKQuery.predicateForSamples(withStart: startDate, end: Date())
-
-        return try await withCheckedThrowingContinuation { continuation in
-            let query = HKSampleQuery(
-                sampleType: type, predicate: predicate, limit: HKObjectQueryNoLimit, sortDescriptors: nil
-            ) { _, samples, error in
-                if let error { continuation.resume(throwing: error); return }
-                let totalSeconds = (samples as? [HKCategorySample] ?? [])
-                    .filter { $0.value == HKCategoryValueSleepAnalysis.asleepCore.rawValue ||
-                              $0.value == HKCategoryValueSleepAnalysis.asleepDeep.rawValue ||
-                              $0.value == HKCategoryValueSleepAnalysis.asleepREM.rawValue }
-                    .reduce(0.0) { $0 + $1.endDate.timeIntervalSince($1.startDate) }
-                let days = max(1, days)
-                continuation.resume(returning: totalSeconds / Double(days) / 3600)
-            }
-            store.execute(query)
-        }
-    }
-
-    private func fetchActiveEnergy(predicate: NSPredicate, days: Int) async throws -> Double {
-        guard let type = HKQuantityType.quantityType(forIdentifier: .activeEnergyBurned) else { return 0 }
-        return try await fetchDailyAverage(type: type, unit: .kilocalorie(), predicate: predicate)
-    }
-
-    private func fetchDailyAverage(type: HKQuantityType, unit: HKUnit, predicate: NSPredicate) async throws -> Double {
-        try await withCheckedThrowingContinuation { continuation in
-            let query = HKStatisticsQuery(
-                quantityType: type,
-                quantitySamplePredicate: predicate,
-                options: .cumulativeSum
-            ) { _, stats, error in
-                if let error { continuation.resume(throwing: error); return }
-                let value = stats?.sumQuantity()?.doubleValue(for: unit) ?? 0
-                continuation.resume(returning: value)
-            }
-            store.execute(query)
-        }
-    }
-
-    private func fetchDiscreteAverage(type: HKQuantityType, unit: HKUnit, predicate: NSPredicate) async throws -> Double {
-        try await withCheckedThrowingContinuation { continuation in
-            let query = HKStatisticsQuery(
-                quantityType: type,
-                quantitySamplePredicate: predicate,
-                options: .discreteAverage
-            ) { _, stats, error in
-                if let error { continuation.resume(throwing: error); return }
-                let value = stats?.averageQuantity()?.doubleValue(for: unit) ?? 0
-                continuation.resume(returning: value)
-            }
-            store.execute(query)
-        }
-    }
 }
 
 // MARK: - Data Models
@@ -348,23 +260,6 @@ nonisolated struct WorkoutSummary: Codable {
         case .traditionalStrengthTraining, .functionalStrengthTraining: return "Strength"
         default: return "Workout"
         }
-    }
-}
-
-struct HealthMetricsSummary: Codable {
-    let dailySteps: Double
-    let averageHRbpm: Double?
-    let avgSleepHours: Double
-    let avgActiveEnergyKcal: Double
-    let periodDays: Int
-
-    func toJSONString() -> String {
-        var parts: [String] = ["Health Metrics (last \(periodDays) days):"]
-        parts.append("  Daily Steps (avg): \(Int(dailySteps))")
-        if let hr = averageHRbpm { parts.append("  Avg. Resting HR: \(Int(hr)) bpm") }
-        parts.append("  Avg. Sleep: \(String(format: "%.1f", avgSleepHours)) hours")
-        parts.append("  Avg. Active Energy: \(Int(avgActiveEnergyKcal)) kcal")
-        return parts.joined(separator: "\n")
     }
 }
 

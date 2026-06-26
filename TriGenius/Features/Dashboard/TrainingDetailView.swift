@@ -154,7 +154,8 @@ struct TrainingDetailView: View {
 
     private var tssBasis: String? {
         guard record.tss != nil else { return nil }
-        let snapshot = TrainingDataStore.shared.latestSnapshot()
+        // As-of the activity's own date — the same basis it was scored with at ingest.
+        let snapshot = TrainingDataStore.shared.performanceHistory().snapshot(asOf: record.date)
         return TSSCalculator.compute(details: details, snapshot: snapshot).basis?.label
     }
 

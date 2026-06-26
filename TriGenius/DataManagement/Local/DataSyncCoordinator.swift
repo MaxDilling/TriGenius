@@ -60,17 +60,19 @@ final class DataSyncCoordinator {
         switch source {
         case .garmin:
             guard await GarminAuth.shared.isAuthenticated else { return nil }
-            // getActivities ingests into the store as a side effect.
+            // Ingest the performance + wellness metric history FIRST: activity TSS is
+            // scored by the store at ingest against the thresholds current on each
+            // activity's own date (`snapshot(asOf:)`), so the FTP/CSS/threshold series
+            // must already be present when the activities land. Non-fatal on its own.
+            let metricsDays = days ?? 14   // seed ~2 weeks on a first/full sync
+            if let from = Calendar.current.date(byAdding: .day, value: -metricsDays, to: Calendar.current.startOfDay(for: Date())) {
+                await syncGarminMetrics(from: from, to: Date())
+            }
+            // getActivities ingests (and the store scores) into the store as a side effect.
             let result = await GarminService.shared.getActivities(sport: nil, count: syncCount, days: days)
             // Only advance the watermark on success, else a network failure would
             // skip the failed window on the next (now smaller) incremental sync.
             guard !result.hasPrefix("✗") else { return nil }
-            // Pull performance metrics (FTP, CSS, LTHR, VO2max…) into the DB time
-            // series alongside activities. Failure here is non-fatal to the sync.
-            let (_, settings) = await GarminService.shared.syncUserSettings()
-            if let settings {
-                store.ingestMetrics(Self.metrics(fromGarminSettings: settings, date: Date()))
-            }
             // Mirror planned calendar workouts into the local scheduled store so
             // the dashboard Agenda, calendar screen and weekly targets reflect them.
             await syncScheduledWorkouts(source: .garmin)
@@ -84,14 +86,20 @@ final class DataSyncCoordinator {
                 // the complete keep-set and doesn't drop legitimate older records.
                 let count = since == nil ? max(syncCount, 1000) : syncCount
                 let workouts = try await HealthKitService.shared.fetchRecentWorkouts(count: count, since: since)
+                // Ingest performance metrics before activities so the store scores
+                // each activity's TSS against the thresholds current on its date.
+                let metrics = (try? await HealthKitService.shared.fetchPerformanceMetrics()) ?? []
+                store.ingestMetrics(metrics)
                 let dtos = workouts.compactMap(Self.ingestDTO(from:))
                 store.ingest(dtos)
                 // Reconcile: remove HealthKit records no longer returned within the
                 // synced window — chiefly Garmin Connect workouts now filtered out
                 // at the source, which previously duplicated the Garmin data.
                 store.pruneActivities(source: "healthkit", from: since ?? .distantPast, keeping: Set(dtos.map(\.id)))
-                let metrics = (try? await HealthKitService.shared.fetchPerformanceMetrics()) ?? []
-                store.ingestMetrics(metrics)
+                // TODO: Apple Health wellness → DB. Ingest daily sleep / resting HR
+                // / HRV as `MetricKeys.wellness` IngestedMetrics here (mirroring the
+                // Garmin `syncGarminMetrics` path) so the source-agnostic
+                // `healthMetrics(source:days:)` read path returns AH data too.
                 markSynced(source)
                 return store.count
             } catch {
@@ -116,6 +124,11 @@ final class DataSyncCoordinator {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         guard let from = cal.date(byAdding: .day, value: -days, to: today) else { return nil }
+        // Backfill the full window's wellness + historical performance series FIRST
+        // — both the primary path that populates deep marker/recovery history AND the
+        // prerequisite for as-of-date TSS scoring of the activities ingested next
+        // (each scored against the FTP/threshold current on its own date).
+        await syncGarminMetrics(from: from, to: today)
         let count = await GarminService.shared.backfillActivities(
             startDate: DateFormatter.ymd.string(from: from),
             endDate: DateFormatter.ymd.string(from: today),
@@ -123,6 +136,131 @@ final class DataSyncCoordinator {
         )
         if count != nil { markSynced(source) }
         return count
+    }
+
+    // MARK: - Garmin metric-history sync (wellness + performance + zones)
+
+    /// Pull the wellness (sleep/rHR/HRV) + historical performance (FTP, VO2max,
+    /// thresholds, CSS, weight) time series and the training zones for `[from, to]`
+    /// into the DB. Best-effort and idempotent (upsert by metric+source+day, so
+    /// re-syncing a window only updates — "written only if not already present").
+    /// Returns the `syncUserSettings` summary line for the `sync_user_settings` tool.
+    @discardableResult
+    private func syncGarminMetrics(from: Date, to: Date) async -> String {
+        let start = DateFormatter.ymd.string(from: from)
+        let end = DateFormatter.ymd.string(from: to)
+        let history = await GarminService.shared.fetchMetricHistory(startDate: start, endDate: end)
+        if !history.isEmpty { store.ingestMetrics(history) }
+        // Training zones + max HR are the only markers the range endpoints don't
+        // cover (see GarminService.syncUserSettings).
+        let (text, settings) = await GarminService.shared.syncUserSettings()
+        if let settings {
+            store.ingestMetrics(Self.metrics(fromGarminSettings: settings, date: Date()))
+        }
+        return text
+    }
+
+    /// Manual full metric refresh for the `sync_user_settings` coach tool: pulls a
+    /// recent window of wellness + historical-performance history and the training
+    /// zones into the store. Returns a summary string for the coach.
+    func refreshGarminMetrics(days: Int = 30) async -> String {
+        let today = Date()
+        guard let from = Calendar.current.date(byAdding: .day, value: -days, to: Calendar.current.startOfDay(for: today)) else {
+            return "✗ Error: could not compute the sync window."
+        }
+        return await syncGarminMetrics(from: from, to: today)
+    }
+
+    // MARK: - Coach read path — health metrics (DB-backed, source-agnostic)
+
+    /// Serve `get_health_metrics` from the local wellness time series
+    /// (`resting_hr` / `hrv_overnight` / `sleep_*`), source-agnostic like
+    /// `activities(...)`. Builds the daily_metrics + summary JSON the coach
+    /// expects. If the window holds no wellness rows, sync once for the source
+    /// (Garmin) and retry; Apple Health is a no-op until its wellness sync exists.
+    func healthMetrics(source: DataSource, days: Int) async -> String {
+        let n = max(1, min(days, 30))
+        if !hasWellnessRows(days: n) {
+            if source == .garmin, await GarminAuth.shared.isAuthenticated {
+                let today = Date()
+                if let from = Calendar.current.date(byAdding: .day, value: -max(n, 14), to: Calendar.current.startOfDay(for: today)) {
+                    await syncGarminMetrics(from: from, to: today)
+                }
+            }
+        }
+        return healthMetricsResponse(source: source, days: n)
+    }
+
+    /// Latest-`days` start-of-day → value map for one wellness metric key.
+    private func wellnessByDay(_ key: String, days: Int) -> [Date: Double] {
+        let cal = Calendar.current
+        let cutoff = cal.date(byAdding: .day, value: -(days - 1), to: cal.startOfDay(for: Date()))!
+        var out: [Date: Double] = [:]
+        for p in store.metricHistory(key) where p.date >= cutoff {
+            out[cal.startOfDay(for: p.date)] = p.value
+        }
+        return out
+    }
+
+    private func hasWellnessRows(days: Int) -> Bool {
+        MetricKeys.wellness.contains { !wellnessByDay($0, days: days).isEmpty }
+    }
+
+    private func healthMetricsResponse(source: DataSource, days: Int) -> String {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let rhr = wellnessByDay("resting_hr", days: days)
+        let hrv = wellnessByDay("hrv_overnight", days: days)
+        let score = wellnessByDay("sleep_score", days: days)
+        let dur = wellnessByDay("sleep_duration_h", days: days)
+        let deep = wellnessByDay("sleep_deep_h", days: days)
+        let rem = wellnessByDay("sleep_rem_h", days: days)
+        func hours(_ v: Double?) -> Any { v.map { ($0 * 10).rounded() / 10 } ?? NSNull() }
+        func intOrNull(_ v: Double?) -> Any { v.map { Int($0.rounded()) } ?? NSNull() }
+
+        var daily: [[String: Any]] = []
+        for offset in 0..<days {
+            let day = cal.date(byAdding: .day, value: -offset, to: today)!
+            var entry: [String: Any] = ["date": DateFormatter.ymd.string(from: day)]
+            entry["resting_hr"] = intOrNull(rhr[day])
+            entry["hrv_overnight"] = intOrNull(hrv[day])
+            if let s = score[day] {
+                entry["sleep"] = [
+                    "score": Int(s.rounded()),
+                    "duration_hours": hours(dur[day]),
+                    "deep_hours": hours(deep[day]),
+                    "rem_hours": hours(rem[day]),
+                ]
+            } else { entry["sleep"] = NSNull() }
+            daily.append(entry)
+        }
+
+        func avg(_ vals: [Double], _ places: Int) -> Any {
+            guard !vals.isEmpty else { return NSNull() }
+            let a = vals.reduce(0, +) / Double(vals.count)
+            let f = pow(10.0, Double(places))
+            return (a * f).rounded() / f
+        }
+        // Newest-first resting HR for the trend (matches GarminTransform.analyzeTrend).
+        let restingHRs = (0..<days).compactMap { rhr[cal.date(byAdding: .day, value: -$0, to: today)!] }
+        let summary: [String: Any] = [
+            "avg_resting_hr": avg(restingHRs, 0),
+            "avg_hrv_overnight": avg(Array(hrv.values), 0),
+            "avg_sleep_score": avg(Array(score.values), 1),
+            "avg_sleep_hours": avg(Array(dur.values), 1),
+            "resting_hr_trend": restingHRs.isEmpty ? "Unknown" : GarminTransform.analyzeTrend(restingHRs),
+        ]
+        var data: [String: Any] = [
+            "period": ["start": DateFormatter.ymd.string(from: cal.date(byAdding: .day, value: -(days - 1), to: today)!),
+                       "end": DateFormatter.ymd.string(from: today), "days": days],
+            "daily_metrics": daily,
+            "summary": summary,
+        ]
+        if source == .appleHealth, !hasWellnessRows(days: days) {
+            data["note"] = "Apple Health wellness sync is not implemented yet; no recovery data stored."
+        }
+        let json = String(prettyJSON: data)
+        return "✓ Retrieved health metrics for the last \(days) days (local)\n\(json)"
     }
 
     // MARK: - Scheduled-workout sync (planned calendar items)
@@ -203,26 +341,14 @@ final class DataSyncCoordinator {
     // MARK: - Garmin settings → performance metrics
 
     /// Map the dict returned by `GarminService.syncUserSettings()` into time-series
-    /// metric records. Shared by the launch/dashboard sync and the
-    /// `sync_user_settings` coach tool so both ingest the same way.
+    /// metric records. Scoped to what the range endpoints don't provide — max HR
+    /// and the HR/power zones; the FTP/VO2max/threshold/CSS/weight series come from
+    /// `GarminService.fetchMetricHistory`. Shared by the launch/dashboard sync and
+    /// the `sync_user_settings` coach tool so both ingest the same way.
     static func metrics(fromGarminSettings settings: [String: Any], date: Date) -> [IngestedMetric] {
         var out: [IngestedMetric] = []
-        func add(_ key: String, _ value: Double?, _ unit: String) {
-            guard let value, value > 0 else { return }
-            out.append(IngestedMetric(metricKey: key, value: value, unit: unit, source: "garmin", date: date))
-        }
-        add("cycling_ftp", (settings["cycling_ftp"] as? NSNumber)?.doubleValue, "watts")
-        add("running_ftp", (settings["running_ftp"] as? NSNumber)?.doubleValue, "watts")
-        add("lactate_threshold_hr", (settings["lactate_threshold_hr"] as? NSNumber)?.doubleValue, "bpm")
-        add("max_hr", (settings["max_hr"] as? NSNumber)?.doubleValue, "bpm")
-        add("vo2max_running", (settings["vo2max_running"] as? NSNumber)?.doubleValue, "ml_kg_min")
-        add("vo2max_cycling", (settings["vo2max_cycling"] as? NSNumber)?.doubleValue, "ml_kg_min")
-        add("weight_kg", (settings["weight_kg"] as? NSNumber)?.doubleValue, "kg")
-        if let css = settings["css_pace_per_100m"] as? String, let secs = paceSeconds(from: css) {
-            add("swim_css_pace", secs, "sec_per_100m")
-        }
-        if let pace = settings["lactate_threshold_pace"] as? String, let secs = paceSeconds(from: pace) {
-            add("lactate_threshold_pace", secs, "sec_per_km")
+        if let maxHR = (settings["max_hr"] as? NSNumber)?.doubleValue, maxHR > 0 {
+            out.append(IngestedMetric(metricKey: "max_hr", value: maxHR, unit: "bpm", source: "garmin", date: date))
         }
         out += zoneMetrics(settings["hr_zones"], prefix: "hr_zone", unit: "bpm", source: "garmin", date: date)
         out += zoneMetrics(settings["power_zones"], prefix: "power_zone", unit: "watts", source: "garmin", date: date)
@@ -238,8 +364,9 @@ final class DataSyncCoordinator {
         if let ftp = p.ftp {
             out.append(IngestedMetric(metricKey: "cycling_ftp", value: Double(ftp), unit: "watts", source: "manual", date: date))
         }
-        if let css = p.cssPace, let secs = paceSeconds(from: css) {
-            out.append(IngestedMetric(metricKey: "swim_css_pace", value: secs, unit: "sec_per_100m", source: "manual", date: date))
+        // CSS is stored as raw speed (m/s); convert the profile's "m:ss"/100m pace.
+        if let css = p.cssPace, let secs = paceSeconds(from: css), secs > 0 {
+            out.append(IngestedMetric(metricKey: "swim_css_speed", value: 100.0 / secs, unit: "m_per_s", source: "manual", date: date))
         }
         if let vo2 = p.vo2max {
             out.append(IngestedMetric(metricKey: "vo2max_running", value: vo2, unit: "ml_kg_min", source: "manual", date: date))
@@ -373,7 +500,6 @@ final class DataSyncCoordinator {
             name: w.name,
             durationMinutes: w.durationMin,
             distanceKm: w.distanceKm ?? 0,
-            tss: nil,   // HealthKit does not provide a TSS value.
             aerobicTE: nil,
             anaerobicTE: nil,
             detailsJSON: detailsJSON

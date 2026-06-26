@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 // MARK: - Garmin Service
 //
@@ -11,6 +12,7 @@ actor GarminService {
 
     static let shared = GarminService()
     private let client = GarminClient.shared
+    private let log = Logger(subsystem: "net.Narica.TriGenius", category: "Garmin")
     private init() {}
 
     // MARK: - Result helpers
@@ -157,7 +159,8 @@ actor GarminService {
             swimming["garmin_distance_m"] = garminDistanceM ?? NSNull()
             swimming["lengths"] = lengths.isEmpty ? NSNull() : lengths
             data["swimming"] = swimming
-            // Effective distance + sTSS are resolved by `TSSScoring.score` at ingest.
+            // Effective distance + sTSS are resolved by the store at ingest
+            // (`TrainingDataStore.ingest` → `TSSScoring.score`).
         }
         return data
     }
@@ -174,11 +177,12 @@ actor GarminService {
         return min(10, max(1, Int((v / 10).rounded())))
     }
 
-    /// Build the local-DB ingest snapshot from a *formatted* coach record.
-    /// Stores the full record as `detailsJSON` (so `get_activities` can serve it
-    /// verbatim) plus the training load (`activityTrainingLoad`), the
-    /// TSS-equivalent the PMC engine relies on. Returns nil without an id/date.
-    private func ingestDTO(from rec: [String: Any], tss: Double?) -> IngestedActivity? {
+    /// Build the local-DB ingest snapshot from a *formatted* coach record. Stores
+    /// the full normalized record as `detailsJSON` (so `get_activities` can serve it
+    /// verbatim); TSS + the effective distance are computed by the store at ingest
+    /// (`TrainingDataStore.ingest`), scored against the activity's own date. Returns
+    /// nil without an id/date.
+    private func ingestDTO(from rec: [String: Any]) -> IngestedActivity? {
         guard let idNum = rec["id"] as? NSNumber else { return nil }
         guard let dateStr = rec["date"] as? String, let date = GarminTransform.date(from: dateStr) else { return nil }
         let detailsJSON = (try? JSONSerialization.data(withJSONObject: rec))
@@ -191,7 +195,6 @@ actor GarminService {
             name: rec["name"] as? String ?? "Activity",
             durationMinutes: (rec["duration_minutes"] as? NSNumber)?.doubleValue ?? 0,
             distanceKm: (rec["distance_km"] as? NSNumber)?.doubleValue ?? 0,
-            tss: tss,
             aerobicTE: (rec["aerobic_te"] as? NSNumber)?.doubleValue,
             anaerobicTE: (rec["anaerobic_te"] as? NSNumber)?.doubleValue,
             detailsJSON: detailsJSON
@@ -212,8 +215,7 @@ actor GarminService {
             let targetIDs = sport.flatMap { GarminMappings.sportFilterIDs[$0.lowercased()] }
 
             // Cache: reuse already-stored activities verbatim; only NEW workouts pay
-            // the extra stream/splits fetch + TSS compute.
-            let snapshot = await TrainingDataStore.shared.latestSnapshot()
+            // the extra stream/splits fetch. TSS is scored by the store at ingest.
             let candidateIDs = Set(raw.compactMap { ($0["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" } })
             let cache = await TrainingDataStore.shared.cachedActivities(ids: candidateIDs)
 
@@ -233,10 +235,9 @@ actor GarminService {
                    let cachedRec = (try? JSONSerialization.jsonObject(with: cachedData)) as? [String: Any] {
                     formatted.append(cachedRec)            // already stored & computed
                 } else {
-                    var rec = await formatActivityRecord(activity)
-                    let (_, tss) = TSSScoring.score(&rec, snapshot: snapshot)
+                    let rec = await formatActivityRecord(activity)
                     formatted.append(rec)
-                    if let dto = ingestDTO(from: rec, tss: tss) { toIngest.append(dto) }
+                    if let dto = ingestDTO(from: rec) { toIngest.append(dto) }
                 }
                 if formatted.count >= count { break }
             }
@@ -268,7 +269,6 @@ actor GarminService {
     func backfillActivities(startDate: String, endDate: String, force: Bool = false) async -> Int? {
         do {
             let raw = try await client.getActivitiesByDate(start: startDate, end: endDate)
-            let snapshot = await TrainingDataStore.shared.latestSnapshot()
             let candidateIDs = Set(raw.compactMap { ($0["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" } })
             let cache = await TrainingDataStore.shared.cachedActivities(ids: candidateIDs)
             var toIngest: [IngestedActivity] = []
@@ -282,8 +282,8 @@ actor GarminService {
                    let prior = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["manual_distance_m"] {
                     rec["manual_distance_m"] = prior
                 }
-                let (_, tss) = TSSScoring.score(&rec, snapshot: snapshot)
-                if let dto = ingestDTO(from: rec, tss: tss) { toIngest.append(dto) }
+                // TSS + effective distance are scored by the store at ingest.
+                if let dto = ingestDTO(from: rec) { toIngest.append(dto) }
             }
             await TrainingDataStore.shared.ingest(toIngest)
             return toIngest.count
@@ -371,73 +371,122 @@ actor GarminService {
         }
     }
 
-    // MARK: - get_health_metrics
+    // MARK: - fetchMetricHistory (wellness + performance range endpoints)
+    //
+    // One range call per metric type (no per-day looping) → a flat list of dated
+    // samples for the local time-series DB (`MetricKeys.wellness` +
+    // `MetricKeys.performance`). Best-effort: any endpoint that fails contributes
+    // nothing. Parsing lives in `GarminTransform`; this maps each list onto a
+    // metric key + unit. Speeds (CSS, LT) are stored raw in m/s — pace is a
+    // display transform applied later (see `TrainingDataStore.latestSnapshot`).
+    func fetchMetricHistory(startDate: String, endDate: String) async -> [IngestedMetric] {
+        // Threshold endpoints share the daily/LATEST/running aggregation.
+        let thresholdQuery = [("aggregation", "daily"), ("aggregationStrategy", "LATEST"), ("sport", "RUNNING")]
 
-    func getHealthMetrics(days: Int = 7) async -> String {
-        do {
-            let end = Date()
-            var dailyMetrics: [[String: Any]] = []
-            for offset in 0..<days {
-                let current = Calendar.current.date(byAdding: .day, value: -offset, to: end)!
-                let dateStr = GarminTransform.ymd(current)
-                var day: [String: Any] = ["date": dateStr]
+        // Independent range calls fire concurrently. `get` flattens the throwing
+        // optional so a single failure just yields nil.
+        async let hrvRaw      = get("/hrv-service/hrv/daily/\(startDate)/\(endDate)")
+        async let sleepRows   = fetchSleepStats(startDate: startDate, endDate: endDate)
+        async let weightRaw   = get("/weight-service/weight/range/\(startDate)/\(endDate)", query: [("includeAll", "true")])
+        async let vo2Raw      = get("/metrics-service/metrics/maxmet/weekly/\(startDate)/\(endDate)")
+        async let ftpRaw      = get("/biometric-service/stats/functionalThresholdPower/range/\(startDate)/\(endDate)", query: [("aggregation", "weekly")])
+        async let cssRaw      = get("/biometric-service/criticalSwimSpeed/range/\(startDate)/\(endDate)")
+        async let lthrRaw     = get("/biometric-service/stats/lactateThresholdHeartRate/range/\(startDate)/\(endDate)", query: thresholdQuery)
+        async let ltSpeedRaw  = get("/biometric-service/stats/lactateThresholdSpeed/range/\(startDate)/\(endDate)", query: thresholdQuery)
 
-                // Resting heart rate (lower trend = recovered / fitter; spikes flag
-                // fatigue or illness). A secondary signal, not a driver.
-                if let hr = try? await client.getDailyHeartRate(date: dateStr),
-                   let rhr = Coerce.double(hr["restingHeartRate"]), rhr > 0 {
-                    day["resting_hr"] = Int(rhr.rounded())
-                } else { day["resting_hr"] = NSNull() }
+        let hrvObj     = await hrvRaw as? [String: Any]
+        let sleepObj   = await sleepRows
+        let weightObj  = await weightRaw as? [String: Any]
+        let vo2Arr     = await vo2Raw as? [[String: Any]]
+        let ftpArr     = await ftpRaw as? [[String: Any]]
+        let cssObj     = await cssRaw as? [String: Any]
+        let lthrArr    = await lthrRaw as? [[String: Any]]
+        let ltSpeedArr = await ltSpeedRaw as? [[String: Any]]
 
-                // Sleep
-                if let sleep = try? await client.getSleepData(date: dateStr),
-                   let dto = sleep["dailySleepDTO"] as? [String: Any] {
-                    let scores = dto["sleepScores"] as? [String: Any] ?? [:]
-                    let overall = (scores["overall"] as? [String: Any])?["value"]
-                    let quality = (scores["totalDuration"] as? [String: Any])?["qualifierKey"] as? String ?? "Unknown"
-                    day["sleep"] = [
-                        "score": overall ?? NSNull(),
-                        "duration_hours": round1((Coerce.double(dto["sleepTimeSeconds"]) ?? 0) / 3600),
-                        "quality": quality,
-                        "deep_hours": round1((Coerce.double(dto["deepSleepSeconds"]) ?? 0) / 3600),
-                        "rem_hours": round1((Coerce.double(dto["remSleepSeconds"]) ?? 0) / 3600),
-                        "avg_hr": dto["avgHeartRate"] ?? NSNull()
-                    ]
-                } else { day["sleep"] = NSNull() }
-
-                dailyMetrics.append(day)
+        var out: [IngestedMetric] = []
+        func add(_ key: String, _ unit: String, _ samples: [GarminTransform.DatedValue]) {
+            for s in samples {
+                out.append(IngestedMetric(metricKey: key, value: s.value, unit: unit, source: "garmin", date: s.date))
             }
+        }
+        // Wellness — sleep (score, duration, the four stage durations) and the
+        // night's resting HR all come from the one sleep-stats range payload.
+        add("hrv_overnight", "ms", GarminTransform.parseHrvOvernight(hrvObj))
+        let sleep = GarminTransform.parseSleepStats(sleepObj)
+        add("sleep_score", "score", sleep["sleep_score"] ?? [])
+        add("sleep_duration_h", "hours", sleep["sleep_duration_h"] ?? [])
+        add("sleep_deep_h", "hours", sleep["sleep_deep_h"] ?? [])
+        add("sleep_light_h", "hours", sleep["sleep_light_h"] ?? [])
+        add("sleep_rem_h", "hours", sleep["sleep_rem_h"] ?? [])
+        add("sleep_awake_h", "hours", sleep["sleep_awake_h"] ?? [])
+        add("resting_hr", "bpm", sleep["resting_hr"] ?? [])
+        // Performance
+        add("weight_kg", "kg", GarminTransform.parseWeightKg(weightObj))
+        add("vo2max_running", "ml_kg_min", GarminTransform.parseVo2Max(vo2Arr, subKey: "generic"))
+        add("vo2max_cycling", "ml_kg_min", GarminTransform.parseVo2Max(vo2Arr, subKey: "cycling"))
+        add("cycling_ftp", "watts", GarminTransform.parseFtp(ftpArr, series: "cycling"))
+        add("running_ftp", "watts", GarminTransform.parseFtp(ftpArr, series: "running"))
+        add("swim_css_speed", "m_per_s", GarminTransform.parseCssSpeed(cssObj))
+        add("lactate_threshold_hr", "bpm", GarminTransform.parseThresholdHR(lthrArr))
+        add("lactate_threshold_speed", "m_per_s", GarminTransform.parseThresholdSpeed(ltSpeedArr))
+        return out
+    }
 
-            func collect(_ path: (String, String)) -> [Double] {
-                dailyMetrics.compactMap { entry in
-                    guard let sub = entry[path.0] as? [String: Any] else { return nil }
-                    return Coerce.double(sub[path.1])
+    /// Issue a GET and flatten the throwing optional → a single failure yields nil.
+    /// Logs the underlying error first so a swallowed range failure (e.g. the
+    /// sleep endpoint's "Exceeded max number of days") is still visible in the
+    /// unified log rather than silently leaving a metric un-backfilled.
+    private func get(_ path: String, query: [(String, String)] = []) async -> Any? {
+        do {
+            return try await client.connectapi(path, query: query)
+        } catch {
+            log.error("GET \(path, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
+    }
+
+    /// Sleep-stats range fetch, returned in the `{ "individualStats": [...] }`
+    /// envelope `GarminTransform.parseSleepStats` expects. Unlike the other metric
+    /// ranges (HRV, weight, biometric thresholds) this endpoint rejects windows
+    /// over 28 days with `BadRequestException: Exceeded max number of days`, so a
+    /// deep backfill must be split into ≤28-day chunks and their per-day rows
+    /// merged — otherwise the whole sleep / resting-HR history is silently dropped.
+    private func fetchSleepStats(startDate: String, endDate: String) async -> [String: Any]? {
+        let windows = Self.dateWindows(startDate: startDate, endDate: endDate, maxDays: 28)
+        // Fire the chunk requests concurrently; row order is irrelevant since the
+        // transform keys each row by its own `calendarDate`.
+        let chunks = await withTaskGroup(of: [[String: Any]].self) { group -> [[String: Any]] in
+            for (start, end) in windows {
+                group.addTask {
+                    let obj = await self.get("/sleep-service/stats/sleep/daily/\(start)/\(end)") as? [String: Any]
+                    return obj?["individualStats"] as? [[String: Any]] ?? []
                 }
             }
-            let restingHRs = dailyMetrics.compactMap { Coerce.double($0["resting_hr"]) }
-            let sleepScores = collect(("sleep", "score"))
-            let sleepDurations = collect(("sleep", "duration_hours"))
-
-            func avg(_ vals: [Double], _ places: Int) -> Any {
-                guard !vals.isEmpty else { return NSNull() }
-                let a = vals.reduce(0, +) / Double(vals.count)
-                let f = pow(10.0, Double(places))
-                return (a * f).rounded() / f
-            }
-
-            let metrics: [String: Any] = [
-                "period": ["start": GarminTransform.ymd(Calendar.current.date(byAdding: .day, value: -days, to: end)!),
-                           "end": GarminTransform.ymd(end), "days": days],
-                "daily_metrics": dailyMetrics,
-                "summary": [
-                    "avg_resting_hr": avg(restingHRs, 0),
-                    "avg_sleep_score": avg(sleepScores, 1),
-                    "avg_sleep_hours": avg(sleepDurations, 1),
-                    "resting_hr_trend": restingHRs.isEmpty ? "Unknown" : GarminTransform.analyzeTrend(restingHRs)
-                ]
-            ]
-            return resultString(success: true, data: metrics, message: "Retrieved health metrics for the last \(days) days")
+            return await group.reduce(into: []) { $0.append(contentsOf: $1) }
         }
+        return chunks.isEmpty ? nil : ["individualStats": chunks]
+    }
+
+    /// Split an inclusive `[startDate, endDate]` calendar range (both `yyyy-MM-dd`)
+    /// into consecutive windows of at most `maxDays` days each, for endpoints that
+    /// cap the per-request range. Returns `[(start, end)]` pairs as `yyyy-MM-dd`.
+    static func dateWindows(startDate: String, endDate: String, maxDays: Int) -> [(String, String)] {
+        let cal = Calendar.current
+        guard maxDays > 0,
+              let start = DateFormatter.ymd.date(from: startDate),
+              let end = DateFormatter.ymd.date(from: endDate),
+              start <= end else { return [(startDate, endDate)] }
+
+        var windows: [(String, String)] = []
+        var cursor = start
+        while cursor <= end {
+            // `maxDays - 1`: an inclusive window of N days spans N-1 day steps.
+            let chunkEnd = min(cal.date(byAdding: .day, value: maxDays - 1, to: cursor) ?? end, end)
+            windows.append((DateFormatter.ymd.string(from: cursor), DateFormatter.ymd.string(from: chunkEnd)))
+            guard let next = cal.date(byAdding: .day, value: 1, to: chunkEnd) else { break }
+            cursor = next
+        }
+        return windows
     }
 
     // MARK: - get_workouts
@@ -497,9 +546,10 @@ actor GarminService {
                         durationMinutes = Int((est / 60).rounded())
                     }
                     steps = compactSteps(fromDetails: details, sport: sportKey)
-                    // Garmin stores poolLength in cm; expose it in meters (swim only).
+                    // Workout payloads store poolLength already in meters
+                    // (unlike activity summaries, which use cm) — expose as-is.
                     if let pool = Coerce.double(details["poolLength"]), pool > 0 {
-                        poolLengthM = pool / 100
+                        poolLengthM = pool
                     }
                 }
                 // workout_data mirrors the add_workouts/modify_workout shape, so
@@ -781,65 +831,41 @@ actor GarminService {
     // MARK: - sync_user_settings
 
     /// Returns (renderedString, settings). `settings` is nil on failure.
+    ///
+    /// Scoped to what the range endpoints (see `fetchMetricHistory`) do NOT
+    /// provide: HR zones + max HR, and power zones (bucketed from the current
+    /// cycling FTP). The dated FTP/VO2max/threshold/CSS/weight time series are
+    /// owned by `fetchMetricHistory`; `cycling_ftp` is read here only to derive
+    /// the power-zone bands and is not emitted as a metric.
     func syncUserSettings() async -> (text: String, settings: [String: Any]?) {
-        do {
-            var settings: [String: Any] = [:]
+        var settings: [String: Any] = [:]
 
-            if let ftp = try? await client.getCyclingFtp() {
-                if let dict = ftp as? [String: Any], let value = (dict["functionalThresholdPower"] as? NSNumber)?.intValue {
-                    settings["cycling_ftp"] = value
-                }
-            }
-
-            if let hr = try? await client.getLactateThresholdHR() {
-                settings["lactate_threshold_hr"] = hr
-            }
-            // Running threshold speed (m/s) → pace per km ("m:ss").
-            if let speed = try? await client.getRunningThresholdSpeed(),
-               let pace = GarminTransform.speedToPace(speed, distanceM: 1000) {
-                settings["lactate_threshold_pace"] = pace
-            }
-
-            if let hrZones = try? await client.connectapi("/biometric-service/heartRateZones") as? [[String: Any]], !hrZones.isEmpty {
-                let defaultZones = hrZones.first { ($0["sport"] as? String) == "DEFAULT" } ?? hrZones[0]
-                if let maxHR = (defaultZones["maxHeartRateUsed"] as? NSNumber)?.intValue { settings["max_hr"] = maxHR }
-                func z(_ key: String) -> Int { (defaultZones[key] as? NSNumber)?.intValue ?? 0 }
-                settings["hr_zones"] = zoneBands([
-                    0, z("zone1Floor"), z("zone2Floor"), z("zone3Floor"), z("zone4Floor"), z("maxHeartRateUsed")
-                ])
-            }
-
-            if let profile = try? await client.getUserProfile(), let userData = profile["userData"] as? [String: Any] {
-                if let v = userData["vo2MaxRunning"] { settings["vo2max_running"] = v }
-                if let v = userData["vo2MaxCycling"] { settings["vo2max_cycling"] = v }
-                if let w = Coerce.double(userData["weight"]) { settings["weight_kg"] = round1(w / 1000) }
-                if let h = userData["height"] { settings["height_cm"] = h }
-                if let g = userData["gender"] as? String { settings["gender"] = g.lowercased() }
-                if let b = userData["birthDate"] { settings["birth_date"] = b }
-            }
-
-            if let ftp = settings["cycling_ftp"] as? Int {
-                let f = Double(ftp)
-                let bounds = [0, 0.55, 0.75, 0.90, 1.05, 1.20].map { Int((f * $0).rounded()) }
-                settings["power_zones"] = zoneBands(bounds)
-            }
-
-            let today = GarminTransform.ymd(Date())
-            if let css = try? await client.connectapi("/biometric-service/criticalSwimSpeed/latest/\(today)") as? [String: Any],
-               let cssMm = (css["criticalSwimSpeed"] as? NSNumber)?.doubleValue, cssMm > 0 {
-                if let pace = GarminTransform.speedToPace(cssMm / 1000, distanceM: 100) { settings["css_pace_per_100m"] = pace }
-            }
-
-            if settings.isEmpty {
-                return (resultString(success: false, data: nil, message: "Could not retrieve any user settings from Garmin"), nil)
-            }
-            let message = "Retrieved settings from Garmin: "
-                + "FTP=\(settings["cycling_ftp"].map { "\($0)" } ?? "N/A")W, "
-                + "LTHR=\(settings["lactate_threshold_hr"].map { "\($0)" } ?? "N/A") bpm, "
-                + "LT pace=\(settings["lactate_threshold_pace"].map { "\($0)" } ?? "N/A")/km, "
-                + "VO2max=\(settings["vo2max_running"].map { "\($0)" } ?? "N/A"), "
-                + "CSS=\(settings["css_pace_per_100m"].map { "\($0)" } ?? "N/A")"
-            return (resultString(success: true, data: settings, message: message), settings)
+        if let hrZones = try? await client.connectapi("/biometric-service/heartRateZones") as? [[String: Any]], !hrZones.isEmpty {
+            let defaultZones = hrZones.first { ($0["sport"] as? String) == "DEFAULT" } ?? hrZones[0]
+            if let maxHR = (defaultZones["maxHeartRateUsed"] as? NSNumber)?.intValue { settings["max_hr"] = maxHR }
+            func z(_ key: String) -> Int { (defaultZones[key] as? NSNumber)?.intValue ?? 0 }
+            settings["hr_zones"] = zoneBands([
+                0, z("zone1Floor"), z("zone2Floor"), z("zone3Floor"), z("zone4Floor"), z("maxHeartRateUsed")
+            ])
         }
+
+        // Power zones are bucketed from the current cycling FTP. The FTP series
+        // itself comes from fetchMetricHistory, so we read the latest value only.
+        if let ftp = try? await client.getCyclingFtp(),
+           let dict = ftp as? [String: Any],
+           let value = (dict["functionalThresholdPower"] as? NSNumber)?.intValue, value > 0 {
+            let f = Double(value)
+            let bounds = [0, 0.55, 0.75, 0.90, 1.05, 1.20].map { Int((f * $0).rounded()) }
+            settings["power_zones"] = zoneBands(bounds)
+        }
+
+        if settings.isEmpty {
+            return (resultString(success: false, data: nil, message: "Could not retrieve HR/power zones from Garmin"), nil)
+        }
+        let message = "Synced training zones from Garmin: "
+            + "maxHR=\(settings["max_hr"].map { "\($0)" } ?? "N/A") bpm, "
+            + "HR zones \(settings["hr_zones"] != nil ? "✓" : "—"), "
+            + "power zones \(settings["power_zones"] != nil ? "✓" : "—")"
+        return (resultString(success: true, data: settings, message: message), settings)
     }
 }
