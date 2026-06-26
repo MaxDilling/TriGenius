@@ -248,13 +248,22 @@ struct DashboardView: View {
     // fallback is surfaced instantly while the model line is generated.
     @ViewBuilder private var aiInsightCard: some View {
         if let insight = viewModel.insight, !insight.isEmpty {
+            let parsed = DashboardInsight.parse(insight)
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "apple.intelligence")
                     .font(.title2)
                     .foregroundStyle(Self.appleIntelligenceGradient)
-                Text(insight)
-                    .font(.callout)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(parsed.text)
+                        .font(.callout)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    // The coach's optional action link — a tappable chip that hands
+                    // its message off to the chat (unsent), so the athlete can act
+                    // on the gap the insight just named.
+                    if let action = parsed.action {
+                        insightActionChip(action)
+                    }
+                }
             }
             .dashCard()
             .overlay(
@@ -267,6 +276,25 @@ struct DashboardView: View {
             .contentShape(Rectangle())
             .onTapGesture { router.openChat(prefill: viewModel.insightFollowUpPrompt) }
         }
+    }
+
+    /// Tappable chip for the insight's action link. Its own button consumes the tap
+    /// so it routes the coach's specific message rather than the card's generic
+    /// follow-up.
+    private func insightActionChip(_ action: DashboardInsight.Action) -> some View {
+        Button {
+            router.openChat(prefill: action.message)
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "wand.and.stars")
+                Text(action.label)
+            }
+            .font(.footnote.weight(.semibold))
+            .padding(.horizontal, Theme.Spacing.m)
+            .padding(.vertical, Theme.Spacing.s)
+            .glassSurface(cornerRadius: Theme.Radius.l, tint: .accentColor)
+        }
+        .buttonStyle(.plain)
     }
 
     /// Apple Intelligence's signature iridescent gradient, reused for the glyph

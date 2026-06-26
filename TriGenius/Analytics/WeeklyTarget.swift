@@ -147,7 +147,8 @@ enum WeeklyTargets {
     static func targets(
         scheduled: [ScheduledWorkoutRecord],
         weeklyStructure: WeeklyStructure,
-        plan: TrainingPlan
+        plan: TrainingPlan,
+        referenceDate: Date = Date()
     ) -> [SportFamily: WeeklyTarget] {
         var planned: [SportFamily: WeeklyTarget] = [:]
         for w in scheduled {
@@ -160,7 +161,7 @@ enum WeeklyTargets {
             planned[family] = t
         }
 
-        let currentPhase = plan.phase()
+        let currentPhase = plan.phase(on: referenceDate)
 
         var out: [SportFamily: WeeklyTarget] = [:]
         for family in SportFamily.allCases {

@@ -127,7 +127,15 @@ final class DashboardViewModel {
 
     private func refreshInsight(context: DashboardContext) {
         let fallback = Self.heuristicInsight(targets: targets, currentWeek: currentWeek)
-        let (summary, signature) = Self.insightInputs(pmc: pmc, targets: targets, currentWeek: currentWeek)
+        let (summary, signature) = DashboardInsightInput.build(
+            store: TrainingDataStore.shared,
+            pmc: pmc,
+            weeklyBuckets: weeklyBuckets,
+            targets: targets,
+            projections: projections,
+            weeklyStructure: context.weeklyStructure,
+            plan: context.trainingPlan
+        )
 
         if let cached = DashboardInsight.cached(signature: signature) {
             insight = cached
@@ -177,36 +185,6 @@ final class DashboardViewModel {
         return "Give me a quick review of my training week."
     }
 
-    /// Build the compact data summary + a launch-stable signature for caching.
-    ///
-    /// The Form (TSB) line is PRE-CLASSIFIED here (not left to the model to
-    /// interpret) so a small on-device model can't misread a normal negative TSB as
-    /// "hard training / recover" — see BUGS.md. Trend deltas give it something to
-    /// say beyond the raw level.
-    private static func insightInputs(
-        pmc: PMCResult?,
-        targets: [SportFamily: WeeklyTarget],
-        currentWeek: TrainingVolume.WeekBucket?
-    ) -> (summary: String, signature: Int) {
-        var lines: [String] = []
-        if let s = pmc?.snapshot {
-            let ctlTrend = trendWord(delta: delta7(pmc) { $0.ctl })
-            lines.append("Fitness (CTL) \(Int(s.ctl.rounded())) (\(ctlTrend) over 7 days); Fatigue (ATL) \(Int(s.atl.rounded())); Form (TSB) \(Int(s.tsb.rounded())).")
-            lines.append("Form interpretation: \(formInterpretation(tsb: s.tsb, ctl: s.ctl))")
-            for sig in ProactiveCoach.signals(from: s) {
-                lines.append("Flag: \(sig.message)")
-            }
-        }
-        lines.append("This week per discipline (actual vs target — minutes, TSS):")
-        for fam in SportFamily.triathlon {
-            let a = currentWeek?.totals(for: fam) ?? VolumeTotals()
-            let t = targets[fam] ?? WeeklyTarget(durationMinutes: 0, tss: 0)
-            lines.append("- \(fam.displayName): \(Int(a.durationMinutes.rounded()))/\(Int(t.durationMinutes.rounded())) min, \(Int(a.tss.rounded()))/\(Int(t.tss.rounded())) TSS")
-        }
-        let summary = lines.joined(separator: "\n")
-        return (summary, stableHash(summary))
-    }
-
     /// The complete prompt sent to generate the dashboard one-liner — the static
     /// system prompt plus the live, pre-classified data summary that goes out as
     /// the user message — assembled from the current local store + plan. Pure and
@@ -215,7 +193,7 @@ final class DashboardViewModel {
     static func debugInsightPrompt(context: DashboardContext) -> String {
         let store = TrainingDataStore.shared
         let pmc = PMCEngine.current()
-        let currentWeek = TrainingVolume.weeklyBuckets(records: store.activities()).last
+        let weeklyBuckets = TrainingVolume.weeklyBuckets(records: store.activities())
 
         let cal = Calendar.current
         let weekStart = TrainingVolume.weekStart(of: Date())
@@ -225,8 +203,17 @@ final class DashboardViewModel {
             weeklyStructure: context.weeklyStructure,
             plan: context.trainingPlan
         )
+        let projections = WeeklyTargets.projection(store: store)
 
-        let (summary, _) = insightInputs(pmc: pmc, targets: targets, currentWeek: currentWeek)
+        let (summary, _) = DashboardInsightInput.build(
+            store: store,
+            pmc: pmc,
+            weeklyBuckets: weeklyBuckets,
+            targets: targets,
+            projections: projections,
+            weeklyStructure: context.weeklyStructure,
+            plan: context.trainingPlan
+        )
         return """
         ===== SYSTEM PROMPT =====
 
@@ -236,46 +223,6 @@ final class DashboardViewModel {
 
         \(summary)
         """
-    }
-
-    /// Plain-language read of Form (TSB) so the model classifies it correctly.
-    /// Negative-while-building is the productive norm, not a recovery flag.
-    private static func formInterpretation(tsb: Double, ctl: Double) -> String {
-        switch tsb {
-        case ..<(-30):
-            return "fatigue is HIGH (deep negative) — recovery is genuinely warranted before adding load."
-        case ..<(-10):
-            return "productive training zone — this negative Form is normal and desirable while building fitness; NOT a recovery flag."
-        case ..<5:
-            return "neutral / maintenance — balanced load and recovery."
-        case ..<15:
-            return "fresh — well recovered, good for a key session."
-        default:
-            return ctl < 20
-                ? "very fresh but fitness (CTL) is low — this points to detraining, not race-readiness; consistent volume is the lever."
-                : "very fresh / tapered — race-ready."
-        }
-    }
-
-    /// 7-day change in a PMC metric, or 0 when history is too short.
-    private static func delta7(_ pmc: PMCResult?, _ metric: (PMCPoint) -> Double) -> Int {
-        guard let now = pmc?.points.last.map(metric),
-              let then = pmc?.value(daysAgo: 7, metric) else { return 0 }
-        return Int((now - then).rounded())
-    }
-
-    private static func trendWord(delta: Int) -> String {
-        if delta > 1 { return "rising +\(delta)" }
-        if delta < -1 { return "falling \(delta)" }
-        return "flat"
-    }
-
-    /// Deterministic djb2 hash — `String.hashValue` is per-process randomized,
-    /// which would break the cross-launch per-day insight cache.
-    private static func stableHash(_ s: String) -> Int {
-        var h: UInt64 = 5381
-        for b in s.utf8 { h = (h &* 33) ^ UInt64(b) }
-        return Int(bitPattern: UInt(truncatingIfNeeded: h))
     }
 
     // MARK: PMC deltas (vs. 7 days ago) for the stat cards.

@@ -68,6 +68,8 @@ UI work follows **`DESIGN.md`** (the normative design system) — modern, compac
 
 ## Conventions when extending
 
+- **Quality over speed**: this app is meant to grow — the goal is to be *TrainingPeaks for individual athletes with an AI coach*. Write clean code without technical debt or boilerplate, even if it takes longer; favour maintainable, well-factored solutions over quick fixes.
+- **Before changing the architecture or data flow**: whenever data is missing, or a change requires touching the data flow or the architecture, **check with the user first** — discuss how the architecture should be adjusted and whether the change should be generalized rather than handled as a one-off, before implementing.
 - **UI / styling**: pull spacing, radius and status colors from `Theme`; use the `Surfaces.swift` modifiers. Content goes on the opaque `.cardSurface()` layer, glass is reserved for the floating control/nav layer. See `DESIGN.md`.
 - **Adding a tool**: define it as a JSON-Schema dict in a `CoachToolHandler` — it then works for *both* backends automatically. Keep parameter names snake_case.
 - **Adding a data source**: implement a `CoachToolHandler` that registers the same `get_health_metrics` / `get_activities` names, and wire it into `CoachBrain.configureTools()` + the `DataSource` enum.
