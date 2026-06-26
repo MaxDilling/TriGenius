@@ -71,7 +71,7 @@ struct TrainingDetailView: View {
             Button("Save") {
                 let cleaned = distanceInput.replacingOccurrences(of: ",", with: ".")
                 if let km = Double(cleaned), km >= 0 {
-                    Task { await TrainingDataStore.shared.overrideDistance(activityId: record.id, distanceKm: km) }
+                    TrainingDataStore.shared.overrideDistance(activityId: record.id, distanceKm: km)
                 }
             }
         } message: {

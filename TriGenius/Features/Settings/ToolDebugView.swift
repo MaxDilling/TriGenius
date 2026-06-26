@@ -110,6 +110,74 @@ struct SystemPromptDebugView: View {
     }
 }
 
+// MARK: - Dashboard Insight Prompt Viewer (Debug Mode)
+//
+// Shows the full prompt used to generate the one-liner insight under the weekly
+// rings on the Dashboard — the static system prompt plus the live, pre-classified
+// data summary that goes out as the user message — exactly as the model would
+// receive it. Rebuilt from the current local store + plan on appear and via
+// Refresh, with no side effects (no backend call, no caching).
+
+struct DashboardInsightPromptDebugView: View {
+    let context: DashboardContext
+
+    @State private var prompt: String = ""
+    @State private var didCopy = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("The full prompt that generates the one-line insight under the weekly rings on the Dashboard — system prompt plus the live training-state summary sent as the user message. Rebuilt each time you open or refresh.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
+                Text(prompt)
+                    .font(.system(.caption2, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(8)
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
+            }
+            .padding()
+        }
+        .navigationTitle("Dashboard Insight")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .toolbar {
+            ToolbarItemGroup(placement: .primaryAction) {
+                Button {
+                    refresh()
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                Button {
+                    copyToClipboard(prompt)
+                    didCopy = true
+                } label: {
+                    Label(didCopy ? "Copied" : "Copy",
+                          systemImage: didCopy ? "checkmark" : "doc.on.doc")
+                }
+            }
+        }
+        .onAppear(perform: refresh)
+    }
+
+    private func refresh() {
+        didCopy = false
+        prompt = DashboardViewModel.debugInsightPrompt(context: context)
+    }
+
+    private func copyToClipboard(_ text: String) {
+        #if os(iOS)
+        UIPasteboard.general.string = text
+        #elseif os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #endif
+    }
+}
+
 // MARK: - Single Tool Runner
 
 struct ToolRunnerView: View {

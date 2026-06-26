@@ -253,6 +253,18 @@ struct SettingsView: View {
                         Label("System Prompt", systemImage: "text.alignleft")
                     }
                     NavigationLink {
+                        DashboardInsightPromptDebugView(
+                            context: DashboardContext(
+                                dataSource: settings.dataSource,
+                                weeklyStructure: memory.weeklyStructure,
+                                trainingPlan: memory.trainingPlan,
+                                makeBackend: settings.makeBackend
+                            )
+                        )
+                    } label: {
+                        Label("Dashboard Insight Prompt", systemImage: "sparkles")
+                    }
+                    NavigationLink {
                         MemoryDebugView(memory: memory)
                     } label: {
                         Label("Storage (coach_memory.json)", systemImage: "curlybraces")

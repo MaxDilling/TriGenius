@@ -195,6 +195,7 @@ final class DataSyncCoordinator {
             targetTSS: targetTSS,
             notes: data["description"] as? String ?? "",
             stepsJSON: stepsJSON,
+            poolLengthMeters: Coerce.double(data["pool_length"]).flatMap { $0 > 0 ? $0 : nil },
             associatedActivityId: item["associated_activity_id"].map { "\($0)" }
         )
     }

@@ -78,6 +78,24 @@ final class ActivityRecord {
     }
 }
 
+extension ActivityRecord {
+    /// Local clock start time as minutes after midnight (e.g. 630 = 10:30), parsed
+    /// from the stored record's `"time"` (HH:mm) field — the value `GarminService`
+    /// writes from `startTimeLocal`. Nil when the source carried no clock time
+    /// (e.g. HealthKit), so the calendar keeps that activity in the all-day band
+    /// rather than positioning it in the hour grid. Mirrors the stored
+    /// `ScheduledWorkoutRecord.startMinute`.
+    var startMinute: Int? {
+        guard let data = detailsJSON.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let time = obj["time"] as? String else { return nil }
+        let parts = time.split(separator: ":")
+        guard parts.count >= 2, let h = Int(parts[0]), let m = Int(parts[1]),
+              (0..<24).contains(h), (0..<60).contains(m) else { return nil }
+        return h * 60 + m
+    }
+}
+
 // MARK: - Performance metric model
 //
 // FEATURES.md "Performance data in the database (with history)": performance
@@ -147,6 +165,10 @@ final class ScheduledWorkoutRecord {
     /// (e.g. Garmin-Coach workouts, locally-created plans). Defaulted so the
     /// SwiftData migration is purely additive.
     var stepsJSON: String = "[]"
+    /// Pool length in meters for swim workouts, when the source specifies one.
+    /// Nil for non-swims or when unknown. Defaulted so the SwiftData migration is
+    /// purely additive.
+    var poolLengthMeters: Double? = nil
     /// Local-only planned start time as minutes after midnight (e.g. 420 = 07:00).
     /// Nil → no specific time-of-day. Stored day-independent so a day-move keeps
     /// the time-of-day. Set by dragging onto a calendar segment; lost if the
@@ -167,6 +189,7 @@ final class ScheduledWorkoutRecord {
         targetTSS: Double?,
         notes: String = "",
         stepsJSON: String = "[]",
+        poolLengthMeters: Double? = nil,
         startMinute: Int? = nil,
         associatedActivityId: String? = nil
     ) {
@@ -179,6 +202,7 @@ final class ScheduledWorkoutRecord {
         self.targetTSS = targetTSS
         self.notes = notes
         self.stepsJSON = stepsJSON
+        self.poolLengthMeters = poolLengthMeters
         self.startMinute = startMinute
         self.associatedActivityId = associatedActivityId
     }
@@ -223,6 +247,8 @@ struct IngestedScheduledWorkout: Sendable {
     let notes: String
     /// Compact structured steps, JSON-encoded (see `ScheduledWorkoutRecord.stepsJSON`).
     var stepsJSON: String = "[]"
+    /// Pool length in meters for swim workouts, when the source specifies one.
+    var poolLengthMeters: Double? = nil
     var associatedActivityId: String? = nil
 }
 
@@ -511,12 +537,14 @@ final class TrainingDataStore {
                 record.targetTSS = w.targetTSS
                 record.notes = w.notes
                 record.stepsJSON = w.stepsJSON
+                record.poolLengthMeters = w.poolLengthMeters
                 record.associatedActivityId = w.associatedActivityId
             } else {
                 context.insert(ScheduledWorkoutRecord(
                     id: w.id, source: w.source, date: day, sport: w.sport, name: w.name,
                     targetDurationMinutes: w.targetDurationMinutes, targetTSS: w.targetTSS, notes: w.notes,
-                    stepsJSON: w.stepsJSON, associatedActivityId: w.associatedActivityId
+                    stepsJSON: w.stepsJSON, poolLengthMeters: w.poolLengthMeters,
+                    associatedActivityId: w.associatedActivityId
                 ))
             }
         }

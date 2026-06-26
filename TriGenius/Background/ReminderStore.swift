@@ -36,6 +36,19 @@ enum ReminderKind: String, CaseIterable {
         case .sleepAdvice: return "A note on today's training given your sleep."
         }
     }
+
+    /// Deterministic chat prompt to pre-fill (unsent) when the athlete taps this
+    /// reminder's notification. nil → tapping just opens the app. `.custom` is free
+    /// text with no inherent intent, so it carries no prompt.
+    var followUpPrompt: String? {
+        switch self {
+        case .checkIn: return "How am I tracking toward my goals?"
+        case .weeklyReview: return "Give me a review of my training week."
+        case .todaysWorkout: return "Walk me through today's workout."
+        case .sleepAdvice: return "Given how I slept, how should I approach today's training?"
+        case .custom: return nil
+        }
+    }
 }
 
 /// A single configured reminder.

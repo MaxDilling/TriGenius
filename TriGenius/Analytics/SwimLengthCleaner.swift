@@ -29,7 +29,7 @@ struct SwimCleanResult: Sendable {
     let swimTimeSeconds: Double
 }
 
-enum SwimLengthCleaner {
+nonisolated enum SwimLengthCleaner {
 
     /// Clean the active lengths of a pool swim. Returns nil when there is no usable
     /// per-length data (caller then keeps Garmin's count / falls back to duration).

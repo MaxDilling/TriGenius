@@ -9,7 +9,7 @@ import Foundation
 //
 // Brand-agnostic: these are physiology/algorithm constants, not Garmin specifics.
 
-enum TSSConstants {
+nonisolated enum TSSConstants {
 
     // MARK: Intensity-factor model (shared by PlannedTSS + completed pace/power)
 

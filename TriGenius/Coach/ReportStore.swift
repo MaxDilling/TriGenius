@@ -76,7 +76,7 @@ struct Report: Identifiable {
         self.backend = d["backend"] as? String ?? ""
         self.dataSource = d["data_source"] as? String ?? ""
         self.appVersion = d["app_version"] as? String ?? ""
-        self.transcript = (d["transcript"] as? [[String: Any]])?.compactMap(Line.init(from:)) ?? []
+        self.transcript = (d["transcript"] as? [[String: Any]])?.compactMap { Line(from: $0) } ?? []
     }
 
     func toDict() -> [String: Any] {

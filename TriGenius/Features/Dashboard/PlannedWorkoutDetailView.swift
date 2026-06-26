@@ -24,11 +24,13 @@ struct PlannedWorkoutDetailView: View {
     private var isEstimatedTSS: Bool { workout.isEstimatedTSS }
     private var targetTSS: Double { workout.resolvedTargetTSS }
     private var structure: PlannedWorkoutStructure? { workout.structure }
-    /// Estimated total distance, shown only for distance disciplines (run / swim).
+    /// Planned distance, shown only for distance disciplines (run / swim). Prefixed
+    /// with "~" unless the distance is exact (summed from distance-prescribed steps).
     private var distanceText: String? {
         guard family == .run || family == .swim,
-              let meters = structure?.totalDistanceMeters, meters > 0 else { return nil }
-        return "~" + PlannedWorkoutFormat.distance(meters)
+              let distance = workout.plannedDistance, distance.meters > 0 else { return nil }
+        let prefix = distance.source == .fixed ? "" : "~"
+        return prefix + PlannedWorkoutFormat.distance(distance.meters)
     }
     /// Planned start time as "07:00", when a time-of-day was assigned.
     private var startTimeText: String? {
@@ -182,8 +184,11 @@ struct PlannedWorkoutDetailView: View {
     private var detailRowList: [DetailRow] {
         var rows: [DetailRow] = [
             .init(label: "Sport", value: family.displayName, icon: family.icon),
-            .init(label: "Date", value: workout.date.formatted(.dateTime.weekday(.wide).month().day()), icon: "calendar"),
         ]
+        if family == .swim, let pool = workout.poolLengthMeters, pool > 0 {
+            rows.append(.init(label: "Pool", value: PlannedWorkoutFormat.distance(pool), icon: "ruler"))
+        }
+        rows.append(.init(label: "Date", value: workout.date.formatted(.dateTime.weekday(.wide).month().day()), icon: "calendar"))
         if let startTimeText {
             rows.append(.init(label: "Start time", value: startTimeText, icon: "clock"))
         } else if let segment = workout.startMinute.flatMap({ TimeOfDaySegment.containing(minute: $0) }) {

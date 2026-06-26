@@ -156,6 +156,7 @@ enum WeeklyTargets {
             var t = planned[family] ?? WeeklyTarget(durationMinutes: 0, tss: 0)
             t.durationMinutes += w.targetDurationMinutes
             t.tss += tss
+            t.distanceKm += (w.plannedDistance?.meters ?? 0) / 1000
             planned[family] = t
         }
 
@@ -174,9 +175,9 @@ enum WeeklyTargets {
             // Scheduling raises the goal but never lowers it below the plan.
             let minutes = max(p.durationMinutes, base.durationMinutes)
             let tss = max(p.tss, base.tss).rounded()
-            // Scheduled workouts carry no distance — keep the plan's stated
-            // weekly distance, else estimate from the (larger) duration.
-            let km = max(base.distanceKm, estimatedDistanceKm(family: family, minutes: minutes).rounded())
+            // Scheduled workouts carry their own (structured or estimated) distance;
+            // the goal is the larger of the plan's stated distance and what's planned.
+            let km = max(base.distanceKm, p.distanceKm).rounded()
             out[family] = WeeklyTarget(durationMinutes: minutes, tss: tss, distanceKm: km)
         }
         return out
@@ -224,7 +225,7 @@ enum WeeklyTargets {
             if day < todayStart { continue }                                   // past: can't still be done
             var p = out[family] ?? WeeklyProjection()
             p.projectedTSS += w.targetTSS ?? estimatedTSS(family: family, minutes: w.targetDurationMinutes)
-            p.projectedKm += estimatedDistanceKm(family: family, minutes: w.targetDurationMinutes)
+            if let d = w.plannedDistance { p.projectedKm += d.meters / 1000 }
             out[family] = p
         }
 

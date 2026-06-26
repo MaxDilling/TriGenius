@@ -8,11 +8,14 @@ import Foundation
 // a per-day time-of-day availability indicator so it's obvious where there is still
 // time to train. Reads the local `TrainingDataStore` + `CalendarService` and writes
 // reschedules back (locally always, and to Garmin when that's the active source).
+//
+// Layout mirrors Apple Calendar: the month is a horizontally paged grid; the week is
+// a continuously-scrollable multi-day time grid. Both render from a bounded-but-large
+// list of days/months (≈1 year / ±2 years) so scrolling feels endless without an
+// unbounded view tree; the loaded *data* window slides as the grid scrolls.
 
-enum CalendarMode: String, CaseIterable, Identifiable {
+enum CalendarMode: String {
     case week, month
-    var id: String { rawValue }
-    var label: String { self == .week ? "Week" : "Month" }
 }
 
 @MainActor
@@ -27,14 +30,30 @@ final class CalendarViewModel {
         }
     }
 
-    /// First day of the visible month (start-of-day) — drives the month grid.
+    /// Month the month view's header shows (updated as the continuous grid scrolls).
     private(set) var visibleMonth: Date
-    /// Monday of the visible week — drives the week view.
-    private(set) var weekAnchor: Date
-    /// The 42 day-cells (6 weeks, Monday-first) covering the visible month.
-    private(set) var gridDays: [Date] = []
-    /// The 7 days (Monday-first) of the visible week.
-    private(set) var weekDays: [Date] = []
+    /// Week-start the month grid should scroll to (set on drill-out / Today).
+    private(set) var monthFocusWeek: Date
+    /// Bumped whenever the month grid should programmatically scroll to `monthFocusWeek`.
+    private(set) var monthScrollTick = 0
+    /// The day the week grid should scroll to (set when drilling in from the month).
+    private(set) var weekFocusDay: Date
+    /// Bumped whenever the week grid should programmatically scroll to `weekFocusDay`.
+    /// A separate trigger (vs. observing `weekFocusDay`) so "Today" still scrolls even
+    /// when the focus day is unchanged (e.g. already today after manual scrolling).
+    private(set) var weekScrollTick = 0
+    /// Leftmost day currently visible in the week grid — drives the title + date
+    /// strip. Updated by the grid as it scrolls.
+    var firstVisibleDay: Date
+
+    /// Bounded continuous day list backing the week grid (≈ today ± 6 months).
+    let weekGridDays: [Date]
+    /// `weekGridDays` → index, so the grid can map the leftmost visible day to a
+    /// position in O(1) instead of a per-frame linear `isDate(inSameDayAs:)` scan.
+    @ObservationIgnored private lazy var weekGridIndexByDay: [Date: Int] =
+        Dictionary(uniqueKeysWithValues: weekGridDays.enumerated().map { ($1, $0) })
+    /// Bounded continuous week-start list backing the month grid (≈ today ± 1.5 years).
+    let monthScrollWeeks: [Date]
 
     /// Planned workouts keyed by start-of-day.
     private(set) var plannedByDay: [Date: [ScheduledWorkoutRecord]] = [:]
@@ -44,12 +63,11 @@ final class CalendarViewModel {
     private(set) var busyByDay: [Date: DayAvailability] = [:]
     /// Per-segment availability keyed by start-of-day.
     private(set) var segmentsByDay: [Date: [TimeOfDaySegment: SegmentState]] = [:]
+    /// The day range currently loaded into the dictionaries above.
+    private var loadedRange: ClosedRange<Date>?
 
     /// True when calendar access hasn't been granted, so the UI can offer to ask.
     private(set) var needsCalendarAccess: Bool = false
-
-    /// The day whose detail list is shown below the grid.
-    var selectedDay: Date
 
     private let dataSource: DataSource
     private static let modeKey = "calendar.mode"
@@ -62,33 +80,44 @@ final class CalendarViewModel {
     init(dataSource: DataSource, today: Date = Date()) {
         self.dataSource = dataSource
         let day = Calendar.current.startOfDay(for: today)
+        var c = Calendar.current
+        c.firstWeekday = 2
+        let weekStartOfDay = TrainingVolume.weekStart(of: day, calendar: c)
         self.visibleMonth = CalendarViewModel.monthStart(of: day)
-        self.weekAnchor = TrainingVolume.weekStart(of: day)
-        self.selectedDay = day
+        self.monthFocusWeek = weekStartOfDay
+        self.weekFocusDay = day
+        self.firstVisibleDay = day
+
+        // Bounded-but-large backing ranges so scrolling feels continuous.
+        self.weekGridDays = (-182...182).compactMap { c.date(byAdding: .day, value: $0, to: weekStartOfDay) }
+        self.monthScrollWeeks = (-78...78).compactMap { c.date(byAdding: .weekOfYear, value: $0, to: weekStartOfDay) }
+
         let stored = UserDefaults.standard.string(forKey: Self.modeKey)
         self.mode = stored.flatMap(CalendarMode.init(rawValue:)) ?? .week
     }
 
     // MARK: - Titles & headers
 
-    var title: String {
-        switch mode {
-        case .month:
-            return visibleMonth.formatted(.dateTime.month(.wide).year())
-        case .week:
-            guard let end = cal.date(byAdding: .day, value: 6, to: weekAnchor) else {
-                return weekAnchor.formatted(.dateTime.month().day())
-            }
-            let start = weekAnchor.formatted(.dateTime.month(.abbreviated).day())
-            let endStr = end.formatted(.dateTime.month(.abbreviated).day())
-            return "\(start) – \(endStr)"
-        }
+    /// Month name shown in the nav pill (and the "zoom out" target label).
+    var monthLabel: String {
+        let day = mode == .month ? visibleMonth : firstVisibleDay
+        return day.formatted(.dateTime.month(.wide))
     }
 
     /// Monday-first weekday symbols for the month header row.
     var weekdaySymbols: [String] {
         let symbols = cal.shortStandaloneWeekdaySymbols // [Sun, Mon, …]
         return Array(symbols[1...] + symbols[0...0])     // → [Mon, …, Sun]
+    }
+
+    /// ISO week number for a day (used by the week grid's gutter, e.g. "W27").
+    func weekNumber(for day: Date) -> Int {
+        cal.component(.weekOfYear, from: day)
+    }
+
+    /// Position of `day` in `weekGridDays` (O(1)), or nil if outside the backing range.
+    func weekGridIndex(of day: Date) -> Int? {
+        weekGridIndexByDay[cal.startOfDay(for: day)]
     }
 
     // MARK: - Per-day accessors
@@ -101,8 +130,14 @@ final class CalendarViewModel {
         completedByDay[cal.startOfDay(for: day)] ?? []
     }
 
+    /// Timed (non-all-day) calendar commitments — positioned inside the hour grid.
     func busyWindows(on day: Date) -> [BusyWindow] {
         (busyByDay[cal.startOfDay(for: day)]?.windows ?? []).filter { !$0.isAllDay }
+    }
+
+    /// All-day calendar commitments — shown in the all-day band with workouts.
+    func allDayWindows(on day: Date) -> [BusyWindow] {
+        (busyByDay[cal.startOfDay(for: day)]?.windows ?? []).filter { $0.isAllDay }
     }
 
     func segments(on day: Date) -> [TimeOfDaySegment: SegmentState] {
@@ -132,46 +167,95 @@ final class CalendarViewModel {
 
     // MARK: - Navigation
 
-    func showPrevious() { mode == .month ? shiftMonth(by: -1) : shiftWeek(by: -1) }
-    func showNext() { mode == .month ? shiftMonth(by: 1) : shiftWeek(by: 1) }
+    /// Drill from the month into the week grid, scrolled to `day`.
+    func focusWeek(on day: Date) {
+        let target = cal.startOfDay(for: day)
+        weekFocusDay = target
+        firstVisibleDay = target
+        weekScrollTick += 1
+        mode = .week   // didSet → load() → week window around weekFocusDay
+    }
+
+    /// Scroll the week grid to `day` (from a date-strip tap) without changing mode.
+    func scrollWeek(to day: Date) {
+        let target = cal.startOfDay(for: day)
+        weekFocusDay = target
+        firstVisibleDay = target   // anchor the strip's circle on the new leftmost day
+        weekScrollTick += 1
+        ensureWeekLoaded(around: target)
+    }
+
+    /// Zoom back out from the week grid to the month containing the visible days.
+    func showMonth() {
+        visibleMonth = Self.monthStart(of: firstVisibleDay)
+        monthFocusWeek = TrainingVolume.weekStart(of: firstVisibleDay, calendar: cal)
+        monthScrollTick += 1
+        mode = .month   // didSet → load()
+    }
 
     func goToToday() {
         let today = cal.startOfDay(for: Date())
-        visibleMonth = Self.monthStart(of: today)
-        weekAnchor = TrainingVolume.weekStart(of: today, calendar: cal)
-        selectedDay = today
-        load()
-    }
-
-    private func shiftMonth(by months: Int) {
-        guard let next = cal.date(byAdding: .month, value: months, to: visibleMonth) else { return }
-        visibleMonth = Self.monthStart(of: next)
-        load()
-    }
-
-    private func shiftWeek(by weeks: Int) {
-        guard let next = cal.date(byAdding: .day, value: weeks * 7, to: weekAnchor) else { return }
-        weekAnchor = TrainingVolume.weekStart(of: next, calendar: cal)
-        if !weekDays.contains(where: { cal.isDate($0, inSameDayAs: selectedDay) }) {
-            selectedDay = weekAnchor
+        firstVisibleDay = today
+        switch mode {
+        case .month:
+            visibleMonth = Self.monthStart(of: today)
+            monthFocusWeek = TrainingVolume.weekStart(of: today, calendar: cal)
+            monthScrollTick += 1
+            loadWeekWindow(around: today)
+        case .week:
+            weekFocusDay = today
+            weekScrollTick += 1
+            loadWeekWindow(around: today)
         }
-        load()
     }
 
     // MARK: - Loading
 
     func load() {
-        let (start, end) = currentRange()
-
         switch mode {
-        case .month:
-            gridDays = (0..<42).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
-            weekDays = []
-        case .week:
-            weekDays = (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: start) }
-            gridDays = []
+        case .month: loadWeekWindow(around: monthFocusWeek)
+        case .week: loadWeekWindow(around: weekFocusDay)
         }
+    }
 
+    /// The 7 Monday-first days of the week starting at `weekStart` (month grid rows).
+    func weekDays(for weekStart: Date) -> [Date] {
+        (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: weekStart) }
+    }
+
+    /// Update the month header + load window as the continuous month grid scrolls.
+    /// The header shows the month of the row's midweek day (its dominant month).
+    func updateMonthScroll(topWeekStart: Date) {
+        let midweek = cal.date(byAdding: .day, value: 3, to: topWeekStart) ?? topWeekStart
+        visibleMonth = Self.monthStart(of: midweek)
+        ensureWeekLoaded(around: topWeekStart)
+    }
+
+    /// Load a window around `day` for the continuous grids. Skewed forward (8 weeks
+    /// back, 12 ahead) because the month view pins its focus week to the *top*, so the
+    /// weeks visible below it — which the user sees immediately — are in the future and
+    /// must already be loaded (otherwise their events pop in only after scrolling).
+    func loadWeekWindow(around day: Date) {
+        let center = TrainingVolume.weekStart(of: day, calendar: cal)
+        let start = cal.date(byAdding: .day, value: -8 * 7, to: center) ?? center
+        let end = cal.date(byAdding: .day, value: 12 * 7 - 1, to: center) ?? center
+        loadData(from: start, to: end)
+    }
+
+    /// Called by the week grid as it scrolls. Reloads only when `day` nears the edge
+    /// of the loaded window, so most scrolling needs no work.
+    func ensureWeekLoaded(around day: Date) {
+        if let r = loadedRange,
+           let safeLo = cal.date(byAdding: .day, value: 14, to: r.lowerBound),
+           let safeHi = cal.date(byAdding: .day, value: -14, to: r.upperBound),
+           day >= safeLo, day <= safeHi {
+            return
+        }
+        loadWeekWindow(around: day)
+    }
+
+    /// Fill the per-day dictionaries for `[start, end]` from the local store + EventKit.
+    private func loadData(from start: Date, to end: Date) {
         let store = TrainingDataStore.shared
 
         var completed: [Date: [ActivityRecord]] = [:]
@@ -189,6 +273,7 @@ final class CalendarViewModel {
         plannedByDay = planned
 
         loadCalendar(from: start, to: end)
+        loadedRange = cal.startOfDay(for: start)...cal.startOfDay(for: end)
     }
 
     /// Load EventKit busy windows + derived segment states for the range. Skipped
@@ -228,9 +313,7 @@ final class CalendarViewModel {
     func move(workoutID: String, to newDay: Date, segment: TimeOfDaySegment? = nil) {
         let store = TrainingDataStore.shared
         let target = cal.startOfDay(for: newDay)
-        let (start, end) = currentRange()
-        guard let record = store.scheduledWorkouts(from: start, to: end)
-            .first(where: { $0.id == workoutID }) else { return }
+        guard let record = scheduledRecord(id: workoutID) else { return }
         let fromDay = cal.startOfDay(for: record.date)
         let dayChanged = fromDay != target
         let minuteChanged = segment != nil && record.startMinute != segment?.anchorMinute
@@ -250,34 +333,16 @@ final class CalendarViewModel {
         }
     }
 
-    /// Projected planned load (minutes / TSS) for the week containing `selectedDay`.
-    func selectedWeekLoad() -> (minutes: Double, tss: Double) {
-        let weekStart = TrainingVolume.weekStart(of: selectedDay, calendar: cal)
-        guard let weekEnd = cal.date(byAdding: .day, value: 6, to: weekStart) else { return (0, 0) }
-        let workouts = TrainingDataStore.shared.scheduledWorkouts(from: weekStart, to: weekEnd)
-        var minutes = 0.0, tss = 0.0
-        for w in workouts {
-            minutes += w.targetDurationMinutes
-            let family = SportFamily(sportKey: w.sport)
-            tss += w.targetTSS ?? WeeklyTargets.estimatedTSS(family: family, minutes: w.targetDurationMinutes)
-        }
-        return (minutes, tss)
+    /// Find a scheduled workout by id within the loaded window (falls back to a wide
+    /// store lookup so a drag that crosses the window edge still resolves).
+    private func scheduledRecord(id: String) -> ScheduledWorkoutRecord? {
+        if let hit = plannedByDay.values.flatMap({ $0 }).first(where: { $0.id == id }) { return hit }
+        guard let r = loadedRange else { return nil }
+        return TrainingDataStore.shared.scheduledWorkouts(from: r.lowerBound, to: r.upperBound)
+            .first(where: { $0.id == id })
     }
 
     // MARK: - Date helpers
-
-    /// The day range currently loaded, depending on mode.
-    private func currentRange() -> (start: Date, end: Date) {
-        switch mode {
-        case .month:
-            let start = TrainingVolume.weekStart(of: visibleMonth, calendar: cal)
-            let end = cal.date(byAdding: .day, value: 41, to: start) ?? start
-            return (start, end)
-        case .week:
-            let end = cal.date(byAdding: .day, value: 6, to: weekAnchor) ?? weekAnchor
-            return (weekAnchor, end)
-        }
-    }
 
     private static func monthStart(of date: Date) -> Date {
         let cal = Calendar.current

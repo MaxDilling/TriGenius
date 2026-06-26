@@ -14,10 +14,20 @@ import UserNotifications
 final class NotificationCenterService {
     static let shared = NotificationCenterService()
 
+    /// `userInfo` key carrying the deterministic chat prompt to pre-fill (unsent)
+    /// when the athlete taps a notification. `nonisolated` so the (nonisolated)
+    /// notification-center delegate callbacks can read it.
+    nonisolated static let followUpPromptKey = "follow_up_prompt"
+
     private let center = UNUserNotificationCenter.current()
     /// Retained so the center keeps a strong reference to it (the center's
-    /// `delegate` property is weak).
-    private let foregroundDelegate = ForegroundPresentationDelegate()
+    /// `delegate` property is weak). Handles both foreground presentation and taps.
+    private lazy var delegate = NotificationDelegate(service: self)
+
+    /// Invoked when the athlete taps a notification carrying a follow-up prompt.
+    /// Set once at launch (see `TriGeniusApp.setupBrain`) to route into the chat.
+    var onNotificationTap: ((String) -> Void)?
+
     private init() {}
 
     /// Day-granularity watermark of the last posted notification, so repeated
@@ -29,7 +39,7 @@ final class NotificationCenterService {
     /// reminders fired from Settings would `add()` successfully yet never show.
     /// Call once at launch, before any notification is posted.
     func configure() {
-        center.delegate = foregroundDelegate
+        center.delegate = delegate
     }
 
     // MARK: - Authorization
@@ -71,6 +81,9 @@ final class NotificationCenterService {
         content.title = signal.severity == .warning ? "TriGenius — heads up" : "TriGenius"
         content.body = signal.message
         content.sound = .default
+        if let prompt = signal.followUpPrompt {
+            content.userInfo[Self.followUpPromptKey] = prompt
+        }
 
         // Deliver immediately (nil trigger) — callers invoke this from a
         // background refresh, where "now" is the right time to surface it.
@@ -93,12 +106,15 @@ final class NotificationCenterService {
     /// the caller's responsibility (see `ReminderScheduler.dynamicDeliveredToday`).
     /// Returns whether the notification was scheduled.
     @discardableResult
-    func post(title: String, body: String, identifier: String) async -> Bool {
+    func post(title: String, body: String, identifier: String, followUpPrompt: String? = nil) async -> Bool {
         guard await isAuthorized else { return false }
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
+        if let followUpPrompt {
+            content.userInfo[Self.followUpPromptKey] = followUpPrompt
+        }
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
         do {
             try await center.add(request)
@@ -147,18 +163,40 @@ final class NotificationCenterService {
     }
 }
 
-// MARK: - Foreground presentation
+// MARK: - Notification delegate
 
-/// Lets notifications show as a banner (with sound/list) even while the app is
-/// in the foreground. iOS suppresses foreground notifications by default unless
-/// a delegate opts in here — which is exactly the case when a reminder is fired
-/// from the in-app Test Reminders screen.
-private final class ForegroundPresentationDelegate: NSObject, UNUserNotificationCenterDelegate {
+/// Handles the two notification-center callbacks we care about:
+///   • `willPresent` — lets notifications show as a banner (with sound/list) even
+///     while the app is in the foreground. iOS suppresses foreground notifications
+///     by default unless a delegate opts in here — exactly the case when a reminder
+///     is fired from the in-app Test Reminders screen.
+///   • `didReceive` — a tap. If the notification carries a follow-up prompt, route
+///     it into the chat (pre-filled, unsent) via the service's `onNotificationTap`.
+private final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
+    private weak var service: NotificationCenterService?
+
+    init(service: NotificationCenterService) {
+        self.service = service
+    }
+
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
         completionHandler([.banner, .list, .sound])
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        didReceive response: UNNotificationResponse,
+        withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let userInfo = response.notification.request.content.userInfo
+        let prompt = userInfo[NotificationCenterService.followUpPromptKey] as? String
+        Task { @MainActor in
+            if let prompt { service?.onNotificationTap?(prompt) }
+            completionHandler()
+        }
     }
 }

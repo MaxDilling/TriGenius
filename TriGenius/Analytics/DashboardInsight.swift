@@ -18,7 +18,9 @@ enum DashboardInsight {
     private static let dayKey  = "trigenius.dashboardInsight.day"
     private static let sigKey  = "trigenius.dashboardInsight.signature"
 
-    private static let systemPrompt = """
+    /// The system prompt for the dashboard one-liner. Exposed (not private) so the
+    /// Debug Mode viewer in Settings can show it, like the coach's system prompt.
+    static let systemPrompt = """
     You are an evidence-based triathlon coach writing the single insight line on \
     the athlete's dashboard. You receive a compact, PRE-CLASSIFIED snapshot of \
     their current training state. Reply with ONE short, specific, actionable \

@@ -469,7 +469,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = WeeklyTargetWidget/WeeklyTargetWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 748ZUJYR3Q;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
@@ -504,7 +504,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = WeeklyTargetWidget/WeeklyTargetWidget.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 748ZUJYR3Q;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;

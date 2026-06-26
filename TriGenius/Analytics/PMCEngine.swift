@@ -106,7 +106,9 @@ enum PMCEngine {
 
     /// How far ahead the forecast runs by default (6 weeks — beyond that the EWMA
     /// of a static plan is no longer informative and most plans aren't scheduled).
-    static let forecastDays = 42
+    /// `nonisolated` so it can serve as a default argument value, which is
+    /// evaluated outside the main actor.
+    nonisolated static let forecastDays = 42
 
     /// Continue the PMC forward from the last historic point using the planned
     /// (not-yet-completed) TSS per future day. Pure. Returns one point per day

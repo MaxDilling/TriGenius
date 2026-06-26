@@ -16,6 +16,15 @@ struct ProactiveSignal: Sendable {
     let severity: Severity
     /// One-line, athlete-facing phrasing (reusable as a push notification body).
     let message: String
+    /// Deterministic, context-appropriate chat prompt to pre-fill (unsent) when the
+    /// athlete taps the notification carrying this signal. nil → no follow-up.
+    let followUpPrompt: String?
+
+    init(severity: Severity, message: String, followUpPrompt: String? = nil) {
+        self.severity = severity
+        self.message = message
+        self.followUpPrompt = followUpPrompt
+    }
 }
 
 enum ProactiveCoach {
@@ -34,17 +43,20 @@ enum ProactiveCoach {
         if s.tsb <= tsbOvertrainedThreshold {
             out.append(ProactiveSignal(
                 severity: .warning,
-                message: "Form (TSB) is very negative (\(rounded(s.tsb))) — accumulated fatigue is high. Overtraining/illness risk; prioritise recovery before adding load."
+                message: "Form (TSB) is very negative (\(rounded(s.tsb))) — accumulated fatigue is high. Overtraining/illness risk; prioritise recovery before adding load.",
+                followUpPrompt: "How should I adjust my training this week given my current fatigue?"
             ))
         } else if s.tsb >= tsbFreshThreshold && s.ctl < ctlDetrainingThreshold {
             out.append(ProactiveSignal(
                 severity: .warning,
-                message: "Form (TSB \(rounded(s.tsb))) is high while fitness (CTL \(rounded(s.ctl))) is low — this points to detraining, not race-readiness. Consistent volume is the lever."
+                message: "Form (TSB \(rounded(s.tsb))) is high while fitness (CTL \(rounded(s.ctl))) is low — this points to detraining, not race-readiness. Consistent volume is the lever.",
+                followUpPrompt: "Help me build a consistent training plan to raise my fitness."
             ))
         } else if s.tsb >= tsbFreshThreshold {
             out.append(ProactiveSignal(
                 severity: .info,
-                message: "Form (TSB \(rounded(s.tsb))) is positive — the athlete is fresh and likely well-placed for a key session or race."
+                message: "Form (TSB \(rounded(s.tsb))) is positive — the athlete is fresh and likely well-placed for a key session or race.",
+                followUpPrompt: "I'm feeling fresh — what key session should I do?"
             ))
         }
 
@@ -77,9 +89,13 @@ enum ProactiveCoach {
 
         let names = atRisk.map { $0.0.displayName.lowercased() }.joined(separator: ", ")
         let totalGap = Int(atRisk.reduce(0) { $0 + $1.1 }.rounded())
+        // Pre-fill a concrete, actionable prompt for the single discipline furthest
+        // behind, so the tapped follow-up plans one workout rather than a vague ask.
+        let worst = atRisk.max { $0.1 < $1.1 }!.0
         return [ProactiveSignal(
             severity: .warning,
-            message: "This week's \(names) target is at risk — even with everything still planned you're projected ~\(totalGap) TSS short. Add or extend a session in the remaining days to stay on track."
+            message: "This week's \(names) target is at risk — even with everything still planned you're projected ~\(totalGap) TSS short. Add or extend a session in the remaining days to stay on track.",
+            followUpPrompt: "Plan a \(worst.displayName.lowercased()) workout for me this week to get back on target."
         )]
     }
 
@@ -137,21 +153,21 @@ enum ProactiveCoach {
             switch m.family {
             case .run:
                 if let r = m.rampRate, r > 0.30 {
-                    out.append(ProactiveSignal(severity: .warning, message: "Run volume is up \(signedPct(r)) on the trailing 3-week average — past ~+30% week-on-week notably raises running injury risk (Nielsen 2014). Hold or ease this week's build."))
+                    out.append(ProactiveSignal(severity: .warning, message: "Run volume is up \(signedPct(r)) on the trailing 3-week average — past ~+30% week-on-week notably raises running injury risk (Nielsen 2014). Hold or ease this week's build.", followUpPrompt: "Review my running load and help me lower injury risk this week."))
                 }
                 if let p = m.longestProgressionRatio, p > 1.10, let r = m.recentLongest {
-                    out.append(ProactiveSignal(severity: .warning, message: "Longest run jumped to \(km(r.distanceKm)) km — >10% over the prior 30-day longest. Single long-run spikes predict injury more than the weekly average; cap long-run growth near 10%."))
+                    out.append(ProactiveSignal(severity: .warning, message: "Longest run jumped to \(km(r.distanceKm)) km — >10% over the prior 30-day longest. Single long-run spikes predict injury more than the weekly average; cap long-run growth near 10%.", followUpPrompt: "How should I progress my long run safely from here?"))
                 }
                 if let share = m.longSessionShare, share > 0.35 {
-                    out.append(ProactiveSignal(severity: .warning, message: "The long run is \(pct(share)) of weekly run volume (cap ~25–35%) — spread volume across more sessions to lower per-session impact load."))
+                    out.append(ProactiveSignal(severity: .warning, message: "The long run is \(pct(share)) of weekly run volume (cap ~25–35%) — spread volume across more sessions to lower per-session impact load.", followUpPrompt: "Help me spread my weekly run volume across more sessions."))
                 }
             case .bike:
                 if let r = m.rampRate, r > 0.30 {
-                    out.append(ProactiveSignal(severity: .info, message: "Bike volume is up \(signedPct(r)) vs the 3-week average — cycling tolerates more than running, but watch fatigue if it keeps climbing."))
+                    out.append(ProactiveSignal(severity: .info, message: "Bike volume is up \(signedPct(r)) vs the 3-week average — cycling tolerates more than running, but watch fatigue if it keeps climbing.", followUpPrompt: "Is my bike volume ramping too fast? Help me manage the load."))
                 }
             case .swim:
                 if m.avgSessionsPerWeek > 0, m.avgSessionsPerWeek < 3 {
-                    out.append(ProactiveSignal(severity: .info, message: "Swim frequency is ~\(fmt1(m.avgSessionsPerWeek))×/wk — under ~3×/wk slows motor-skill retention for adult-onset swimmers (technique is the primary lever)."))
+                    out.append(ProactiveSignal(severity: .info, message: "Swim frequency is ~\(fmt1(m.avgSessionsPerWeek))×/wk — under ~3×/wk slows motor-skill retention for adult-onset swimmers (technique is the primary lever).", followUpPrompt: "Help me fit in more frequent swim sessions this week."))
                 }
             default:
                 break

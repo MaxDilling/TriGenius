@@ -7,6 +7,7 @@ import SwiftData
 struct TriGeniusApp: App {
     @StateObject private var memory = CoachMemory()
     @StateObject private var settings = AppSettings()
+    @State private var router = CoachRouter()
     @State private var brain: CoachBrain?
     @State private var launchStatus = "Initialisiere…"
     @Environment(\.scenePhase) private var scenePhase
@@ -20,7 +21,7 @@ struct TriGeniusApp: App {
     var body: some Scene {
         WindowGroup {
             if let brain {
-                RootTabView(brain: brain, memory: memory, settings: settings) {
+                RootTabView(brain: brain, memory: memory, settings: settings, router: router) {
                     applyBackend(to: brain)
                 }
             } else {
@@ -43,6 +44,10 @@ struct TriGeniusApp: App {
         // without this, reminders fired from the Test Reminders screen are
         // silently suppressed by iOS.
         NotificationCenterService.shared.configure()
+        // Route a tapped notification's follow-up prompt into the chat (unsent).
+        NotificationCenterService.shared.onNotificationTap = { [router] prompt in
+            router.openChat(prefill: prompt)
+        }
         let b = CoachBrain(memory: memory, dataSource: settings.dataSource)
         // Live read of Debug Mode — captured once so toggling never resets the chat.
         b.isDebugEnabled = { [weak settings] in settings?.debugMode ?? false }
@@ -87,10 +92,11 @@ struct RootTabView: View {
     let brain: CoachBrain
     @ObservedObject var memory: CoachMemory
     @ObservedObject var settings: AppSettings
+    @Bindable var router: CoachRouter
     let onBackendChanged: () -> Void
 
     var body: some View {
-        TabView {
+        TabView(selection: $router.selectedTab) {
             NavigationStack {
                 DashboardView(
                     dataSource: settings.dataSource,
@@ -104,6 +110,7 @@ struct RootTabView: View {
                     onBackendChanged: onBackendChanged
                 )
             }
+            .tag(CoachRouter.RootTab.dashboard)
             .tabItem {
                 Label("Dashboard", systemImage: "chart.xyaxis.line")
             }
@@ -111,6 +118,7 @@ struct RootTabView: View {
             NavigationStack {
                 CoachChatView(brain: brain)
             }
+            .tag(CoachRouter.RootTab.coach)
             .tabItem {
                 Label("Coach", systemImage: "bubble.left.and.bubble.right.fill")
             }
@@ -118,9 +126,11 @@ struct RootTabView: View {
             NavigationStack {
                 CalendarView(dataSource: settings.dataSource)
             }
+            .tag(CoachRouter.RootTab.calendar)
             .tabItem {
                 Label("Calendar", systemImage: "calendar")
             }
         }
+        .environment(router)
     }
 }

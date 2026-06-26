@@ -478,6 +478,7 @@ actor GarminService {
                 seen.insert(id)
                 var durationMinutes: Any = NSNull()
                 var steps: [[String: Any]] = []
+                var poolLengthM: Any = NSNull()
                 let sportKey = item["sportTypeKey"] as? String ?? "other"
                 // Prefer the schedule detail: it embeds the same `workout`
                 // payload AND the `associatedActivityId` Garmin sets once the
@@ -496,6 +497,10 @@ actor GarminService {
                         durationMinutes = Int((est / 60).rounded())
                     }
                     steps = compactSteps(fromDetails: details, sport: sportKey)
+                    // Garmin stores poolLength in cm; expose it in meters (swim only).
+                    if let pool = Coerce.double(details["poolLength"]), pool > 0 {
+                        poolLengthM = pool / 100
+                    }
                 }
                 // workout_data mirrors the add_workouts/modify_workout shape, so
                 // an item can be passed straight back to modify_workout.
@@ -504,7 +509,7 @@ actor GarminService {
                     "workout_data": [
                         "name": item["title"] as? String ?? "Scheduled Workout",
                         "sport": sportKey, "duration_minutes": durationMinutes,
-                        "description": "", "steps": steps
+                        "description": "", "steps": steps, "pool_length": poolLengthM
                     ]
                 ]
                 if let associatedActivityId { entry["associated_activity_id"] = "\(associatedActivityId)" }

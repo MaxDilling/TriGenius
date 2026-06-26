@@ -28,6 +28,7 @@ struct DashboardView: View {
     @ObservedObject var settings: AppSettings
     let onBackendChanged: () -> Void
 
+    @Environment(CoachRouter.self) private var router
     @State private var viewModel = DashboardViewModel()
     @State private var volumeMetric: VolumeMetric = .tss
 
@@ -261,6 +262,10 @@ struct DashboardView: View {
                     .strokeBorder(Self.appleIntelligenceGradient, lineWidth: 1.5)
                     .opacity(0.9)
             )
+            // Tapping the card carries its read of the week into the chat as a
+            // pre-filled (unsent) prompt — same deterministic basis as the insight.
+            .contentShape(Rectangle())
+            .onTapGesture { router.openChat(prefill: viewModel.insightFollowUpPrompt) }
         }
     }
 

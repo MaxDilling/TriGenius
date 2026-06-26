@@ -1,19 +1,45 @@
 import SwiftUI
 
+/// Shared layout constants for the calendar (so the month grid's week-number gutter
+/// and the nav bar's weekday header line up).
+enum CalendarLayout {
+    static let monthGutter: CGFloat = 30
+}
+
 // MARK: - Training Calendar
 //
 // FEATURES.md "Training calendar screen" + "Extended calendar — past workouts and
-// daily life context": Week and Month views of scheduled + completed workouts and
-// the athlete's real-world commitments (EventKit), with a per-day time-of-day
-// availability indicator (morning / midday / evening free?) so it's obvious where
-// there is still time to train. Drag a planned-workout chip onto another day to
-// reschedule it (or onto a week-view segment to also set its time of day); updates
-// the local store and Garmin.
+// daily life context": Week and Month views of scheduled + completed workouts and the
+// athlete's real-world commitments (EventKit), mirroring Apple Calendar. The month is
+// a horizontally paged grid (system events as the three color-coded availability bars
+// under each day); the week is a continuously-scrollable hour-grid (`WeekTimeGridView`).
+// Tap a day to drill into the week, tap an event for its detail, and drag a planned
+// workout onto another day to reschedule it — updating the local store and Garmin.
+
+/// A tapped calendar item, presented via programmatic navigation. Programmatic nav
+/// (rather than wrapping each chip in a `NavigationLink`) keeps the chips' `.draggable`
+/// working for drag-to-reschedule — a `NavigationLink` would swallow the drag gesture.
+enum CalendarDetailItem: Identifiable, Hashable {
+    case planned(ScheduledWorkoutRecord)
+    case completed(ActivityRecord)
+    case event(BusyWindow)
+
+    var id: String {
+        switch self {
+        case .planned(let w): return "p-\(w.id)"
+        case .completed(let a): return "c-\(a.id)"
+        case .event(let e): return "e-\(e.id)"
+        }
+    }
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
+    func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
 
 struct CalendarView: View {
     let dataSource: DataSource
 
     @State private var viewModel: CalendarViewModel
+    @State private var detail: CalendarDetailItem?
 
     init(dataSource: DataSource) {
         self.dataSource = dataSource
@@ -22,58 +48,34 @@ struct CalendarView: View {
 
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var hSize
+    private var visibleCount: Int { hSize == .regular ? 7 : 3 }
     private var useColumns: Bool { hSize == .regular }
     #else
-    private var useColumns: Bool { true }   // macOS / visionOS: always roomy
+    private var visibleCount: Int { 7 }
+    private var useColumns: Bool { true }
     #endif
 
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 0), count: 7)
-
     var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                header
-                    .padding(.horizontal)
+        VStack(spacing: Theme.Spacing.s) {
+            CalendarNavBar(viewModel: viewModel, visibleCount: visibleCount)
+                .padding(.horizontal)
+                .padding(.top, Theme.Spacing.s)
 
-                if viewModel.needsCalendarAccess {
-                    calendarAccessPrompt
-                        .padding(.horizontal)
-                }
-
-                switch viewModel.mode {
-                case .month:
-                    // Weekday header + grid run edge-to-edge (Apple Calendar
-                    // style); only the chrome around them keeps side padding.
-                    weekdayHeader
-                    monthGrid
-                case .week:
-                    WeekView(viewModel: viewModel, useColumns: useColumns)
-                        .padding(.horizontal)
-                }
-
-                // The week view already shows every day in full (stacked on
-                // compact, side-by-side on roomy devices), so the separate
-                // selected-day panel only adds value in month mode.
-                if viewModel.mode == .month {
-                    selectedDayDetail
-                        .padding(.horizontal)
-                }
+            if viewModel.needsCalendarAccess {
+                calendarAccessPrompt.padding(.horizontal)
             }
-            .padding(.vertical)
+
+            content
+                .frame(maxHeight: .infinity)
         }
-        .navigationTitle("Calendar")
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         #endif
-        .toolbar {
-            // Week/Month lives in the nav bar (not a full-width band in the
-            // content) so it reads as view chrome, clearly distinct from the
-            // app-wide Dashboard/Coach/Settings tabs.
-            ToolbarItem(placement: .principal) {
-                modePicker
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button("Today") { viewModel.goToToday() }
+        .navigationDestination(item: $detail) { item in
+            switch item {
+            case .planned(let workout): PlannedWorkoutDetailView(workout: workout)
+            case .completed(let activity): TrainingDetailView(record: activity)
+            case .event(let window): BusyEventDetailView(window: window)
             }
         }
         .onAppear { viewModel.load() }
@@ -82,43 +84,19 @@ struct CalendarView: View {
         }
     }
 
-    // MARK: Header
-
-    private var modePicker: some View {
-        Picker("View", selection: $viewModel.mode) {
-            ForEach(CalendarMode.allCases) { Text($0.label).tag($0) }
-        }
-        .pickerStyle(.segmented)
-        // Sized to its content so it stays a compact bar control rather than
-        // stretching the full width like the app's tab bar.
-        .fixedSize()
-    }
-
-    private var header: some View {
-        HStack {
-            Button { viewModel.showPrevious() } label: {
-                Image(systemName: "chevron.left")
-            }
-            Spacer()
-            Text(viewModel.title).font(.title2.weight(.semibold))
-            Spacer()
-            Button { viewModel.showNext() } label: {
-                Image(systemName: "chevron.right")
-            }
-        }
-        .buttonStyle(.plain)
-        .font(.title3)
-    }
-
-    private var weekdayHeader: some View {
-        HStack(spacing: 0) {
-            ForEach(viewModel.weekdaySymbols, id: \.self) { symbol in
-                Text(symbol)
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-            }
+    @ViewBuilder
+    private var content: some View {
+        switch viewModel.mode {
+        case .month:
+            MonthScrollView(viewModel: viewModel, useColumns: useColumns,
+                            onOpen: { detail = $0 })
+        case .week:
+            WeekTimeGridView(viewModel: viewModel, visibleCount: visibleCount,
+                             onOpen: { detail = $0 })
         }
     }
+
+    // MARK: Chrome
 
     private var calendarAccessPrompt: some View {
         Button {
@@ -136,23 +114,94 @@ struct CalendarView: View {
         }
         .buttonStyle(.plain)
     }
+}
 
-    // MARK: Month grid
+// MARK: - Month pager (horizontally paged month grids)
 
-    private var monthGrid: some View {
-        LazyVGrid(columns: columns, spacing: 0) {
-            ForEach(viewModel.gridDays, id: \.self) { day in
+/// The month view: a continuous vertical scroll of week rows (Apple-style), with a
+/// week-number gutter on the left and the nav-bar header tracking the visible month.
+private struct MonthScrollView: View {
+    @Bindable var viewModel: CalendarViewModel
+    let useColumns: Bool
+    let onOpen: (CalendarDetailItem) -> Void
+
+    @State private var scrollPosition = ScrollPosition()
+    @State private var didInitialScroll = false
+    // Geometry-driven month tracking is gated until the initial (or programmatic)
+    // scroll has settled — otherwise the `y = 0` read fired before we scroll to the
+    // focus week slides the loaded data window to the far-past first week, so the
+    // events around "today" appear only once you scroll back into range.
+    @State private var ready = false
+    private let rowHeight: CGFloat = 104
+
+    var body: some View {
+        ScrollView(.vertical) {
+            LazyVStack(spacing: 0) {
+                ForEach(viewModel.monthScrollWeeks, id: \.self) { weekStart in
+                    WeekRow(viewModel: viewModel, weekStart: weekStart,
+                            useColumns: useColumns, rowHeight: rowHeight, onOpen: onOpen)
+                        .id(weekStart)
+                }
+            }
+            .scrollTargetLayout()
+        }
+        .scrollPosition($scrollPosition)
+        .scrollIndicators(.hidden)
+        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
+            guard ready else { return }
+            let weeks = viewModel.monthScrollWeeks
+            guard !weeks.isEmpty else { return }
+            let index = max(0, min(weeks.count - 1, Int((y / rowHeight).rounded(.down))))
+            viewModel.updateMonthScroll(topWeekStart: weeks[index])
+        }
+        .onAppear {
+            guard !didInitialScroll else { return }
+            didInitialScroll = true
+            // Defer so the lazy rows realise their layout before we scroll to the
+            // focus week (otherwise it no-ops and we start at the first backing week).
+            DispatchQueue.main.async {
+                scrollPosition.scrollTo(id: viewModel.monthFocusWeek)
+                DispatchQueue.main.async { ready = true }
+            }
+        }
+        .onChange(of: viewModel.monthScrollTick) { _, _ in
+            ready = false
+            scrollPosition.scrollTo(id: viewModel.monthFocusWeek)
+            DispatchQueue.main.async { ready = true }
+        }
+    }
+}
+
+/// One week row in the continuous month grid: a week-number gutter + seven day cells.
+private struct WeekRow: View {
+    @Bindable var viewModel: CalendarViewModel
+    let weekStart: Date
+    let useColumns: Bool
+    let rowHeight: CGFloat
+    let onOpen: (CalendarDetailItem) -> Void
+
+    private let gridLine = Color.primary.opacity(0.12)
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Text("\(viewModel.weekNumber(for: weekStart))")
+                .font(.system(size: 10)).foregroundStyle(.tertiary)
+                .frame(width: CalendarLayout.monthGutter, alignment: .center)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .padding(.top, 4)
+
+            ForEach(viewModel.weekDays(for: weekStart), id: \.self) { day in
                 DayCell(
                     day: day,
                     planned: viewModel.planned(on: day),
                     completed: viewModel.completed(on: day),
                     segments: viewModel.segments(on: day),
-                    inMonth: viewModel.isInVisibleMonth(day),
-                    isSelected: Calendar.current.isDate(day, inSameDayAs: viewModel.selectedDay),
                     isToday: Calendar.current.isDateInToday(day),
-                    wide: useColumns
+                    wide: useColumns,
+                    onSelectDay: { viewModel.focusWeek(on: day) },
+                    onOpen: onOpen
                 )
-                .onTapGesture { viewModel.selectedDay = Calendar.current.startOfDay(for: day) }
+                .frame(maxWidth: .infinity)
                 .dropDestination(for: String.self) { ids, _ in
                     guard let id = ids.first else { return false }
                     viewModel.move(workoutID: id, to: day)
@@ -160,53 +209,8 @@ struct CalendarView: View {
                 }
             }
         }
-    }
-
-    // MARK: Selected-day detail
-
-    private var selectedDayDetail: some View {
-        let day = viewModel.selectedDay
-        let planned = viewModel.planned(on: day)
-        let completed = viewModel.completed(on: day)
-        let busy = viewModel.busyWindows(on: day)
-
-        return VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            HStack {
-                Text(day.formatted(.dateTime.weekday(.wide).day().month(.wide)))
-                    .font(.headline)
-                Spacer()
-                let load = viewModel.selectedWeekLoad()
-                if load.minutes > 0 {
-                    Text("Week: \(durationHM(load.minutes)) • \(Int(load.tss.rounded())) TSS")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-            }
-
-            if !viewModel.segments(on: day).isEmpty {
-                SegmentBar(states: viewModel.segments(on: day), style: .labeled)
-            }
-
-            if completed.isEmpty && planned.isEmpty && busy.isEmpty {
-                Text("Nothing here yet. Drag a workout onto this day, or ask the coach to schedule one.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            }
-
-            ForEach(completed) { activity in
-                CompletedRow(activity: activity)
-            }
-            ForEach(planned) { workout in
-                PlannedRow(workout: workout, conflict: viewModel.conflict(for: workout),
-                           segment: viewModel.assignedSegment(workout))
-                    .draggable(workout.id)
-            }
-            if !busy.isEmpty {
-                ForEach(busy) { window in
-                    BusyRow(window: window)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .cardSurface(cornerRadius: Theme.Radius.l)
+        .frame(height: rowHeight)
+        .overlay(alignment: .top) { Rectangle().fill(gridLine).frame(height: 0.5) }
     }
 }
 
@@ -217,12 +221,14 @@ private struct DayCell: View {
     let planned: [ScheduledWorkoutRecord]
     let completed: [ActivityRecord]
     let segments: [TimeOfDaySegment: SegmentState]
-    let inMonth: Bool
-    let isSelected: Bool
     let isToday: Bool
     /// On roomy layouts (iPad / macOS) events show as icon-left + title rows,
     /// like Apple Calendar; on a compact iPhone they collapse to small chips.
     let wide: Bool
+    /// Tapping the day (number or empty space) drills into the week view.
+    let onSelectDay: () -> Void
+    /// Tapping an event chip opens its detail (via programmatic navigation).
+    let onOpen: (CalendarDetailItem) -> Void
 
     private var isPast: Bool { day < Calendar.current.startOfDay(for: Date()) }
     private let gridLine = Color.primary.opacity(0.12)
@@ -242,27 +248,37 @@ private struct DayCell: View {
             // Availability at a glance — only when the calendar is linked (no
             // data means no green bar). Completed days read from the events above.
             if !isPast && !segments.isEmpty {
-                SegmentBar(states: segments, style: .pips)
+                SegmentBar(states: segments)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: wide ? 96 : 62, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(wide ? 4 : 3)
-        .background(isSelected ? Color.accentColor.opacity(0.12) : .clear)
         // Thin top + leading hairlines render the month as a continuous grid
         // (Apple Calendar style) rather than a set of floating cards.
-        .overlay(alignment: .top) { Rectangle().fill(gridLine).frame(height: 0.5) }
         .overlay(alignment: .leading) { Rectangle().fill(gridLine).frame(width: 0.5) }
-        .opacity(inMonth ? 1 : 0.45)
         .contentShape(Rectangle())
+        // Tap empty space → week view. Chips capture their own taps (and stay
+        // draggable, which a NavigationLink wrapper would otherwise block).
+        .onTapGesture { onSelectDay() }
     }
 
+    private var isFirstOfMonth: Bool { Calendar.current.component(.day, from: day) == 1 }
+
     private var dayNumber: some View {
-        Text("\(Calendar.current.component(.day, from: day))")
-            .font(.caption.weight(isToday ? .bold : .regular))
-            .foregroundStyle(isToday ? .white : (inMonth ? .primary : .secondary))
-            .frame(width: 22, height: 22)
-            .background { if isToday { Circle().fill(Color.accentColor) } }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        HStack(spacing: 3) {
+            // At a month boundary, label the new month inline (Apple-style).
+            if isFirstOfMonth {
+                Text(day.formatted(.dateTime.month(.abbreviated)))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            Text("\(Calendar.current.component(.day, from: day))")
+                .font(.caption.weight(isToday ? .bold : .regular))
+                .foregroundStyle(isToday ? .white : .primary)
+                .frame(width: 22, height: 22)
+                .background { if isToday { Circle().fill(Color.accentColor) } }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: Wide layout — icon left, then workout title (Apple Calendar style)
@@ -271,10 +287,14 @@ private struct DayCell: View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(completed.prefix(3), id: \.id) { activity in
                 eventRow(sport: activity.sport, title: activity.name, filled: true)
+                    .contentShape(Rectangle())
+                    .onTapGesture { onOpen(.completed(activity)) }
             }
             let plannedSlots = max(0, 3 - completed.count)
             ForEach(planned.prefix(plannedSlots)) { workout in
                 eventRow(sport: workout.sport, title: workout.name, filled: false)
+                    .contentShape(Rectangle())
+                    .onTapGesture { onOpen(.planned(workout)) }
                     .draggable(workout.id)
             }
             let overflow = completed.count + planned.count - 3
@@ -309,9 +329,13 @@ private struct DayCell: View {
         VStack(spacing: 2) {
             ForEach(completed.prefix(2), id: \.id) { activity in
                 sportChip(sport: activity.sport, completed: true)
+                    .contentShape(Rectangle())
+                    .onTapGesture { onOpen(.completed(activity)) }
             }
             ForEach(planned.prefix(max(0, 2 - completed.count))) { workout in
                 sportChip(sport: workout.sport, completed: false)
+                    .contentShape(Rectangle())
+                    .onTapGesture { onOpen(.planned(workout)) }
                     .draggable(workout.id)
             }
             let overflow = planned.count + completed.count - 2
@@ -344,160 +368,50 @@ private struct DayCell: View {
     }
 }
 
-// MARK: - Shared rows (used by detail panel + week view)
+// MARK: - System calendar event detail (read-only)
 
-/// The shared compact training row: sport icon, name, a one-line summary and a
-/// trailing accessory, on a discipline-tinted background that marks it as a
-/// training session (vs. flat life events). `CompletedRow` and `PlannedRow` are
-/// thin wrappers that supply their record-specific destination, summary and
-/// accessory — the layout lives here once.
-struct WorkoutRow<Destination: View, Trailing: View>: View {
-    let sport: String
-    let name: String
-    let summary: String
-    /// Tint strength of the discipline-colored background.
-    var tintOpacity: Double
-    @ViewBuilder let destination: () -> Destination
-    @ViewBuilder let trailing: () -> Trailing
-
-    private var family: SportFamily { SportFamily(sportKey: sport) }
-
-    var body: some View {
-        NavigationLink {
-            destination()
-        } label: {
-            HStack(spacing: Theme.Spacing.s) {
-                Image(systemName: family.icon)
-                    .font(.caption).foregroundStyle(family.color)
-                    .frame(width: 18)
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(name).font(.subheadline.weight(.medium)).lineLimit(1)
-                    Text(summary).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Spacer(minLength: Theme.Spacing.xs)
-                trailing()
-            }
-            .padding(.vertical, Theme.Spacing.xs)
-            .padding(.horizontal, Theme.Spacing.s)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(family.color.opacity(tintOpacity), in: RoundedRectangle(cornerRadius: Theme.Radius.s))
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-/// A completed activity, shown solid/checked.
-struct CompletedRow: View {
-    let activity: ActivityRecord
-
-    var body: some View {
-        WorkoutRow(sport: activity.sport, name: activity.name, summary: summary,
-                   tintOpacity: 0.12) {
-            TrainingDetailView(record: activity)
-        } trailing: {
-            Image(systemName: "checkmark.circle.fill")
-                .font(.caption).foregroundStyle(Theme.Palette.success)
-        }
-    }
-
-    private var summary: String {
-        var parts: [String] = []
-        if activity.durationMinutes > 0 { parts.append(durationHM(activity.durationMinutes)) }
-        if activity.distanceKm > 0 { parts.append(String(format: "%.1f km", activity.distanceKm)) }
-        if let tss = activity.tss, tss > 0 { parts.append("\(Int(tss.rounded())) TSS") }
-        return parts.isEmpty ? "Completed" : parts.joined(separator: "  •  ")
-    }
-}
-
-/// A planned workout, draggable. Shows a warning when its segment isn't free.
-struct PlannedRow: View {
-    let workout: ScheduledWorkoutRecord
-    var conflict: Bool = false
-    var segment: TimeOfDaySegment? = nil
-
-    var body: some View {
-        // Tap → planned-workout detail; the row stays draggable for rescheduling.
-        // Lighter tint than completed so the day's done training reads stronger.
-        WorkoutRow(sport: workout.sport, name: workout.name, summary: summaryLine,
-                   tintOpacity: 0.10) {
-            PlannedWorkoutDetailView(workout: workout)
-        } trailing: {
-            if conflict {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(Theme.Palette.warning)
-            }
-            Image(systemName: "line.3.horizontal")
-                .font(.caption).foregroundStyle(.tertiary)
-        }
-    }
-
-    private var summaryLine: String {
-        workout.plannedSummaryLine(segment: segment, tssSuffix: "TSS target")
-    }
-}
-
-/// A real-world calendar commitment, muted.
-struct BusyRow: View {
+/// A minimal read-only detail for a real-world calendar commitment, reached by
+/// tapping an all-day event in the week grid. Workouts have their own rich details.
+struct BusyEventDetailView: View {
     let window: BusyWindow
 
     var body: some View {
-        // Life events are visually subordinate: colorless, flat, minimal height,
-        // so the colored training rows stay the day's anchors.
-        HStack(spacing: Theme.Spacing.s) {
-            Image(systemName: "calendar")
-                .font(.caption2).foregroundStyle(.secondary)
-                .frame(width: 18)
-            Text(window.title).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-            Spacer(minLength: Theme.Spacing.xs)
-            Text(timeRange).font(.caption2).foregroundStyle(.tertiary)
+        List {
+            Section {
+                LabeledContent("Title", value: window.title)
+                if window.isAllDay {
+                    LabeledContent("When", value: window.start.formatted(.dateTime.weekday(.wide).day().month(.wide)))
+                    LabeledContent("All day", value: "Yes")
+                } else {
+                    LabeledContent("Starts", value: window.start.formatted(.dateTime.weekday().day().month().hour().minute()))
+                    LabeledContent("Ends", value: window.end.formatted(.dateTime.hour().minute()))
+                }
+            } header: {
+                Text("Calendar event")
+            }
         }
-        .padding(.vertical, 2)
-        .padding(.horizontal, Theme.Spacing.s)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var timeRange: String {
-        let start = window.start.formatted(.dateTime.hour().minute())
-        let end = window.end.formatted(.dateTime.hour().minute())
-        return "\(start) – \(end)"
+        .navigationTitle(window.title)
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 }
 
 // MARK: - Segment availability bar
 
-/// Renders the morning / midday / evening availability for a day. `.pips` is a
-/// compact 3-bar strip (month cells); `.labeled` shows AM/Mid/PM tinted pills.
+/// Renders the morning / midday / evening availability for a day as a compact
+/// three-bar strip under each month cell (green = free, orange / red = busy).
 struct SegmentBar: View {
     let states: [TimeOfDaySegment: SegmentState]
-    var style: Style = .pips
-
-    enum Style { case pips, labeled }
 
     var body: some View {
-        switch style {
-        case .pips:
-            HStack(spacing: 2) {
-                ForEach(TimeOfDaySegment.allCases) { segment in
-                    Capsule()
-                        .fill((states[segment] ?? .free).color)
-                        .frame(height: 3)
-                }
-            }
-            .frame(maxWidth: .infinity)
-        case .labeled:
-            HStack(spacing: 6) {
-                ForEach(TimeOfDaySegment.allCases) { segment in
-                    let state = states[segment] ?? .free
-                    HStack(spacing: 4) {
-                        Image(systemName: segment.icon).font(.system(size: 9))
-                        Text(segment.shortLabel).font(.caption2.weight(.semibold))
-                    }
-                    .padding(.vertical, 4)
-                    .frame(maxWidth: .infinity)
-                    .foregroundStyle(state.color)
-                    .background(Capsule().fill(state.color.opacity(0.15)))
-                }
+        HStack(spacing: 2) {
+            ForEach(TimeOfDaySegment.allCases) { segment in
+                Capsule()
+                    .fill((states[segment] ?? .free).color)
+                    .frame(height: 3)
             }
         }
+        .frame(maxWidth: .infinity)
     }
 }

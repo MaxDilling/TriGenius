@@ -144,7 +144,8 @@ final class BackgroundCoordinator {
             let posted = await NotificationCenterService.shared.post(
                 title: "TriGenius",
                 body: body,
-                identifier: "trigenius.reminder.dyn.\(rule.id)"
+                identifier: "trigenius.reminder.dyn.\(rule.id)",
+                followUpPrompt: rule.kind.followUpPrompt
             )
             if posted { ReminderScheduler.shared.markDynamicDelivered(rule.id) }
         }
@@ -159,7 +160,8 @@ final class BackgroundCoordinator {
         await NotificationCenterService.shared.post(
             title: "TriGenius",
             body: body,
-            identifier: "trigenius.reminder.test.\(UUID().uuidString)"
+            identifier: "trigenius.reminder.test.\(UUID().uuidString)",
+            followUpPrompt: kind.followUpPrompt
         )
         return body
     }

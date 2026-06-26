@@ -148,17 +148,33 @@ final class DashboardViewModel {
         }
     }
 
-    private static func heuristicInsight(targets: [SportFamily: WeeklyTarget], currentWeek: TrainingVolume.WeekBucket?) -> String {
-        // Discipline furthest below its weekly target (by time).
+    /// Discipline furthest below its weekly target (by time) and its shortfall in
+    /// minutes — the shared basis for the heuristic insight line and the tap-through
+    /// follow-up prompt. nil when no discipline is meaningfully behind.
+    private static func worstGap(targets: [SportFamily: WeeklyTarget], currentWeek: TrainingVolume.WeekBucket?) -> (family: SportFamily, gapMinutes: Double)? {
         let gaps: [(SportFamily, Double)] = SportFamily.triathlon.map { fam in
             let actual = currentWeek?.totals(for: fam).durationMinutes ?? 0
             let target = (targets[fam]?.durationMinutes) ?? 0
             return (fam, target - actual)
         }
-        guard let worst = gaps.max(by: { $0.1 < $1.1 }), worst.1 > 15 else {
+        guard let worst = gaps.max(by: { $0.1 < $1.1 }), worst.1 > 15 else { return nil }
+        return (worst.0, worst.1)
+    }
+
+    private static func heuristicInsight(targets: [SportFamily: WeeklyTarget], currentWeek: TrainingVolume.WeekBucket?) -> String {
+        guard let worst = worstGap(targets: targets, currentWeek: currentWeek) else {
             return "Nicely balanced week so far — keep it up."
         }
-        return "You're still short ~\(durationHM(worst.1)) of \(worst.0.displayName.lowercased()) to hit this week's target."
+        return "You're still short ~\(durationHM(worst.gapMinutes)) of \(worst.family.displayName.lowercased()) to hit this week's target."
+    }
+
+    /// Deterministic chat prompt to pre-fill (unsent) when the athlete taps the AI
+    /// insight card — mirrors the same worst-gap read the card itself is built on.
+    var insightFollowUpPrompt: String {
+        if let worst = Self.worstGap(targets: targets, currentWeek: currentWeek) {
+            return "Plan a \(worst.family.displayName.lowercased()) workout for me this week."
+        }
+        return "Give me a quick review of my training week."
     }
 
     /// Build the compact data summary + a launch-stable signature for caching.
@@ -189,6 +205,37 @@ final class DashboardViewModel {
         }
         let summary = lines.joined(separator: "\n")
         return (summary, stableHash(summary))
+    }
+
+    /// The complete prompt sent to generate the dashboard one-liner — the static
+    /// system prompt plus the live, pre-classified data summary that goes out as
+    /// the user message — assembled from the current local store + plan. Pure and
+    /// side-effect-free (no widget write, no backend call / caching), so the Debug
+    /// Mode viewer in Settings can show exactly what the model would receive.
+    static func debugInsightPrompt(context: DashboardContext) -> String {
+        let store = TrainingDataStore.shared
+        let pmc = PMCEngine.current()
+        let currentWeek = TrainingVolume.weeklyBuckets(records: store.activities()).last
+
+        let cal = Calendar.current
+        let weekStart = TrainingVolume.weekStart(of: Date())
+        let weekEnd = cal.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
+        let targets = WeeklyTargets.targets(
+            scheduled: store.scheduledWorkouts(from: weekStart, to: weekEnd),
+            weeklyStructure: context.weeklyStructure,
+            plan: context.trainingPlan
+        )
+
+        let (summary, _) = insightInputs(pmc: pmc, targets: targets, currentWeek: currentWeek)
+        return """
+        ===== SYSTEM PROMPT =====
+
+        \(DashboardInsight.systemPrompt)
+
+        ===== USER MESSAGE (live data) =====
+
+        \(summary)
+        """
     }
 
     /// Plain-language read of Form (TSB) so the model classifies it correctly.

@@ -11,7 +11,7 @@ import Foundation
 // Swims are re-cleaned here from their stored per-length data, so changing the
 // cleaning constants and recomputing re-derives the corrected distance.
 
-enum TSSScoring {
+nonisolated enum TSSScoring {
 
     /// Mutates `details` (swimming.cleaned_distance_m / swim_time_s, distance_km)
     /// and returns the resolved distance (km) + TSS.

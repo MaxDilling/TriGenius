@@ -23,6 +23,13 @@ import Foundation
 // they reach here. The default-IF model is also the single source of truth for the
 // flat duration-only fallback in `WeeklyTargets`.
 
+/// How a planned workout's distance was obtained.
+enum DistanceSource {
+    case fixed                 // summed from distance-prescribed steps — exact
+    case estimatedFromPace     // time steps converted via pace/speed targets
+    case estimatedFromDuration // no usable structure → duration × default speed
+}
+
 enum PlannedTSS {
 
     // MARK: Default intensity model (single source of truth)
@@ -95,24 +102,40 @@ enum PlannedTSS {
 
     // MARK: Total distance (display)
 
-    /// Estimated total distance in meters for a planned workout, summing the
-    /// distance of every leaf step (expanding repeats). Distance-based steps use
-    /// their meters directly; time-based steps are converted via their pace target
-    /// when present, else the discipline's default speed. Nil when there are no
-    /// measurable steps. Used to show a "~16 km" figure for distance disciplines.
-    static func totalDistanceMeters(compactSteps: [[String: Any]], family: SportFamily) -> Double? {
+    /// Estimated total distance for a planned workout plus how it was obtained.
+    /// Distance-based steps contribute their meters directly (exact); time-based
+    /// steps are converted via their pace/speed target when present, else the
+    /// discipline's default speed. The `source` classifies the whole workout:
+    /// `.fixed` when every measurable step is distance-prescribed, `.estimatedFromPace`
+    /// when all time steps carried a pace/speed target, else `.estimatedFromDuration`
+    /// (at least one time step fell back to the default speed). Nil when there are
+    /// no measurable steps.
+    static func totalDistance(compactSteps: [[String: Any]], family: SportFamily) -> (meters: Double, source: DistanceSource)? {
         let raw = flatten(compactSteps)
         guard !raw.isEmpty else { return nil }
         var meters = 0.0
+        var hasTimeStep = false
+        var allTimeStepsPaced = true
         for step in raw {
             if step.isDistance {
                 meters += max(0, step.endValue)
             } else {
-                let speed = targetSpeedMPS(for: step, family: family) ?? defaultSpeedMPS(family)
-                meters += max(0, step.endValue) * speed
+                hasTimeStep = true
+                let paced = targetSpeedMPS(for: step, family: family)
+                if paced == nil { allTimeStepsPaced = false }
+                meters += max(0, step.endValue) * (paced ?? defaultSpeedMPS(family))
             }
         }
-        return meters > 0 ? meters : nil
+        guard meters > 0 else { return nil }
+        let source: DistanceSource = !hasTimeStep ? .fixed
+            : allTimeStepsPaced ? .estimatedFromPace
+            : .estimatedFromDuration
+        return (meters, source)
+    }
+
+    /// Estimated total distance in meters only — see `totalDistance` for provenance.
+    static func totalDistanceMeters(compactSteps: [[String: Any]], family: SportFamily) -> Double? {
+        totalDistance(compactSteps: compactSteps, family: family)?.meters
     }
 
     // MARK: Total duration (display)

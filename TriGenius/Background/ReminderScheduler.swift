@@ -49,6 +49,9 @@ final class ReminderScheduler {
         content.title = "TriGenius"
         content.body = rule.body
         content.sound = .default
+        if let prompt = rule.kind.followUpPrompt {
+            content.userInfo[NotificationCenterService.followUpPromptKey] = prompt
+        }
 
         // No weekdays → fire daily at the time. Otherwise one request per weekday.
         let weekdays: [Int?] = rule.weekdays.isEmpty ? [nil] : rule.weekdays.map { $0 }

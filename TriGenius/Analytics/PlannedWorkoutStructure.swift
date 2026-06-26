@@ -53,6 +53,9 @@ struct PlannedWorkoutStructure {
     /// Estimated total distance in meters (pace-derived where possible). Surface
     /// only for distance disciplines (run / swim) where it reads naturally.
     let totalDistanceMeters: Double?
+    /// How `totalDistanceMeters` was obtained (exact vs estimated). Nil alongside
+    /// a nil distance.
+    let distanceSource: DistanceSource?
     /// Estimated total duration in minutes, derived from the steps (distance steps
     /// converted via their pace target). Used as a duration fallback when the
     /// record carries no explicit `targetDurationMinutes`.
@@ -66,10 +69,12 @@ struct PlannedWorkoutStructure {
               !compact.isEmpty else { return nil }
         let steps = parse(compact)
         guard !steps.isEmpty else { return nil }
+        let distance = PlannedTSS.totalDistance(compactSteps: compact, family: family)
         return PlannedWorkoutStructure(
             family: family,
             steps: steps,
-            totalDistanceMeters: PlannedTSS.totalDistanceMeters(compactSteps: compact, family: family),
+            totalDistanceMeters: distance?.meters,
+            distanceSource: distance?.source,
             estimatedDurationMinutes: PlannedTSS.totalDurationSeconds(compactSteps: compact, family: family).map { $0 / 60 }
         )
     }
@@ -81,7 +86,7 @@ struct PlannedWorkoutStructure {
         for step in compact {
             if let children = step["repeat_steps"] as? [[String: Any]] {
                 let count = max(1, Coerce.double(step["repeat_count"]).map { Int($0) } ?? 1)
-                let leaves = children.compactMap(leaf(from:))
+                let leaves = children.compactMap { leaf(from: $0) }
                 guard !leaves.isEmpty else { continue }
                 if count > 1 {
                     out.append(PlannedDisplayStep(repeatCount: count, steps: leaves))
@@ -331,6 +336,12 @@ enum PlannedWorkoutFormat {
 // shared by every compact row (Agenda, Calendar, Week) and the detail view so
 // they stay consistent.
 
+/// A planned workout's distance plus how it was derived (see `DistanceSource`).
+struct PlannedDistance {
+    var meters: Double
+    var source: DistanceSource
+}
+
 extension ScheduledWorkoutRecord {
     var family: SportFamily { SportFamily(sportKey: sport) }
 
@@ -345,6 +356,19 @@ extension ScheduledWorkoutRecord {
     /// Planned TSS — the explicit target, else estimated from duration.
     var resolvedTargetTSS: Double {
         targetTSS ?? WeeklyTargets.estimatedTSS(family: family, minutes: targetDurationMinutes)
+    }
+
+    /// Planned distance for the workout, with how it was derived: the structured
+    /// steps when present (exact for distance-prescribed steps, pace-derived
+    /// otherwise), else duration × the discipline's default speed. Nil for
+    /// sessions with no meaningful distance (strength, or no steps and no
+    /// duration) — `estimatedDistanceKm` returns 0 for those.
+    var plannedDistance: PlannedDistance? {
+        if let s = structure, let m = s.totalDistanceMeters, m > 0, let src = s.distanceSource {
+            return PlannedDistance(meters: m, source: src)
+        }
+        let km = WeeklyTargets.estimatedDistanceKm(family: family, minutes: targetDurationMinutes)
+        return km > 0 ? PlannedDistance(meters: km * 1000, source: .estimatedFromDuration) : nil
     }
 
     /// Session character, derived from the planned TSS + duration.

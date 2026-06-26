@@ -61,6 +61,13 @@ final class ChatViewModel {
         brain.prewarm()
     }
 
+    /// Drop text into the input field without sending it — the athlete reviews,
+    /// edits, and sends. Used when arriving from a tapped message (see CoachRouter).
+    func prefill(_ text: String) {
+        inputText = text
+        showGreeting = false
+    }
+
     func sendMessage() async {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
@@ -127,12 +134,24 @@ final class ChatViewModel {
 // MARK: - Chat View
 
 struct CoachChatView: View {
+    @Environment(CoachRouter.self) private var router
     @State private var viewModel: ChatViewModel
     @FocusState private var inputFocused: Bool
     @State private var showReport = false
 
     init(brain: CoachBrain) {
         _viewModel = State(initialValue: ChatViewModel(brain: brain))
+    }
+
+    /// Consume a prompt routed in from a tapped message: drop it into the input
+    /// (unsent) and clear it so later tab switches don't replay it. Intentionally
+    /// does NOT raise the keyboard — forcing focus as the programmatic tab switch
+    /// settles inside the NavigationStack can hang the UI on-device. The athlete
+    /// taps the field to edit; the prompt is already there, waiting to be sent.
+    private func consumePendingPrompt() {
+        guard let prompt = router.pendingPrompt else { return }
+        viewModel.prefill(prompt)
+        router.pendingPrompt = nil
     }
 
     var body: some View {
@@ -194,7 +213,12 @@ struct CoachChatView: View {
             }
         }
         .navigationTitle("Coach")
-        .onAppear { viewModel.attach() }
+        .onAppear {
+            viewModel.attach()
+            // A tap may have set the prompt before this view existed / appeared.
+            consumePendingPrompt()
+        }
+        .onChange(of: router.pendingPrompt) { _, _ in consumePendingPrompt() }
         .task { viewModel.prewarm() }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {

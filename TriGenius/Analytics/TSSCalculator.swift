@@ -21,7 +21,7 @@ import Foundation
 // Dispatch: bike → power, run/swim → pace, everything else → HR zone-load. Each
 // path falls back to HR zone-load when its inputs/thresholds are missing.
 
-enum TSSCalculator {
+nonisolated enum TSSCalculator {
 
     /// How a completed activity's TSS was derived — so the UI can tell the athlete
     /// where the number came from (BUGS.md "show where the TSS calculation comes
