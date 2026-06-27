@@ -23,6 +23,8 @@ struct TrainingDetailView: View {
     @State private var exportError: String?
     @State private var showDistanceEdit = false
     @State private var distanceInput = ""
+    @State private var showDeleteConfirm = false
+    @Environment(\.dismiss) private var dismiss
 
     private var family: SportFamily { SportFamily(sportKey: record.sport) }
     private var structure: PlannedWorkoutStructure? { record.structure }
@@ -57,6 +59,31 @@ struct TrainingDetailView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .toolbar {
+            if debugModeEnabled {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: exportDebugJSON) {
+                        Label("Export workout (JSON)", systemImage: "ladybug")
+                    }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(role: .destructive) {
+                        showDeleteConfirm = true
+                    } label: {
+                        Label("Delete workout", systemImage: "trash")
+                    }
+                }
+            }
+        }
+        .confirmationDialog("Delete this workout?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                TrainingDataStore.shared.deleteActivity(id: record.id)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes the stored row. A full re-sync of its source re-creates it — use this to verify the sync rebuilds the record.")
+        }
         .task { await loadHeartRate() }
         .sheet(item: $exportFile) { file in ShareSheet(items: [file.url]) }
         .alert("Export failed", isPresented: Binding(
@@ -586,8 +613,123 @@ struct TrainingDetailView: View {
         isLoadingHR = true
         defer { isLoadingHR = false }
         if let workout = try? await HealthKitService.shared.fetchWorkout(id: healthKitWorkoutID),
-           let samples = try? await HealthKitService.shared.fetchHeartRateSamples(during: workout) {
-            heartRateSamples = samples
+           let samples = try? await HealthKitService.shared.fetchHeartRateSeries(during: workout) {
+            heartRateSamples = Self.downsample(samples, to: 600)
+        }
+    }
+
+    /// Evenly stride a dense series down to at most `limit` points for the chart —
+    /// the high-res HR stream can be thousands of samples; the line stays smooth.
+    private static func downsample(_ samples: [HeartRateSample], to limit: Int) -> [HeartRateSample] {
+        guard samples.count > limit else { return samples }
+        let stride = Int((Double(samples.count) / Double(limit)).rounded(.up))
+        return samples.enumerated().compactMap { index, sample in
+            index % stride == 0 ? sample : nil
+        }
+    }
+
+    // MARK: Debug export
+    //
+    // A full JSON dump of the stored record — both plan and completed sections,
+    // the raw `details`, the parsed structure, the threshold snapshot the TSS was
+    // scored against (as of the activity's own date), and a read-only re-run of
+    // the scorer. Enough to reproduce/recheck the TSS + PMC algorithms offline.
+
+    /// The Developer "Debug Mode" toggle, read live from `UserDefaults` (the same
+    /// `debug_mode` key `AppSettings` persists) — gates the JSON export button.
+    private var debugModeEnabled: Bool {
+        UserDefaults.standard.bool(forKey: "debug_mode")
+    }
+
+    private func snapshotDict(_ s: PerformanceSnapshot) -> [String: Any] {
+        var d: [String: Any] = [:]
+        if let v = s.cyclingFTP { d["cycling_ftp_w"] = v }
+        if let v = s.runningFTP { d["running_ftp_w"] = v }
+        if let v = s.cssPaceSeconds { d["css_pace_s_per_100m"] = v }
+        if let v = s.lactateThrHR { d["lactate_thr_hr_bpm"] = v }
+        if let v = s.maxHR { d["max_hr_bpm"] = v }
+        if let v = s.lactateThrPaceSeconds { d["lactate_thr_pace_s_per_km"] = v }
+        if let v = s.vo2maxRunning { d["vo2max_running"] = v }
+        if let v = s.vo2maxCycling { d["vo2max_cycling"] = v }
+        if let v = s.weightKg { d["weight_kg"] = v }
+        return d
+    }
+
+    private func exportDebugJSON() {
+        Task { await buildAndExportDebugJSON() }
+    }
+
+    private func buildAndExportDebugJSON() async {
+        let iso = ISO8601DateFormatter()
+        var dump: [String: Any] = [
+            "id": record.id,
+            "source": record.source,
+            "sport": record.sport,
+            "name": record.name,
+            "date": iso.string(from: record.date),
+            "is_planned": record.isPlanned,
+            "is_completed": record.isCompleted,
+        ]
+        if let minute = record.startMinute { dump["start_minute"] = minute }
+        if !record.externalRefs.isEmpty { dump["external_refs"] = record.externalRefs }
+
+        if record.isPlanned {
+            var planned: [String: Any] = [
+                "target_duration_minutes": record.targetDurationMinutes,
+                "target_distance_meters": record.targetDistanceMeters,
+                "notes": record.notes,
+            ]
+            if let tss = record.targetTSS { planned["target_tss"] = tss }
+            if let pool = record.poolLengthMeters { planned["pool_length_meters"] = pool }
+            if let steps = try? JSONSerialization.jsonObject(with: Data(record.stepsJSON.utf8)) {
+                planned["steps"] = steps
+            }
+            dump["planned"] = planned
+        }
+
+        if record.isCompleted {
+            var completed: [String: Any] = [
+                "duration_minutes": record.durationMinutes,
+                "distance_km": record.distanceKm,
+            ]
+            if let tss = record.tss { completed["tss"] = tss }
+            if let te = record.aerobicTE { completed["aerobic_te"] = te }
+            if let te = record.anaerobicTE { completed["anaerobic_te"] = te }
+            dump["completed"] = completed
+        }
+
+        dump["details"] = details
+
+        let snapshot = TrainingDataStore.shared.performanceHistory().snapshot(asOf: record.date)
+        dump["performance_snapshot_asof"] = snapshotDict(snapshot)
+        let recomputed = TSSCalculator.compute(details: details, snapshot: snapshot)
+        var tssDump: [String: Any] = [:]
+        if let value = recomputed.tss { tssDump["tss"] = value }
+        if let basis = recomputed.basis?.label { tssDump["basis"] = basis }
+        dump["recomputed_tss"] = tssDump
+
+        // Live speed-stream provenance for a run — the exact (value, seconds) samples
+        // the normalizer saw plus the staged result, recomputed for this workout from
+        // either source so the algorithm can be rechecked offline (no log correlation).
+        if family == .run {
+            if isHealthKit,
+               let diag = await HealthKitService.shared.speedStreamDiagnostics(forWorkoutID: healthKitWorkoutID) {
+                dump["debug_speed_stream"] = diag
+            } else if record.source == "garmin",
+                      let diag = await GarminService.shared.speedStreamDiagnostics(activityId: TrainingDataStore.rawId(record.id)) {
+                dump["debug_speed_stream"] = diag
+            }
+        }
+
+        do {
+            let data = try JSONSerialization.data(
+                withJSONObject: dump, options: [.prettyPrinted, .sortedKeys])
+            let filename = "workout_\(record.source)_\(Int(record.date.timeIntervalSince1970)).json"
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
+            try data.write(to: url)
+            exportFile = ExportFile(url: url)
+        } catch {
+            exportError = error.localizedDescription
         }
     }
 

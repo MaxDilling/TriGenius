@@ -12,6 +12,12 @@ enum DataSource: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
     var displayName: String { rawValue }
+    var icon: String {
+        switch self {
+        case .garmin: return "antenna.radiowaves.left.and.right"
+        case .appleHealth: return "heart.text.square"
+        }
+    }
 }
 
 /// A *write* target: where the coach's planned workouts are pushed. Exactly one is
@@ -225,11 +231,12 @@ struct SettingsView: View {
                 }
             }
 
-            // Read sources — parallel; merged into the local store.
+            // Read sources — parallel; merged into the local store. Source selection
+            // only; each enabled source's own controls live in its section below.
             Section {
                 ForEach(DataSource.allCases) { source in
                     Toggle(isOn: readBinding(source)) {
-                        Label(source.displayName, systemImage: source == .garmin ? "antenna.radiowaves.left.and.right" : "heart.text.square")
+                        Label(source.displayName, systemImage: source.icon)
                     }
                 }
                 // When both providers feed activities, pick exactly one to supply the
@@ -241,14 +248,33 @@ struct SettingsView: View {
                         }
                     }
                 }
-                if settings.readSources.contains(.garmin) {
-                    GarminLoginSection(settings: settings)
-                    GarminBackfillSection()
-                }
             } header: {
                 Text("Read From")
             } footer: {
                 Text("Pull training and health data from one or both. Garmin Connect workouts already mirrored into Apple Health are skipped to avoid duplicates. When both are on, performance and wellness metrics come from the single \u{201C}Metrics from\u{201D} provider.")
+            }
+
+            // Per-source controls — one section each, headed by the provider, so it's
+            // clear what belongs to whom. Each carries a Re-sync that re-pulls and
+            // recomputes that source's history in place.
+            if settings.readSources.contains(.garmin) {
+                Section {
+                    GarminLoginSection(settings: settings)
+                    ReadSourceSyncSection(source: .garmin)
+                } header: {
+                    Label(DataSource.garmin.displayName, systemImage: DataSource.garmin.icon)
+                } footer: {
+                    Text("Re-sync re-fetches your Garmin history and recomputes TSS for every activity.")
+                }
+            }
+            if settings.readSources.contains(.appleHealth) {
+                Section {
+                    ReadSourceSyncSection(source: .appleHealth)
+                } header: {
+                    Label(DataSource.appleHealth.displayName, systemImage: DataSource.appleHealth.icon)
+                } footer: {
+                    Text("Re-sync re-reads every Apple Health workout — recomputing heart rate, zones and TSS for sessions imported before they were supported.")
+                }
             }
 
             // Write target — where the coach schedules planned workouts.
@@ -1402,39 +1428,28 @@ struct ReminderTestView: View {
 /// Pulls a deeper slice of Garmin history into the local database so the PMC
 /// engine's CTL (Fitness, 42-day) has a proper warm-up window. Garmin only —
 /// Apple Health already backfills generously on its first sync.
-struct GarminBackfillSection: View {
+/// Per-source "Re-sync" row: forgets the source's watermark and re-pulls its
+/// history, recomputing each activity in place. One instance per enabled read
+/// source (Garmin / Apple Health), so the action reads as belonging to that source.
+struct ReadSourceSyncSection: View {
+    let source: DataSource
+
     @State private var isWorking = false
     @State private var statusMessage: String?
     @State private var isError = false
-    @State private var isRecomputing = false
-
-    /// How far back to pull. ~8 months comfortably covers the >42-day CTL warm-up
-    /// plus several months of history for trend context.
-    private let backfillDays = 240
 
     var body: some View {
         Group {
             Button {
-                Task { await runBackfill() }
+                Task { await runResync() }
             } label: {
                 if isWorking {
-                    HStack { ProgressView(); Text("Backfilling…") }
+                    HStack { ProgressView(); Text("Re-syncing…") }
                 } else {
-                    Label("Backfill \(backfillDays) days of history", systemImage: "clock.arrow.circlepath")
+                    Label("Re-sync \(source.displayName)", systemImage: "arrow.triangle.2.circlepath")
                 }
             }
             .disabled(isWorking)
-
-            Button {
-                Task { await runRecompute() }
-            } label: {
-                if isRecomputing {
-                    HStack { ProgressView(); Text("Recomputing…") }
-                } else {
-                    Label("Recompute all TSS & distances", systemImage: "arrow.triangle.2.circlepath")
-                }
-            }
-            .disabled(isRecomputing || isWorking)
 
             if let statusMessage {
                 Label(statusMessage, systemImage: isError ? "exclamationmark.triangle.fill" : "checkmark.circle")
@@ -1444,34 +1459,22 @@ struct GarminBackfillSection: View {
         }
     }
 
-    private func runRecompute() async {
-        isRecomputing = true
-        statusMessage = nil
-        defer { isRecomputing = false }
-        // Re-score every stored completed activity from its own data against the
-        // thresholds current on its date — purely local, independent of the source it
-        // came from (no Garmin connection required). Manual overrides are preserved.
-        let count = TrainingDataStore.shared.recomputeCompletedScores()
-        isError = false
-        statusMessage = "Recomputed \(count) activities (TSS + distances)."
-    }
-
-    private func runBackfill() async {
+    private func runResync() async {
         isWorking = true
         statusMessage = nil
         defer { isWorking = false }
-        guard await GarminAuth.shared.isAuthenticated else {
+        if source == .garmin, await GarminAuth.shared.isAuthenticated == false {
             statusMessage = "Connect to Garmin first."
             isError = true
             return
         }
-        let count = await DataSyncCoordinator.shared.deepBackfill(source: .garmin, days: backfillDays)
+        let count = await DataSyncCoordinator.shared.resync(source: source)
         if let count {
             isError = false
-            statusMessage = "Imported \(count) activities. CTL warm-up is now more accurate."
+            statusMessage = "Re-synced \(count) activities — TSS recomputed."
         } else {
             isError = true
-            statusMessage = "Backfill failed — check your Garmin connection."
+            statusMessage = source == .garmin ? "Re-sync failed — check your Garmin connection." : "Re-sync failed."
         }
     }
 }

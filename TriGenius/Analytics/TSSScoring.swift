@@ -3,10 +3,11 @@ import Foundation
 // MARK: - TSS scoring (shared ingest + recompute path)
 //
 // Re-derives a completed activity's effective distance and TSS from its stored
-// `detailsJSON`, using the current thresholds. Used both at ingest (after the
-// data source fills detailsJSON) and by the "recompute all" action — so a tuning
-// change or a manual distance override takes effect without re-fetching from the
-// watch. Brand-agnostic: reads only the detailsJSON schema (see `TSSCalculator`).
+// `detailsJSON`, using the current thresholds. Used at ingest (after the data
+// source fills detailsJSON) and by the manual distance-override path — so an
+// override re-scores in place without re-fetching from the watch; a tuning change
+// takes effect on the next per-source re-sync (which re-fetches and re-ingests).
+// Brand-agnostic: reads only the detailsJSON schema (see `TSSCalculator`).
 //
 // Swims are re-cleaned here from their stored per-length data, so changing the
 // cleaning constants and recomputing re-derives the corrected distance.

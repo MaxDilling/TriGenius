@@ -601,32 +601,6 @@ final class TrainingDataStore {
         markChanged()
     }
 
-    /// Re-score every stored completed activity's TSS + effective distance from its
-    /// own `detailsJSON`, against the performance thresholds current on its date.
-    /// Purely local and source-independent (no network / re-fetch) — the
-    /// "recompute all" action so existing rows pick up tuning changes regardless of
-    /// which provider they came from. Manual distance overrides survive (they live
-    /// in `detailsJSON` as `manual_distance_m`). Returns the number of rows updated.
-    @discardableResult
-    func recomputeCompletedScores() -> Int {
-        let records = (try? context.fetch(
-            FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.isCompleted }))) ?? []
-        guard !records.isEmpty else { return 0 }
-        let history = performanceHistory()
-        var updated = 0
-        for r in records {
-            guard var details = Self.jsonObject(r.detailsJSON) else { continue }
-            let (km, tss) = TSSScoring.score(&details, snapshot: history.snapshot(asOf: r.date))
-            r.distanceKm = km
-            r.tss = tss
-            r.detailsJSON = Self.jsonString(details) ?? r.detailsJSON
-            updated += 1
-        }
-        try? context.save()
-        markChanged()
-        return updated
-    }
-
     /// Record the athlete's subjective feedback (feel 1–5, RPE 1–10, free-text
     /// note) on a completed activity, stored in `detailsJSON`. Matches the stored id
     /// or a source-prefixed variant of the raw provider id. Returns false when no
@@ -944,6 +918,21 @@ final class TrainingDataStore {
         }
         try? context.save()
         markChanged()
+    }
+
+    /// Delete one workout row outright by id (debug action). Used by the detail
+    /// view's debug-mode delete to force a clean re-create on the next re-sync —
+    /// confirming the ingest path actually rebuilds the record. Returns whether a
+    /// row was removed.
+    @discardableResult
+    func deleteActivity(id: String) -> Bool {
+        guard let record = try? context.fetch(
+            FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.id == id })
+        ).first else { return false }
+        context.delete(record)
+        try? context.save()
+        markChanged()
+        return true
     }
 
     /// Replace all `source`-originated OPEN plans within `[from, to]` with a fresh

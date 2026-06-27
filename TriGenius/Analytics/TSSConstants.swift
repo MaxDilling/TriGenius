@@ -55,6 +55,16 @@ nonisolated enum TSSConstants {
     static let hrZoneMidFractionOfLTHR: [Double] = [0.74, 0.84, 0.89, 0.94, 1.03]
     static let hrZoneLoadScale = 0.77
 
+    // MARK: HR zone boundaries (time-in-zone bucketing for sources without zones)
+    //
+    // Upper %LTHR bounds for zones 1–4 (zone 5 is open-ended), taken as the
+    // midpoints between adjacent zone-load fractions above — so bucketing and
+    // scoring share one model. Used when a source (e.g. Apple Health) provides an
+    // HR stream but no time-in-zone, so we bucket it against the athlete's LTHR.
+    static let hrZoneUpperFractionsOfLTHR: [Double] = zip(hrZoneMidFractionOfLTHR,
+                                                          hrZoneMidFractionOfLTHR.dropFirst())
+        .map { ($0 + $1) / 2 }
+
     // MARK: Swimming
     //
     // Length cleaning (`ref/tss_lab/swim.py`) + sTSS duration floor.

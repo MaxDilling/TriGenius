@@ -152,24 +152,13 @@ nonisolated enum GarminTransform {
         metricSegments(details, key: "directPower")
     }
 
-    /// Normalized speed (m/s) — the pace analogue of normalized power: a 30-sample
-    /// (~30 s) rolling mean, raised to the 4th power, averaged, 4th-rooted. Grade is
-    /// ignored (a future NGP refinement, see FEATURES.md). Nil without samples; falls
-    /// back to the plain mean for very short streams.
+    /// Normalized speed (m/s) — the pace analogue of normalized power. Shapes the
+    /// 1 Hz `directSpeed` stream into samples (each covering 1 s), then defers the math
+    /// to the shared `NormalizedStream`. Grade is ignored (a future NGP refinement,
+    /// see FEATURES.md).
     static func normalizedSpeedMps(_ details: [String: Any]) -> Double? {
         let samples = metricSegments(details, key: "directSpeed").flatMap { $0 }.filter { $0 >= 0 }
-        guard !samples.isEmpty else { return nil }
-        let window = 30
-        guard samples.count >= window else { return samples.reduce(0, +) / Double(samples.count) }
-        var rolled: [Double] = []
-        var windowSum = 0.0
-        for i in samples.indices {
-            windowSum += samples[i]
-            if i >= window { windowSum -= samples[i - window] }
-            if i >= window - 1 { rolled.append(windowSum / Double(window)) }
-        }
-        let fourth = rolled.reduce(0) { $0 + pow($1, 4) } / Double(rolled.count)
-        return pow(fourth, 0.25)
+        return NormalizedStream.normalized(samples.map { (value: $0, seconds: 1.0) })
     }
 
     /// Flatten a swim's lap DTOs into the ACTIVE pool lengths (idle/rest lengths

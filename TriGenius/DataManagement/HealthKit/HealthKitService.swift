@@ -30,6 +30,12 @@ final class HealthKitService {
             HKQuantityType(.distanceWalkingRunning),
             HKQuantityType(.distanceCycling),
             HKQuantityType(.distanceSwimming),
+            HKQuantityType(.runningSpeed),
+            HKQuantityType(.runningPower),
+            HKQuantityType(.cyclingSpeed),
+            HKQuantityType(.cyclingPower),
+            HKQuantityType(.cyclingCadence),
+            HKQuantityType(.swimmingStrokeCount),
             HKQuantityType(.oxygenSaturation),
             HKQuantityType(.respiratoryRate),
             HKQuantityType(.cyclingFunctionalThresholdPower),
@@ -45,8 +51,10 @@ final class HealthKitService {
     // MARK: - Recent Workouts
 
     /// `since` bounds the query to workouts on/after that date — used by the
-    /// incremental sync so only new activities are fetched.
-    func fetchRecentWorkouts(count: Int = 10, since: Date? = nil) async throws -> [WorkoutSummary] {
+    /// incremental sync so only new activities are fetched. Garmin-authored mirrors
+    /// are dropped here (see `isGarmin`); the rich per-workout record is built by
+    /// `normalizedRecord(for:hrZoneBounds:)`.
+    func fetchWorkouts(count: Int = 10, since: Date? = nil) async throws -> [HKWorkout] {
         let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
         let predicate = since.map { HKQuery.predicateForSamples(withStart: $0, end: nil) }
         return try await withCheckedThrowingContinuation { continuation in
@@ -59,8 +67,240 @@ final class HealthKitService {
                 if let error { continuation.resume(throwing: error); return }
                 let workouts = (samples as? [HKWorkout] ?? [])
                     .filter { !HealthKitService.isGarmin($0) }
-                    .map(WorkoutSummary.init)
                 continuation.resume(returning: workouts)
+            }
+            store.execute(query)
+        }
+    }
+
+    /// Recent workouts as scored-ready DTOs. Derives each workout's HR zone bounds
+    /// from `history` (the athlete's thresholds as of that day) so a session without
+    /// power/pace still gets a heart-rate TSS. The store scores TSS at ingest.
+    func fetchActivities(count: Int = 10, since: Date? = nil,
+                         history: PerformanceHistory) async throws -> [IngestedActivity] {
+        let workouts = try await fetchWorkouts(count: count, since: since)
+        var out: [IngestedActivity] = []
+        for workout in workouts {
+            let bounds = HRZones.upperBounds(snapshot: history.snapshot(asOf: workout.startDate))
+            let rec = try await normalizedRecord(for: workout, hrZoneBounds: bounds)
+            if let dto = Self.ingestDTO(from: rec) { out.append(dto) }
+        }
+        return out
+    }
+
+    /// Wrap a normalized record into an unscored `IngestedActivity` (mirrors
+    /// `GarminService.ingestDTO`); the store computes TSS + effective distance from
+    /// `detailsJSON` at ingest. Nil without an id/date.
+    private static func ingestDTO(from rec: [String: Any]) -> IngestedActivity? {
+        guard let id = rec["id"] as? String,
+              let dateStr = rec["date"] as? String, let date = DateFormatter.ymd.date(from: dateStr) else { return nil }
+        let detailsJSON = (try? JSONSerialization.data(withJSONObject: rec))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+        return IngestedActivity(
+            id: "healthkit:\(id)",
+            source: "healthkit",
+            date: date,
+            sport: rec["sport"] as? String ?? "unknown",
+            name: rec["name"] as? String ?? "Activity",
+            durationMinutes: (rec["duration_minutes"] as? NSNumber)?.doubleValue ?? 0,
+            distanceKm: (rec["distance_km"] as? NSNumber)?.doubleValue ?? 0,
+            aerobicTE: nil,
+            anaerobicTE: nil,
+            detailsJSON: detailsJSON
+        )
+    }
+
+    // MARK: - Normalized per-workout record
+    //
+    // The HealthKit analogue of `GarminService.formatActivityRecord`: reads the rich
+    // statistics + streams Apple Health stores (avg/max HR, cadence, power, speed,
+    // elevation, time-in-zone, normalized power/pace) into the shared `detailsJSON`
+    // schema the detail view and `TSSCalculator` consume. Brand-specific extraction
+    // lives here, in the source layer — the store scores TSS from the result.
+    //
+    // `hrZoneBounds` (z1–z4 upper bpm, derived by the caller from the athlete's
+    // thresholds for the activity's date) drives time-in-zone; pass nil to omit it.
+
+    func normalizedRecord(for workout: HKWorkout, hrZoneBounds: [Double]?) async throws -> [String: Any] {
+        let sport = Self.sportName(for: workout.workoutActivityType)
+        let family = SportFamily(sportKey: sport)
+        let durationMin = workout.duration / 60
+        let distanceM = workout.totalDistance?.doubleValue(for: .meter())
+        let bpm = HKUnit.count().unitDivided(by: .minute())
+        let mps = HKUnit.meter().unitDivided(by: .second())
+        let rpm = HKUnit.count().unitDivided(by: .minute())
+
+        func avg(_ id: HKQuantityTypeIdentifier, _ unit: HKUnit) -> Double? {
+            workout.statistics(for: HKQuantityType(id))?.averageQuantity()?.doubleValue(for: unit)
+        }
+        func peak(_ id: HKQuantityTypeIdentifier, _ unit: HKUnit) -> Double? {
+            workout.statistics(for: HKQuantityType(id))?.maximumQuantity()?.doubleValue(for: unit)
+        }
+        func total(_ id: HKQuantityTypeIdentifier, _ unit: HKUnit) -> Double? {
+            workout.statistics(for: HKQuantityType(id))?.sumQuantity()?.doubleValue(for: unit)
+        }
+
+        var data: [String: Any] = [
+            "id": workout.uuid.uuidString,
+            "name": sport,
+            "date": DateFormatter.ymd.string(from: workout.startDate),
+            "time": Self.clock.string(from: workout.startDate),
+            "sport": sport,
+            "duration_minutes": Self.round1(durationMin),
+            "distance_km": distanceM.map { Self.round2($0 / 1000) } ?? NSNull(),
+            "calories": total(.activeEnergyBurned, .kilocalorie()).map { Int($0.rounded()) } ?? NSNull(),
+            "avg_hr": avg(.heartRate, bpm).map { Int($0.rounded()) } ?? NSNull(),
+            "max_hr": peak(.heartRate, bpm).map { Int($0.rounded()) } ?? NSNull(),
+        ]
+        if let ascended = (workout.metadata?[HKMetadataKeyElevationAscended] as? HKQuantity)?
+            .doubleValue(for: .meter()), ascended > 0 {
+            data["elevation_gain_m"] = Int(ascended.rounded())
+        }
+        // Time-in-zone from the high-res HR stream + the athlete's zone bounds — the
+        // input the HR-zone TSS fallback needs (and Garmin supplies directly).
+        if let hrZoneBounds {
+            let series = (try? await fetchHeartRateSeries(during: workout)) ?? []
+            if let zones = HRZones.timeInZoneSeconds(series, upperBounds: hrZoneBounds) {
+                data["hr_zones_seconds"] = zones
+            }
+        }
+
+        switch family {
+        case .run:
+            var running: [String: Any] = [:]
+            if let steps = total(.stepCount, .count()), durationMin > 0 {
+                running["avg_cadence_spm"] = Int((steps / durationMin).rounded())
+            }
+            if let power = avg(.runningPower, .watt()) { running["avg_power_w"] = Int(power.rounded()) }
+            // Normalized pace (sec/km) for rTSS, from the running-speed (or distance)
+            // stream via the shared `NormalizedStream`. Left absent when no usable
+            // stream exists — never substituted with the average pace (that is a
+            // different number, not a normalized one). Grade ignored (future NGP).
+            if let normSpeed = try? await fetchNormalizedSpeed(during: workout), normSpeed > 0 {
+                running["normalized_pace_s_per_km"] = Self.round1(1000.0 / normSpeed)
+            }
+            if !running.isEmpty { data["running"] = running }
+        case .bike:
+            var cycling: [String: Any] = [:]
+            if let speed = avg(.cyclingSpeed, mps), speed > 0 { cycling["avg_speed_kmh"] = Self.round1(speed * 3.6) }
+            if let speed = peak(.cyclingSpeed, mps), speed > 0 { cycling["max_speed_kmh"] = Self.round1(speed * 3.6) }
+            if let power = avg(.cyclingPower, .watt()) { cycling["avg_power_w"] = Int(power.rounded()) }
+            if let power = peak(.cyclingPower, .watt()) { cycling["max_power_w"] = Int(power.rounded()) }
+            if let cadence = avg(.cyclingCadence, rpm) { cycling["avg_cadence_rpm"] = Int(cadence.rounded()) }
+            // Normalized power for power-TSS, computed from the power stream when a
+            // power meter recorded one; absent it, TSS falls back to HR zones.
+            if let np = try? await fetchNormalizedPower(during: workout) {
+                cycling["normalized_power_w"] = Int(np.rounded())
+            }
+            if !cycling.isEmpty { data["cycling"] = cycling }
+        case .swim:
+            var swimming: [String: Any] = [:]
+            if let lap = (workout.metadata?[HKMetadataKeyLapLength] as? HKQuantity)?.doubleValue(for: .meter()), lap > 0 {
+                swimming["pool_length_m"] = Self.round1(lap)
+            }
+            if let strokes = total(.swimmingStrokeCount, .count()) { swimming["total_strokes"] = Int(strokes.rounded()) }
+            if let distanceM, distanceM > 0, durationMin > 0 {
+                let secPer100 = (durationMin * 60) / (distanceM / 100)
+                swimming["avg_pace_per_100m"] = String(format: "%d:%02d", Int(secPer100) / 60, Int(secPer100) % 60)
+            }
+            if !swimming.isEmpty { data["swimming"] = swimming }
+        case .strength, .other:
+            break
+        }
+        return data
+    }
+
+    /// Normalized power (W) from the cycling power stream, via the shared
+    /// `NormalizedStream`. Each reading carries its own measurement interval, so the
+    /// 30 s window is real time. Zeros are kept (coasting counts toward NP — the
+    /// TrainingPeaks convention; unlike pace, where a stop is not "slow running").
+    /// Nil when no usable power series exists (no power meter).
+    private func fetchNormalizedPower(during workout: HKWorkout) async throws -> Double? {
+        let series = try await quantityIntervalSeries(.cyclingPower, unit: .watt(), during: workout)
+        return NormalizedStream.normalized(series.map { (value: $0.value, seconds: $0.duration) })
+    }
+
+    /// Normalized speed (m/s) for a run, via the shared `NormalizedStream`. Nil when
+    /// no high-res signal exists (the caller then leaves the pace empty).
+    private func fetchNormalizedSpeed(during workout: HKWorkout) async throws -> Double? {
+        NormalizedStream.normalized(try await speedStream(during: workout).samples)
+    }
+
+    /// Provenance of a run's normalized pace, recomputed live for the debug export so
+    /// the speed-stream inputs are attached to the exact workout (no log correlation).
+    /// Run workouts only; nil otherwise.
+    func speedStreamDiagnostics(forWorkoutID id: String) async -> [String: Any]? {
+        guard let workout = try? await fetchWorkout(id: id),
+              SportFamily(sportKey: Self.sportName(for: workout.workoutActivityType)) == .run,
+              let stream = try? await speedStream(during: workout) else { return nil }
+        var d = NormalizedStream.diagnostics(stream.samples)
+        d["source"] = stream.source
+        if let m = d["mean_value"] as? Double, m > 0 { d["mean_pace_s_per_km"] = Self.round1(1000.0 / m) }
+        if let n = d["normalized_value"] as? Double, n > 0 { d["normalized_pace_s_per_km"] = Self.round1(1000.0 / n) }
+        return d
+    }
+
+    /// Moving-speed samples for a run — each `value` (m/s) paired with the `seconds`
+    /// of real time it covers (its own measurement interval) — plus which stream they
+    /// came from: the device's running-speed series when present, else the distance
+    /// series turned into per-interval speed. Both carry HealthKit's own per-sample
+    /// interval, so the durations sum to MOVING time (the average's basis) and the
+    /// normalizer's window is real seconds. Stopped readings (≤ 0) are dropped: a
+    /// running pace is over moving time, and counting paused time pulls the normalized
+    /// speed below the moving average (impossible for a real normalized value). Empty
+    /// when neither stream exists.
+    private func speedStream(during workout: HKWorkout) async throws
+        -> (source: String, samples: [NormalizedStream.Sample]) {
+        let mps = HKUnit.meter().unitDivided(by: .second())
+        let speed = try await quantityIntervalSeries(.runningSpeed, unit: mps, during: workout)
+            .filter { $0.duration > 0 && $0.value > 0 }
+            .map { (value: $0.value, seconds: $0.duration) }
+        if !speed.isEmpty { return ("runningSpeed", speed) }
+
+        // No speed series: per-interval speed from the distance stream (a paused
+        // interval covers ~0 distance → ~0 speed → dropped by the same moving filter).
+        let derived = try await quantityIntervalSeries(.distanceWalkingRunning, unit: .meter(), during: workout)
+            .filter { $0.duration > 0 && $0.value > 0 }
+            .map { (value: $0.value / $0.duration, seconds: $0.duration) }
+        return ("distanceWalkingRunning", derived)
+    }
+
+    /// Like `quantitySeries`, but keeps each point's interval duration — needed to
+    /// turn an accumulating quantity (distance per interval) into a rate (speed).
+    ///
+    /// Scoped to the workout's OWN samples (`predicateForObjects(from:)`), not every
+    /// sample in its time window: a second paired device recording the same run writes
+    /// its own overlapping series, and a plain time-range query would sum both, so the
+    /// durations exceed the real moving time and the normalized value collapses. Falls
+    /// back to the time range for older/third-party workouts that don't associate their
+    /// samples with the workout (else the scoped query is empty).
+    private func quantityIntervalSeries(_ id: HKQuantityTypeIdentifier, unit: HKUnit,
+                                        during workout: HKWorkout) async throws -> [(duration: TimeInterval, value: Double)] {
+        let scoped = try await intervalSeries(id, unit: unit, predicate: HKQuery.predicateForObjects(from: workout))
+        if !scoped.isEmpty { return scoped }
+        return try await intervalSeries(id, unit: unit,
+                                        predicate: HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate))
+    }
+
+    private func intervalSeries(_ id: HKQuantityTypeIdentifier, unit: HKUnit,
+                                predicate: NSPredicate) async throws -> [(duration: TimeInterval, value: Double)] {
+        let type = HKQuantityType(id)
+        return try await withCheckedThrowingContinuation { continuation in
+            var collected: [(duration: TimeInterval, value: Double)] = []
+            var didResume = false
+            let query = HKQuantitySeriesSampleQuery(quantityType: type, predicate: predicate) {
+                _, quantity, dateInterval, _, done, error in
+                if let error {
+                    if !didResume { didResume = true; continuation.resume(throwing: error) }
+                    return
+                }
+                if let quantity, let dateInterval {
+                    collected.append((dateInterval.duration, quantity.doubleValue(for: unit)))
+                }
+                if done, !didResume {
+                    didResume = true
+                    continuation.resume(returning: collected)
+                }
             }
             store.execute(query)
         }
@@ -83,28 +323,39 @@ final class HealthKitService {
 
     // MARK: - Heart Rate for Workout
 
-    func fetchHeartRateSamples(during workout: HKWorkout) async throws -> [HeartRateSample] {
-        guard let hrType = HKQuantityType.quantityType(forIdentifier: .heartRate) else {
-            return []
-        }
-        let predicate = HKQuery.predicateForSamples(
-            withStart: workout.startDate, end: workout.endDate
-        )
+    /// High-resolution HR stream for a workout, via `HKQuantitySeriesSampleQuery` —
+    /// the same beat-to-beat series the CSV export and Apple Health show (≈ 1 s),
+    /// not the ≈ 2.5 min aggregated samples a plain `HKSampleQuery` returns. Backs
+    /// both the detail chart and the time-in-zone bucketing.
+    func fetchHeartRateSeries(during workout: HKWorkout) async throws -> [HeartRateSample] {
         let unit = HKUnit.count().unitDivided(by: HKUnit.minute())
-        let sort = NSSortDescriptor(key: HKSampleSortIdentifierStartDate, ascending: true)
+        return try await quantitySeries(.heartRate, unit: unit, during: workout)
+            .map { HeartRateSample(date: $0.date, bpm: $0.value) }
+    }
 
+    /// Enumerates the high-resolution data points stored *inside* each sample of a
+    /// quantity series for the workout's interval (HR, power, …). Each point is
+    /// timestamped at its interval start.
+    private func quantitySeries(_ id: HKQuantityTypeIdentifier, unit: HKUnit,
+                                during workout: HKWorkout) async throws -> [(date: Date, value: Double)] {
+        let type = HKQuantityType(id)
+        let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
         return try await withCheckedThrowingContinuation { continuation in
-            let query = HKSampleQuery(
-                sampleType: hrType,
-                predicate: predicate,
-                limit: HKObjectQueryNoLimit,
-                sortDescriptors: [sort]
-            ) { _, samples, error in
-                if let error { continuation.resume(throwing: error); return }
-                let hrSamples = (samples as? [HKQuantitySample] ?? []).map {
-                    HeartRateSample(date: $0.startDate, bpm: $0.quantity.doubleValue(for: unit))
+            var collected: [(date: Date, value: Double)] = []
+            var didResume = false
+            let query = HKQuantitySeriesSampleQuery(quantityType: type, predicate: predicate) {
+                _, quantity, dateInterval, _, done, error in
+                if let error {
+                    if !didResume { didResume = true; continuation.resume(throwing: error) }
+                    return
                 }
-                continuation.resume(returning: hrSamples)
+                if let quantity, let dateInterval {
+                    collected.append((dateInterval.start, quantity.doubleValue(for: unit)))
+                }
+                if done, !didResume {
+                    didResume = true
+                    continuation.resume(returning: collected)
+                }
             }
             store.execute(query)
         }
@@ -311,31 +562,19 @@ final class HealthKitService {
         }
     }
 
-}
+    // MARK: - Formatting helpers
 
-// MARK: - Data Models
+    /// Local wall-clock `HH:mm` of the workout start — parsed back into `startMinute`
+    /// by the store (`clockMinute(fromDetails:)`), mirroring Garmin's `time` field.
+    private static let clock: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "HH:mm"
+        return f
+    }()
 
-nonisolated struct WorkoutSummary: Codable {
-    let id: String
-    let sport: String
-    let name: String
-    let date: String
-    let durationMin: Double
-    let distanceKm: Double?
-    let avgHRbpm: Double?
-    let totalEnergyKcal: Double?
-
-    init(_ workout: HKWorkout) {
-        id = workout.uuid.uuidString
-        sport = WorkoutSummary.sportName(for: workout.workoutActivityType)
-        name = sport
-        date = DateFormatter.ymd.string(from: workout.startDate)
-        durationMin = workout.duration / 60
-        distanceKm = workout.totalDistance.map { $0.doubleValue(for: .meter()) / 1000 }
-        avgHRbpm = nil  // HR requires a separate query
-        totalEnergyKcal = workout.statistics(for: HKQuantityType(.activeEnergyBurned))?
-            .sumQuantity()?.doubleValue(for: .kilocalorie())
-    }
+    private static func round1(_ v: Double) -> Double { (v * 10).rounded() / 10 }
+    private static func round2(_ v: Double) -> Double { (v * 100).rounded() / 100 }
 
     private static func sportName(for type: HKWorkoutActivityType) -> String {
         switch type {
@@ -348,7 +587,10 @@ nonisolated struct WorkoutSummary: Codable {
         default: return "Workout"
         }
     }
+
 }
+
+// MARK: - Data Models
 
 struct HeartRateSample: Identifiable {
     let id = UUID()

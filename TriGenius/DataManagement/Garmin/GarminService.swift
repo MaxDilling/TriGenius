@@ -15,6 +15,24 @@ actor GarminService {
     private let log = Logger(subsystem: "net.Narica.TriGenius", category: "Garmin")
     private init() {}
 
+    // MARK: - Debug
+
+    /// Provenance of a run's normalized pace, recomputed live for the debug export —
+    /// the `directSpeed` stream (1 Hz, each sample covering 1 s) through the shared
+    /// `NormalizedStream`, plus the raw samples. Mirrors HealthKit's diagnostics so the
+    /// export shape is identical across sources. Nil when details can't be fetched.
+    func speedStreamDiagnostics(activityId: String) async -> [String: Any]? {
+        guard let details = try? await client.getActivityDetails(id: activityId) else { return nil }
+        let samples = GarminTransform.metricSegments(details, key: "directSpeed")
+            .flatMap { $0 }.filter { $0 >= 0 }
+            .map { (value: $0, seconds: 1.0) }
+        var d = NormalizedStream.diagnostics(samples)
+        d["source"] = "directSpeed"
+        if let m = d["mean_value"] as? Double, m > 0 { d["mean_pace_s_per_km"] = round1(1000.0 / m) }
+        if let n = d["normalized_value"] as? Double, n > 0 { d["normalized_pace_s_per_km"] = round1(1000.0 / n) }
+        return d
+    }
+
     // MARK: - Result helpers
 
     /// JSON-safe value: the wrapped value, or NSNull when nil.
@@ -103,11 +121,11 @@ actor GarminService {
                 "avg_power_w": orNull(Coerce.double(activity["avgPower"]).map { Int($0.rounded()) }),
                 "steps": orNull(activity["steps"])
             ]
-            // Normalized pace (sec/km) for rTSS — NGS from the 1 Hz speed stream,
-            // falling back to average speed. Grade ignored (future NGP, FEATURES.md).
-            // Only runs for NEW activities (callers gate on the activity cache).
-            let avgSpeed = Coerce.double(activity["averageSpeed"]) ?? 0
-            var normPaceSecPerKm: Double? = avgSpeed > 0 ? 1000.0 / avgSpeed : nil
+            // Normalized pace (sec/km) for rTSS — NGS from the 1 Hz speed stream only.
+            // Left null when the stream is unavailable; never substituted with the
+            // average pace (a different number, not a normalized one). Grade ignored
+            // (future NGP). Only runs for NEW activities (callers gate on the cache).
+            var normPaceSecPerKm: Double?
             if let activityId = activity["activityId"].map({ "\($0)" }),
                let details = try? await client.getActivityDetails(id: activityId),
                let ngs = GarminTransform.normalizedSpeedMps(details), ngs > 0 {

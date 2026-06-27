@@ -44,6 +44,21 @@ final class DataSyncCoordinator {
         }
     }
 
+    /// Re-pull one source from scratch, recomputing each activity in place (`ingest`
+    /// upserts by id, overwriting `detailsJSON` + TSS). Forgets the source's
+    /// watermark, then: Garmin force-re-fetches its activity streams over the deep
+    /// window (so cached rows pick up recomputed/new fields); Apple Health re-reads
+    /// every workout fresh (re-extracting HR/power/zones). Returns the activity
+    /// count, or nil on failure. Surfaced as the per-source "Re-sync" Settings action.
+    @discardableResult
+    func resync(source: DataSource) async -> Int? {
+        UserDefaults.standard.removeObject(forKey: lastSyncKey(source))
+        switch source {
+        case .garmin: return await deepBackfill(source: .garmin, force: true)
+        case .appleHealth: return await sync(source: .appleHealth)
+        }
+    }
+
     // MARK: - Sync
 
     /// Pull activities from `source` into the local database. Incremental: only
@@ -89,7 +104,6 @@ final class DataSyncCoordinator {
                 // On a full backfill, fetch generously so the reconcile below has
                 // the complete keep-set and doesn't drop legitimate older records.
                 let count = since == nil ? max(syncCount, 1000) : syncCount
-                let workouts = try await HealthKitService.shared.fetchRecentWorkouts(count: count, since: since)
                 // Ingest performance + wellness metrics before activities so the store
                 // scores each activity's TSS against the thresholds current on its date.
                 // Only when Apple Health is the chosen metrics source — otherwise the
@@ -100,7 +114,11 @@ final class DataSyncCoordinator {
                     let metrics = (try? await HealthKitService.shared.fetchPerformanceMetrics()) ?? []
                     store.ingestMetrics(metrics)
                 }
-                let dtos = workouts.compactMap(Self.ingestDTO(from:))
+                // Build the rich per-workout record (HR/power/pace/zones), deriving HR
+                // zone bounds from the athlete's thresholds as of each workout's date so
+                // a power/pace-less session still scores TSS on heart rate.
+                let dtos = try await HealthKitService.shared.fetchActivities(
+                    count: count, since: since, history: store.performanceHistory())
                 store.ingest(dtos)
                 // Reconcile: remove HealthKit records no longer returned within the
                 // synced window — chiefly Garmin Connect workouts now filtered out
@@ -587,34 +605,4 @@ final class DataSyncCoordinator {
         return "✓ Retrieved \(formatted.count) \(sport ?? "all") activities (local)\n\(json)"
     }
 
-    // MARK: - HealthKit ingest mapping
-
-    private static func ingestDTO(from w: WorkoutSummary) -> IngestedActivity? {
-        guard let date = GarminTransform.date(from: w.date) else { return nil }
-        // Mirror Garmin's record keys so the shared summary/response logic works.
-        let details: [String: Any] = [
-            "id": w.id,
-            "name": w.name,
-            "date": w.date,
-            "sport": w.sport,
-            "duration_minutes": (w.durationMin * 10).rounded() / 10,
-            "distance_km": w.distanceKm.map { ($0 * 100).rounded() / 100 } ?? NSNull(),
-            "calories": w.totalEnergyKcal.map { Int($0.rounded()) } ?? NSNull(),
-            "avg_hr": w.avgHRbpm.map { Int($0.rounded()) } ?? NSNull()
-        ]
-        let detailsJSON = (try? JSONSerialization.data(withJSONObject: details))
-            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
-        return IngestedActivity(
-            id: "healthkit:\(w.id)",
-            source: "healthkit",
-            date: date,
-            sport: w.sport,
-            name: w.name,
-            durationMinutes: w.durationMin,
-            distanceKm: w.distanceKm ?? 0,
-            aerobicTE: nil,
-            anaerobicTE: nil,
-            detailsJSON: detailsJSON
-        )
-    }
 }
