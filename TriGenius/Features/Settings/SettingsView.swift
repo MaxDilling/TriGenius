@@ -2,14 +2,47 @@ import SwiftUI
 import Combine
 import UniformTypeIdentifiers
 
-// MARK: - Data Source
+// MARK: - Data Source (read) & Write Target
 
+/// A *read* source: where athlete history is pulled from. Multiple can be active
+/// at once (parallel read), merged into the local store.
 enum DataSource: String, CaseIterable, Identifiable {
     case garmin = "Garmin"
     case appleHealth = "Apple Health"
 
     var id: String { rawValue }
     var displayName: String { rawValue }
+}
+
+/// A *write* target: where the coach's planned workouts are pushed. Exactly one is
+/// active at a time; decoupled from the read sources so the athlete can read from
+/// Garmin yet schedule onto the Apple Watch (and vice-versa). Extensible — new
+/// providers implement `WorkoutSyncTarget` and add a case here.
+enum WriteTarget: String, CaseIterable, Identifiable {
+    case garmin = "Garmin"
+    case appleWatch = "Apple Watch"
+
+    var id: String { rawValue }
+    var displayName: String { rawValue }
+    /// The token used as the key in `WorkoutRecord.externalRefs`.
+    var refKey: String {
+        switch self {
+        case .garmin: return "garmin"
+        case .appleWatch: return "appleWatch"
+        }
+    }
+    /// Apple Watch (WorkoutKit) is iOS/watchOS only.
+    var isSupportedOnThisPlatform: Bool {
+        switch self {
+        case .garmin: return true
+        case .appleWatch:
+            #if os(iOS)
+            return true
+            #else
+            return false
+            #endif
+        }
+    }
 }
 
 // MARK: - App Settings
@@ -24,8 +57,25 @@ final class AppSettings: ObservableObject {
     @Published var geminiModel: String {
         didSet { UserDefaults.standard.set(geminiModel, forKey: "gemini_model") }
     }
-    @Published var dataSource: DataSource {
-        didSet { UserDefaults.standard.set(dataSource.rawValue, forKey: "data_source") }
+    /// Active read sources (parallel). Persisted as a CSV under `read_sources`.
+    @Published var readSources: Set<DataSource> {
+        didSet {
+            UserDefaults.standard.set(Self.encode(readSources), forKey: "read_sources")
+            // Keep the single metrics source pointing at an enabled read source.
+            if !readSources.contains(metricsSource), let fallback = readSources.sorted(by: { $0.rawValue < $1.rawValue }).first {
+                metricsSource = fallback
+            }
+        }
+    }
+    /// Which single provider supplies performance markers AND wellness signals
+    /// (FTP, VO₂max, thresholds, weight, sleep/HRV/rHR). Avoids double-sourcing the
+    /// same metrics from both providers. Persisted under `metrics_source`.
+    @Published var metricsSource: DataSource {
+        didSet { UserDefaults.standard.set(metricsSource.rawValue, forKey: "metrics_source") }
+    }
+    /// Where planned workouts are written. Persisted under `write_target`.
+    @Published var writeTarget: WriteTarget {
+        didSet { UserDefaults.standard.set(writeTarget.rawValue, forKey: "write_target") }
     }
     @Published var garminEmail: String {
         didSet { UserDefaults.standard.set(garminEmail, forKey: "garmin_email") }
@@ -64,14 +114,61 @@ final class AppSettings: ObservableObject {
         let savedBackend = UserDefaults.standard.string(forKey: "selected_backend") ?? ""
         selectedBackend = BackendType(rawValue: savedBackend) ?? .gemini
         geminiModel = UserDefaults.standard.string(forKey: "gemini_model") ?? "gemini-2.5-flash"
-        let savedSource = UserDefaults.standard.string(forKey: "data_source") ?? ""
-        dataSource = DataSource(rawValue: savedSource) ?? .appleHealth
+        readSources = Self.loadReadSources()
+        metricsSource = Self.loadMetricsSource()
+        writeTarget = Self.loadWriteTarget()
         garminEmail = UserDefaults.standard.string(forKey: "garmin_email") ?? ""
         lmStudioBaseURL = UserDefaults.standard.string(forKey: "lmstudio_base_url") ?? "http://localhost:1234/v1"
         lmStudioModel = UserDefaults.standard.string(forKey: "lmstudio_model") ?? "local-model"
         debugMode = UserDefaults.standard.bool(forKey: "debug_mode")
         proactiveNotifications = UserDefaults.standard.bool(forKey: Self.proactiveNotificationsKey)
     }
+
+    // MARK: - Read-source / write-target persistence
+
+    private static func encode(_ sources: Set<DataSource>) -> String {
+        sources.map(\.rawValue).sorted().joined(separator: ",")
+    }
+
+    private static func loadReadSources() -> Set<DataSource> {
+        if let csv = UserDefaults.standard.string(forKey: "read_sources"), !csv.isEmpty {
+            return Set(csv.split(separator: ",").compactMap { DataSource(rawValue: String($0)) })
+        }
+        // First run after the read/write split: seed from the legacy single source.
+        let legacy = UserDefaults.standard.string(forKey: "data_source") ?? ""
+        return [DataSource(rawValue: legacy) ?? .appleHealth]
+    }
+
+    /// The single metrics provider, clamped to an enabled read source. Defaults to
+    /// Garmin when it's enabled (richer metric history), else Apple Health.
+    private static func loadMetricsSource() -> DataSource {
+        let enabled = loadReadSources()
+        if let raw = UserDefaults.standard.string(forKey: "metrics_source"),
+           let s = DataSource(rawValue: raw), enabled.contains(s) {
+            return s
+        }
+        if enabled.contains(.garmin) { return .garmin }
+        return enabled.sorted(by: { $0.rawValue < $1.rawValue }).first ?? .appleHealth
+    }
+
+    private static func loadWriteTarget() -> WriteTarget {
+        if let raw = UserDefaults.standard.string(forKey: "write_target"),
+           let t = WriteTarget(rawValue: raw), t.isSupportedOnThisPlatform {
+            return t
+        }
+        // Default: keep writing to Garmin if that was the legacy source and it's
+        // available; otherwise prefer the Apple Watch where supported.
+        let legacy = UserDefaults.standard.string(forKey: "data_source") ?? ""
+        if legacy == DataSource.garmin.rawValue { return .garmin }
+        return WriteTarget.appleWatch.isSupportedOnThisPlatform ? .appleWatch : .garmin
+    }
+
+    /// Read sources as seen by non-SwiftUI callers (background refresh, coordinator).
+    static func storedReadSources() -> Set<DataSource> { loadReadSources() }
+    /// The metrics provider as seen by non-SwiftUI callers (the sync coordinator).
+    static func storedMetricsSource() -> DataSource { loadMetricsSource() }
+    /// Write target as seen by non-SwiftUI callers.
+    static func storedWriteTarget() -> WriteTarget { loadWriteTarget() }
 
     var isConfigured: Bool {
         switch selectedBackend {
@@ -128,24 +225,50 @@ struct SettingsView: View {
                 }
             }
 
-            // Data source section
-            Section("Data Source") {
-                Picker("Source", selection: $settings.dataSource) {
-                    ForEach(DataSource.allCases) { source in
-                        Text(source.displayName).tag(source)
+            // Read sources — parallel; merged into the local store.
+            Section {
+                ForEach(DataSource.allCases) { source in
+                    Toggle(isOn: readBinding(source)) {
+                        Label(source.displayName, systemImage: source == .garmin ? "antenna.radiowaves.left.and.right" : "heart.text.square")
                     }
                 }
-                .pickerStyle(.segmented)
-                .onChange(of: settings.dataSource) { onBackendChanged() }
-
-                if settings.dataSource == .garmin {
+                // When both providers feed activities, pick exactly one to supply the
+                // performance + wellness metrics, so FTP/VO₂max/sleep aren't sourced twice.
+                if settings.readSources.count > 1 {
+                    Picker("Metrics from", selection: $settings.metricsSource) {
+                        ForEach(settings.readSources.sorted(by: { $0.rawValue < $1.rawValue })) { source in
+                            Text(source.displayName).tag(source)
+                        }
+                    }
+                }
+                if settings.readSources.contains(.garmin) {
                     GarminLoginSection(settings: settings)
                     GarminBackfillSection()
-                } else {
-                    Text("Training and health data comes from Apple Health.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
                 }
+            } header: {
+                Text("Read From")
+            } footer: {
+                Text("Pull training and health data from one or both. Garmin Connect workouts already mirrored into Apple Health are skipped to avoid duplicates. When both are on, performance and wellness metrics come from the single \u{201C}Metrics from\u{201D} provider.")
+            }
+
+            // Write target — where the coach schedules planned workouts.
+            Section {
+                Picker("Schedule workouts to", selection: $settings.writeTarget) {
+                    ForEach(WriteTarget.allCases.filter { $0.isSupportedOnThisPlatform }) { target in
+                        Text(target.displayName).tag(target)
+                    }
+                }
+                .onChange(of: settings.writeTarget) { onBackendChanged() }
+
+                if settings.writeTarget == .garmin, !settings.readSources.contains(.garmin) {
+                    GarminLoginSection(settings: settings)
+                }
+            } header: {
+                Text("Write To")
+            } footer: {
+                Text(settings.writeTarget == .appleWatch
+                     ? "Planned workouts are sent to the Apple Watch via WorkoutKit — start them from the Workout app."
+                     : "Planned workouts are created and scheduled in Garmin Connect. Switching targets re-syncs upcoming plans; nothing is lost.")
             }
 
             // Schedule (calendar) section — gives the coach awareness of busy days.
@@ -219,7 +342,7 @@ struct SettingsView: View {
             } header: {
                 Text("Performance")
             } footer: {
-                Text("Synced automatically from \(settings.dataSource == .garmin ? "Garmin" : "Apple Health"). History is kept in the local database.")
+                Text("Synced automatically from \(settings.metricsSource.displayName). History is kept in the local database.")
             }
 
             // Training plan section
@@ -256,7 +379,7 @@ struct SettingsView: View {
                     NavigationLink {
                         DashboardInsightPromptDebugView(
                             context: DashboardContext(
-                                dataSource: settings.dataSource,
+                                readSources: settings.readSources,
                                 weeklyStructure: memory.weeklyStructure,
                                 trainingPlan: memory.trainingPlan,
                                 makeBackend: settings.makeBackend
@@ -423,6 +546,20 @@ struct SettingsView: View {
     }
 
     // MARK: - Helpers
+
+    /// Toggle binding for a read source. Keeps at least one source enabled.
+    private func readBinding(_ source: DataSource) -> Binding<Bool> {
+        Binding(
+            get: { settings.readSources.contains(source) },
+            set: { on in
+                var next = settings.readSources
+                if on { next.insert(source) } else { next.remove(source) }
+                if next.isEmpty { next = [source] } // never leave zero sources
+                settings.readSources = next
+                onBackendChanged()
+            }
+        )
+    }
 
     private func profileRow(_ label: String, value: String?) -> some View {
         HStack {
@@ -1311,21 +1448,12 @@ struct GarminBackfillSection: View {
         isRecomputing = true
         statusMessage = nil
         defer { isRecomputing = false }
-        guard await GarminAuth.shared.isAuthenticated else {
-            statusMessage = "Connect to Garmin first."
-            isError = true
-            return
-        }
-        // Force re-fetch + recompute so existing activities pick up the new fields
-        // (normalized pace, swim cleaning) and TSS. Manual overrides are preserved.
-        let count = await DataSyncCoordinator.shared.deepBackfill(source: .garmin, days: backfillDays, force: true)
-        if let count {
-            isError = false
-            statusMessage = "Recomputed \(count) activities (TSS + distances)."
-        } else {
-            isError = true
-            statusMessage = "Recompute failed — check your Garmin connection."
-        }
+        // Re-score every stored completed activity from its own data against the
+        // thresholds current on its date — purely local, independent of the source it
+        // came from (no Garmin connection required). Manual overrides are preserved.
+        let count = TrainingDataStore.shared.recomputeCompletedScores()
+        isError = false
+        statusMessage = "Recomputed \(count) activities (TSS + distances)."
     }
 
     private func runBackfill() async {

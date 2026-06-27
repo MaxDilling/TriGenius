@@ -31,36 +31,36 @@ final class CoachToolRegistry {
     }
 }
 
-// MARK: - HealthKit Tool Handler
+// MARK: - Activity / health read handler (source-agnostic)
+//
+// Always registered. Serves `get_activities` and `get_health_metrics` from the
+// local store, which merges every enabled read source (Apple Health + Garmin), so
+// the coach sees one unified history regardless of where it came from.
 
 @MainActor
-final class HealthKitToolHandler: CoachToolHandler {
+final class ActivityReadToolHandler: CoachToolHandler {
     var definitions: [ToolDefinition] {
         [
             ToolDefinition(
                 name: "get_health_metrics",
-                description: "Fetch recovery data for the last N days: sleep (duration + score), resting heart rate and overnight HRV, with a short-term resting-HR trend. Secondary signals — weigh against the load/form trend, not in isolation.",
+                description: "Fetch recovery data for the last N days: sleep (duration + stages), resting heart rate and overnight HRV, with a short-term resting-HR trend. Merged across the athlete's connected sources. Secondary signals — weigh against the load/form trend, not in isolation.",
                 parameters: [
                     "type": "object",
                     "properties": [
-                        "days": [
-                            "type": "integer",
-                            "description": "Number of past days to include (1–30). Default 7."
-                        ]
+                        "days": ["type": "integer", "description": "Number of past days to include (1–30). Default 7."]
                     ],
                     "required": []
                 ]
             ),
             ToolDefinition(
                 name: "get_activities",
-                description: "Fetch recent workouts from Apple Health. Returns type, date, duration, distance, and energy for each activity.",
+                description: "Fetch recent completed workouts with sport-specific metrics for analysis (includes the athlete's feel / RPE / notes when recorded). Merged across all connected sources.",
                 parameters: [
                     "type": "object",
                     "properties": [
-                        "count": [
-                            "type": "integer",
-                            "description": "Number of recent workouts to return (1–30). Default 10."
-                        ]
+                        "sport": ["type": "string", "enum": ["running", "cycling", "swimming", "strength", "gym", "hiking", "walking"], "description": "Optional sport filter."],
+                        "count": ["type": "integer", "description": "Maximum number of activities to return. Default 10."],
+                        "days": ["type": "integer", "description": "Only include activities from the last N days."]
                     ],
                     "required": []
                 ]
@@ -71,20 +71,17 @@ final class HealthKitToolHandler: CoachToolHandler {
     func execute(name: String, arguments: [String: Any]) async throws -> String {
         switch name {
         case "get_health_metrics":
-            // Served from the local wellness time series (DB-backed, source-agnostic).
-            let days = arguments["days"] as? Int ?? 7
-            return await DataSyncCoordinator.shared.healthMetrics(source: .appleHealth, days: days)
+            return await DataSyncCoordinator.shared.healthMetrics(days: Coerce.int(arguments["days"]) ?? 7)
         case "get_activities":
-            // Served from the local database (synced on launch), not live HealthKit.
-            let count = arguments["count"] as? Int ?? 10
             return await DataSyncCoordinator.shared.activities(
-                source: .appleHealth, sport: nil, count: count, days: nil
+                sport: arguments["sport"] as? String,
+                count: Coerce.int(arguments["count"]) ?? 10,
+                days: Coerce.int(arguments["days"])
             )
         default:
-            return "Unknown health tool: \(name)"
+            return "Unknown read tool: \(name)"
         }
     }
-
 }
 
 // MARK: - Profile Tool Handler
@@ -607,21 +604,81 @@ final class WorkoutFeedbackToolHandler: CoachToolHandler {
     }
 }
 
-// MARK: - Garmin Tool Handler
+// MARK: - Garmin Tool Handler (Garmin-only read extras)
 //
-// Tool names mirror the HealthKit handler (get_activities / get_health_metrics)
-// so the coach is agnostic to the active data source.
+// Registered only when Garmin is an active READ source. The source-agnostic reads
+// (get_activities / get_health_metrics) live in `ActivityReadToolHandler`; planned-
+// workout writes live in `WorkoutSchedulingToolHandler`. What's left here is what is
+// genuinely Garmin-specific: the power-duration curve and the settings resync.
 
 @MainActor
 final class GarminToolHandler: CoachToolHandler {
-    private let memory: CoachMemory
     private let service = GarminService.shared
 
-    init(memory: CoachMemory) {
-        self.memory = memory
+    var definitions: [ToolDefinition] {
+        [
+            ToolDefinition(
+                name: "get_power_curve",
+                description: "Compute a cycling power-duration curve from Garmin activity details over a date range.",
+                parameters: [
+                    "type": "object",
+                    "properties": [
+                        "start_date": ["type": "string", "description": "Start date in YYYY-MM-DD format."],
+                        "end_date": ["type": "string", "description": "End date in YYYY-MM-DD format."],
+                        "sport": ["type": "string", "enum": ["cycling"], "description": "Currently only cycling is supported."],
+                        "durations_seconds": ["type": "array", "description": "Optional custom duration list in seconds.", "items": ["type": "integer"]]
+                    ],
+                    "required": ["start_date", "end_date"]
+                ]
+            ),
+            ToolDefinition(
+                name: "sync_user_settings",
+                description: "Refresh the athlete's Garmin-derived settings & metrics: wellness (sleep/HRV/resting HR), historical performance (FTP, VO2max, thresholds, CSS, weight) and training zones. Use when the athlete says they updated values in Garmin.",
+                parameters: ["type": "object", "properties": [:], "required": []]
+            )
+        ]
     }
 
-    /// The `workout_data` object properties, shared by `add_workout` and
+    func execute(name: String, arguments: [String: Any]) async throws -> String {
+        guard await GarminAuth.shared.isAuthenticated else {
+            return "Garmin is not connected. Please sign in under 'Read From → Garmin' in Settings."
+        }
+        switch name {
+        case "get_power_curve":
+            let durations = (arguments["durations_seconds"] as? [Any])?.compactMap { Coerce.int($0) }
+            return await service.getPowerCurve(
+                startDate: arguments["start_date"] as? String ?? "",
+                endDate: arguments["end_date"] as? String ?? "",
+                sport: arguments["sport"] as? String ?? "cycling",
+                durationsSeconds: durations
+            )
+        case "sync_user_settings":
+            return await DataSyncCoordinator.shared.refreshGarminMetrics()
+        default:
+            return "Unknown Garmin tool: \(name)"
+        }
+    }
+}
+
+// MARK: - Workout Scheduling Tool Handler (one coach API → active write target)
+//
+// The single, source-agnostic set of planning tools. Planned workouts are owned
+// locally (the `WorkoutRecord` store is the source of truth); each write also pushes
+// to the active `WorkoutSyncTarget` (Garmin / Apple Watch / …) and records the
+// returned external id. Switching the write target re-pushes via
+// `DataSyncCoordinator.reconcileWriteTarget`, so nothing is lost.
+
+@MainActor
+final class WorkoutSchedulingToolHandler: CoachToolHandler {
+    private let writeTarget: WriteTarget
+    private let store = TrainingDataStore.shared
+    private var target: WorkoutSyncTarget { WorkoutTargetFactory.make(writeTarget) }
+
+    init(writeTarget: WriteTarget) {
+        self.writeTarget = writeTarget
+    }
+
+    /// The `workout_data` object properties, shared by `add_workouts` and
     /// `modify_workout` (they differ only in which fields are required).
     private static let workoutDataProperties: [String: Any] = [
         "name": ["type": "string", "description": "Workout name."],
@@ -668,42 +725,6 @@ final class GarminToolHandler: CoachToolHandler {
 
     var definitions: [ToolDefinition] {
         [
-            ToolDefinition(
-                name: "get_health_metrics",
-                description: "Fetch recovery data for the last N days: sleep (duration + score), resting heart rate and overnight HRV, with a short-term resting-HR trend. Secondary signals — weigh against the load/form trend, not in isolation.",
-                parameters: [
-                    "type": "object",
-                    "properties": ["days": ["type": "integer", "description": "Number of days to fetch. Default 7."]],
-                    "required": []
-                ]
-            ),
-            ToolDefinition(
-                name: "get_activities",
-                description: "Fetch recent completed Garmin activities with sport-specific metrics for analysis.",
-                parameters: [
-                    "type": "object",
-                    "properties": [
-                        "sport": ["type": "string", "enum": ["running", "cycling", "swimming", "strength", "gym", "hiking", "walking"], "description": "Optional sport filter."],
-                        "count": ["type": "integer", "description": "Maximum number of activities to return. Default 10."],
-                        "days": ["type": "integer", "description": "Only include activities from the last N days."]
-                    ],
-                    "required": []
-                ]
-            ),
-            ToolDefinition(
-                name: "get_power_curve",
-                description: "Compute a cycling power-duration curve from Garmin activity details over a date range.",
-                parameters: [
-                    "type": "object",
-                    "properties": [
-                        "start_date": ["type": "string", "description": "Start date in YYYY-MM-DD format."],
-                        "end_date": ["type": "string", "description": "End date in YYYY-MM-DD format."],
-                        "sport": ["type": "string", "enum": ["cycling"], "description": "Currently only cycling is supported."],
-                        "durations_seconds": ["type": "array", "description": "Optional custom duration list in seconds.", "items": ["type": "integer"]]
-                    ],
-                    "required": ["start_date", "end_date"]
-                ]
-            ),
             ToolDefinition(
                 name: "get_workouts",
                 description: "List the athlete's workouts for a date range. Returns `scheduled` (planned, editable workouts — each carries a `workout_id` and a `workout_data` object you can pass straight to modify_workout) and `completed` (finished activities). This is the source for the `workout_id` that modify_workout, move_workout, and delete_workout need. (For the athlete's real-world busy/free time, use read_calendar_availability instead.)",
@@ -786,197 +807,178 @@ final class GarminToolHandler: CoachToolHandler {
     }
 
     func execute(name: String, arguments: [String: Any]) async throws -> String {
-        // Activities are served from the local database (synced on launch), so
-        // this works even when Garmin is offline / not currently connected.
-        if name == "get_activities" {
-            return await DataSyncCoordinator.shared.activities(
-                source: .garmin,
-                sport: arguments["sport"] as? String,
-                count: Coerce.int(arguments["count"]) ?? 10,
-                days: Coerce.int(arguments["days"])
-            )
-        }
-
-        let connected = await GarminAuth.shared.isAuthenticated
-        guard connected else {
-            return "Garmin is not connected. Please sign in under 'Garmin Connect' in Settings."
-        }
-
         switch name {
-        case "get_health_metrics":
-            return await DataSyncCoordinator.shared.healthMetrics(source: .garmin, days: Coerce.int(arguments["days"]) ?? 7)
-        case "get_power_curve":
-            let durations = (arguments["durations_seconds"] as? [Any])?.compactMap { Coerce.int($0) }
-            return await service.getPowerCurve(
-                startDate: arguments["start_date"] as? String ?? "",
-                endDate: arguments["end_date"] as? String ?? "",
-                sport: arguments["sport"] as? String ?? "cycling",
-                durationsSeconds: durations
-            )
         case "get_workouts":
-            return await service.getWorkouts(
-                startDate: arguments["start_date"] as? String ?? "",
-                endDate: arguments["end_date"] as? String ?? ""
-            )
-        case "delete_workout":
-            let workoutId = Coerce.string(arguments["workout_id"]) ?? ""
-            let result = await service.deleteWorkout(workoutId: workoutId)
-            if result.hasPrefix("✓") {
-                TrainingDataStore.shared.deleteScheduledWorkout(id: "garmin:\(workoutId)")
-            }
-            return result
+            let cal = Calendar.current
+            let from = (arguments["start_date"] as? String).flatMap(DateFormatter.ymd.date(from:)) ?? cal.startOfDay(for: Date())
+            let to = (arguments["end_date"] as? String).flatMap(DateFormatter.ymd.date(from:)) ?? cal.date(byAdding: .day, value: 28, to: from) ?? from
+            return DataSyncCoordinator.shared.workoutsResponse(from: from, to: max(from, to))
         case "add_workouts":
             guard let items = arguments["workouts"] as? [[String: Any]], !items.isEmpty else {
                 return "✗ Error: workouts is missing or empty."
             }
             return await addWorkoutsBatch(items)
-        case "move_workout":
-            guard let workoutId = Coerce.string(arguments["workout_id"]), !workoutId.isEmpty else {
-                return "✗ Error: workout_id is required."
-            }
-            let result = await service.moveWorkout(
-                workoutId: workoutId,
-                toDate: arguments["to_date"] as? String ?? "",
-                fromDate: arguments["from_date"] as? String
-            )
-            applyMovedWorkout(result)
-            return result
         case "modify_workout":
-            guard let workoutId = Coerce.string(arguments["workout_id"]), !workoutId.isEmpty,
-                  let rawWorkout = arguments["workout_data"] as? [String: Any] else {
-                return "✗ Error: workout_id and workout_data are required."
-            }
-            // Normalize only when the structure is being replaced — a top-level-only
-            // edit (e.g. description) keeps the existing steps untouched.
-            let editsSteps = rawWorkout["steps"] != nil
-            let (workoutData, notes) = editsSteps
-                ? WorkoutNormalizer.normalize(rawWorkout)
-                : (rawWorkout, [])
-            let result = await service.modifyWorkout(workoutId: workoutId, workoutData: workoutData)
-            ingestModifiedWorkout(result, workoutData: workoutData, editsSteps: editsSteps)
-            return appendDefaultsNotes(to: result, notes: notes)
-        case "sync_user_settings":
-            // Full refresh: wellness + historical-performance series + training zones.
-            return await DataSyncCoordinator.shared.refreshGarminMetrics()
+            return await modify(arguments)
+        case "move_workout":
+            return await move(arguments)
+        case "delete_workout":
+            return await delete(arguments)
         default:
-            return "Unknown Garmin tool: \(name)"
+            return "Unknown scheduling tool: \(name)"
         }
     }
 
-    // MARK: - add_workouts batch
+    // MARK: - External-id resolution
 
-    /// Schedule a batch of workouts independently, tolerating per-item failures,
-    /// and return one aggregate summary the model can relay. Each item reuses the
-    /// same normalize → addWorkout → mirror path as a single add.
+    /// The active target's external id for a record: an explicit ref, or — for a
+    /// record that originated on the active target — its raw provider id.
+    private func externalId(for rec: WorkoutRecord) -> String? {
+        if let ref = rec.externalRefs[writeTarget.refKey] { return ref }
+        if rec.source == writeTarget.refKey { return TrainingDataStore.rawId(rec.id) }
+        return nil
+    }
+
+    // MARK: - add_workouts
+
+    /// Save each plan locally (source of truth), then push to the active target.
+    /// A failed push keeps the local plan, which `reconcileWriteTarget` re-pushes.
     private func addWorkoutsBatch(_ items: [[String: Any]]) async -> String {
         var lines: [String] = []
         var ok = 0
         for (i, item) in items.enumerated() {
-            let date = item["date"] as? String ?? ""
+            let dateStr = item["date"] as? String ?? ""
             guard let raw = item["workout_data"] as? [String: Any] else {
-                lines.append("- \(date.isEmpty ? "item \(i + 1)" : date) — ✗ missing workout_data")
+                lines.append("- \(dateStr.isEmpty ? "item \(i + 1)" : dateStr) — ✗ missing workout_data")
+                continue
+            }
+            guard let date = DateFormatter.ymd.date(from: dateStr) else {
+                lines.append("- \(dateStr) — ✗ invalid date (use YYYY-MM-DD)")
                 continue
             }
             let (workoutData, notes) = WorkoutNormalizer.normalize(raw)
             let name = workoutData["name"] as? String ?? "Workout"
-            let result = await service.addWorkout(workoutData: workoutData, date: date)
-            if result.hasPrefix("✓") {
+            let id = "local:\(UUID().uuidString)"
+            store.ingestScheduled([makePlan(id: id, workoutData: workoutData, date: date)])
+            let result = await target.schedule(PlannedWorkout(workoutData: workoutData, date: dateStr))
+            if result.success {
                 ok += 1
-                ingestAddedWorkout(result, workoutData: workoutData)
+                if let ext = result.externalId { store.setExternalRef(id: id, target: writeTarget.refKey, externalId: ext) }
                 let suffix = notes.isEmpty ? "" : " (\(notes.joined(separator: "; ")))"
-                lines.append("- \(date) \(name) — ok\(suffix)")
+                lines.append("- \(dateStr) \(name) → \(writeTarget.displayName)\(suffix)")
             } else {
-                let reason = result.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? result
-                lines.append("- \(date) \(name) — ✗ \(reason)")
+                lines.append("- \(dateStr) \(name) — saved locally, \(writeTarget.displayName) push failed: \(result.message)")
             }
         }
         let mark = ok == items.count ? "✓ " : ""
-        let header = "\(mark)Scheduled \(ok)/\(items.count) workouts."
-        return ([header] + lines).joined(separator: "\n")
+        return (["\(mark)Scheduled \(ok)/\(items.count) workouts to \(writeTarget.displayName)."] + lines)
+            .joined(separator: "\n")
     }
 
-    // MARK: - Local scheduled-workout mirror
-    //
-    // Keep the local scheduled-workout store in step with the coach's Garmin
-    // scheduling actions so the dashboard/calendar update immediately, without
-    // waiting for the next full calendar sync.
-
-    /// Append a transparent summary of the defaults/adjustments WorkoutNormalizer
-    /// applied, so the coach can relay exactly what was scheduled. Only on success.
-    private func appendDefaultsNotes(to result: String, notes: [String]) -> String {
-        guard result.hasPrefix("✓"), !notes.isEmpty else { return result }
-        return result + "\n\nℹ️ Applied defaults & adjustments:\n" + notes.map { "- \($0)" }.joined(separator: "\n")
-    }
-
-    /// The JSON payload embedded in a "✓ message\n<json>" tool result.
-    private func resultData(_ result: String) -> [String: Any]? {
-        guard result.hasPrefix("✓"), let brace = result.firstIndex(of: "{") else { return nil }
-        guard let data = String(result[brace...]).data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-        return obj
-    }
-
-    /// Ingest a just-created Garmin workout locally (needs the id Garmin assigned).
-    private func ingestAddedWorkout(_ result: String, workoutData: [String: Any]) {
-        guard let data = resultData(result),
-              let workoutId = data["workout_id"], !(workoutId is NSNull),
-              let dateStr = data["date"] as? String,
-              let date = DateFormatter.ymd.date(from: dateStr) else { return }
+    /// Build a local plan DTO from normalized `workout_data`.
+    private func makePlan(id: String, workoutData: [String: Any], date: Date) -> IngestedScheduledWorkout {
+        let sport = Coerce.token(workoutData["sport"] as? String, default: "other")
         let minutes = (workoutData["duration_minutes"] as? NSNumber)?.doubleValue ?? 0
-        let family = SportFamily(sportKey: data["sport"] as? String ?? "other")
-        // Compute an intensity-based planned TSS from the structured steps when the
-        // coach provided them; nil falls back to the duration heuristic at read time.
+        let meters = (workoutData["distance_meters"] as? NSNumber)?.doubleValue ?? 0
+        let steps = workoutData["steps"] as? [[String: Any]] ?? []
         let targetTSS = PlannedTSS.estimate(
-            compactSteps: workoutData["steps"] as? [[String: Any]] ?? [],
-            family: family,
-            thresholds: TrainingDataStore.shared.latestSnapshot()
+            compactSteps: steps,
+            family: SportFamily(sportKey: sport),
+            thresholds: store.latestSnapshot()
         )
-        TrainingDataStore.shared.ingestScheduled([
-            IngestedScheduledWorkout(
-                id: "garmin:\(workoutId)",
-                source: "garmin",
-                date: date,
-                sport: data["sport"] as? String ?? "other",
-                name: data["name"] as? String ?? workoutData["name"] as? String ?? "Scheduled Workout",
-                targetDurationMinutes: minutes,
-                targetTSS: targetTSS,
-                notes: workoutData["description"] as? String ?? ""
-            )
-        ])
-    }
-
-    /// Reflect a Garmin in-place edit locally (content only — the date is preserved).
-    private func ingestModifiedWorkout(_ result: String, workoutData: [String: Any], editsSteps: Bool) {
-        guard let data = resultData(result),
-              let workoutId = data["workout_id"], !(workoutId is NSNull) else { return }
-        // Recompute planned TSS only when the structure changed; `.none` leaves the
-        // stored value untouched, while a fresh estimate (possibly nil) replaces it.
-        let targetTSS: Double??
-        if editsSteps {
-            targetTSS = PlannedTSS.estimate(
-                compactSteps: workoutData["steps"] as? [[String: Any]] ?? [],
-                family: SportFamily(sportKey: data["sport"] as? String ?? "other"),
-                thresholds: TrainingDataStore.shared.latestSnapshot()
-            )
-        } else {
-            targetTSS = nil
-        }
-        TrainingDataStore.shared.updateScheduledContent(
-            id: "garmin:\(workoutId)",
-            sport: data["sport"] as? String,
-            name: data["name"] as? String,
-            targetDurationMinutes: (workoutData["duration_minutes"] as? NSNumber)?.doubleValue,
+        let pool = (workoutData["pool_length"] as? NSNumber)?.doubleValue
+        return IngestedScheduledWorkout(
+            id: id, source: "local", date: date, sport: sport,
+            name: workoutData["name"] as? String ?? "Scheduled Workout",
+            targetDurationMinutes: minutes,
+            targetDistanceMeters: meters > 0 ? meters : 0,
             targetTSS: targetTSS,
-            notes: workoutData["description"] as? String
+            notes: workoutData["description"] as? String ?? "",
+            stepsJSON: WorkoutPayloadBuilder.stepsJSON(steps),
+            poolLengthMeters: (pool ?? 0) > 0 ? pool : nil
         )
     }
 
-    /// Reflect a Garmin move locally by shifting the record to its new date.
-    private func applyMovedWorkout(_ result: String) {
-        guard let data = resultData(result),
-              let workoutId = data["workout_id"], !(workoutId is NSNull),
-              let toStr = data["to_date"] as? String,
-              let date = DateFormatter.ymd.date(from: toStr) else { return }
-        TrainingDataStore.shared.moveScheduledWorkout(id: "garmin:\(workoutId)", to: date)
+    // MARK: - modify_workout
+
+    private func modify(_ arguments: [String: Any]) async -> String {
+        guard let workoutId = Coerce.string(arguments["workout_id"]), !workoutId.isEmpty,
+              let rawWorkout = arguments["workout_data"] as? [String: Any] else {
+            return "✗ Error: workout_id and workout_data are required."
+        }
+        guard store.scheduledWorkout(id: workoutId) != nil else {
+            return "✗ No planned workout found for id \(workoutId). List it with get_workouts first."
+        }
+        let editsSteps = rawWorkout["steps"] != nil
+        let (workoutData, notes) = editsSteps ? WorkoutNormalizer.normalize(rawWorkout) : (rawWorkout, [])
+        let steps = workoutData["steps"] as? [[String: Any]] ?? []
+        let stepsJSON = editsSteps ? WorkoutPayloadBuilder.stepsJSON(steps) : nil
+        let targetTSS: Double?? = editsSteps
+            ? .some(PlannedTSS.estimate(compactSteps: steps,
+                                        family: SportFamily(sportKey: workoutData["sport"] as? String ?? "other"),
+                                        thresholds: store.latestSnapshot()))
+            : nil
+        store.updateScheduledContent(
+            id: workoutId,
+            sport: workoutData["sport"] as? String,
+            name: workoutData["name"] as? String,
+            targetDurationMinutes: (workoutData["duration_minutes"] as? NSNumber)?.doubleValue,
+            targetDistanceMeters: (workoutData["distance_meters"] as? NSNumber)?.doubleValue,
+            targetTSS: targetTSS,
+            notes: workoutData["description"] as? String,
+            stepsJSON: stepsJSON
+        )
+        guard let updated = store.scheduledWorkout(id: workoutId) else { return "✓ Updated locally." }
+        let payload = PlannedWorkout(workoutData: WorkoutPayloadBuilder.workoutData(from: updated),
+                                     date: DateFormatter.ymd.string(from: updated.date))
+        let result: WorkoutWriteResult
+        if let ext = externalId(for: updated) {
+            result = await target.update(externalId: ext, payload)
+        } else {
+            result = await target.schedule(payload)
+            if result.success, let ext = result.externalId { store.setExternalRef(id: workoutId, target: writeTarget.refKey, externalId: ext) }
+        }
+        var msg = result.success
+            ? "✓ Updated '\(updated.name)' on \(writeTarget.displayName)."
+            : "✓ Updated locally; \(writeTarget.displayName) push failed: \(result.message)"
+        if !notes.isEmpty { msg += "\nℹ️ Applied defaults & adjustments:\n" + notes.map { "- \($0)" }.joined(separator: "\n") }
+        return msg
+    }
+
+    // MARK: - move_workout
+
+    private func move(_ arguments: [String: Any]) async -> String {
+        guard let workoutId = Coerce.string(arguments["workout_id"]), !workoutId.isEmpty,
+              let toDate = arguments["to_date"] as? String, let date = DateFormatter.ymd.date(from: toDate) else {
+            return "✗ Error: workout_id and a valid to_date (YYYY-MM-DD) are required."
+        }
+        guard let rec = store.scheduledWorkout(id: workoutId) else {
+            return "✗ No planned workout found for id \(workoutId)."
+        }
+        let fromDate = DateFormatter.ymd.string(from: rec.date)
+        store.moveScheduledWorkout(id: workoutId, to: date)
+        let result: WorkoutWriteResult
+        if let ext = externalId(for: rec) {
+            result = await target.move(externalId: ext, to: toDate, from: fromDate)
+        } else {
+            let payload = PlannedWorkout(workoutData: WorkoutPayloadBuilder.workoutData(from: rec), date: toDate)
+            result = await target.schedule(payload)
+            if result.success, let ext = result.externalId { store.setExternalRef(id: workoutId, target: writeTarget.refKey, externalId: ext) }
+        }
+        return result.success
+            ? "✓ Moved '\(rec.name)' to \(toDate) on \(writeTarget.displayName)."
+            : "✓ Moved locally; \(writeTarget.displayName) push failed: \(result.message)"
+    }
+
+    // MARK: - delete_workout
+
+    private func delete(_ arguments: [String: Any]) async -> String {
+        guard let workoutId = Coerce.string(arguments["workout_id"]), !workoutId.isEmpty else {
+            return "✗ Error: workout_id is required."
+        }
+        // Delete from every provider the plan reached (not just the active write
+        // target), then drop it locally.
+        await DataSyncCoordinator.shared.deletePlan(id: workoutId)
+        return "✓ Deleted workout \(workoutId)."
     }
 }

@@ -9,12 +9,12 @@ import AppKit
 // MARK: - Training Detail View
 //
 // Per-activity detail. Summary metrics (duration, distance, TSS, TE, avg HR,
-// calories) come from the stored `ActivityRecord` / its `detailsJSON`. The HR
+// calories) come from the stored `WorkoutRecord` / its `detailsJSON`. The HR
 // time-series chart + CSV export are HealthKit-only for now (Garmin HR series
 // is not yet stored — see plan's future "deeper Garmin history").
 
 struct TrainingDetailView: View {
-    let record: ActivityRecord
+    let record: WorkoutRecord
 
     @State private var heartRateSamples: [HeartRateSample] = []
     @State private var isLoadingHR = false
@@ -39,7 +39,7 @@ struct TrainingDetailView: View {
                 header
                 heroCapsule
                 tssBasisNote
-                coachInsight
+                // coachInsight
                 secondaryMetrics
                 computedCard
                 if isHealthKit {

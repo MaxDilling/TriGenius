@@ -209,7 +209,7 @@ enum DashboardInsightInput {
         let weekStart = TrainingVolume.weekStart(of: today)
         let weekEnd = cal.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
         let todayStart = cal.startOfDay(for: today)
-        var planned: [SportFamily: [ScheduledWorkoutRecord]] = [:]
+        var planned: [SportFamily: [WorkoutRecord]] = [:]
         for w in store.openScheduledWorkouts(from: weekStart, to: weekEnd) where cal.startOfDay(for: w.date) >= todayStart {
             planned[SportFamily(sportKey: w.sport), default: []].append(w)
         }
@@ -244,7 +244,7 @@ enum DashboardInsightInput {
     }
 
     /// "N sessions (\"Name\" 37 TSS, …)" — capped so the block stays compact.
-    private static func plannedSessionsDescription(_ workouts: [ScheduledWorkoutRecord]) -> String {
+    private static func plannedSessionsDescription(_ workouts: [WorkoutRecord]) -> String {
         guard !workouts.isEmpty else { return "none scheduled" }
         let sorted = workouts.sorted { $0.date < $1.date }
         let shown = sorted.prefix(4).map { w -> String in

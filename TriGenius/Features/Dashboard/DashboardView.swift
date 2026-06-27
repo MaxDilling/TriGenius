@@ -15,7 +15,7 @@ import Combine
 // Everything reads from the local DB via DashboardViewModel (source-agnostic).
 
 struct DashboardView: View {
-    let dataSource: DataSource
+    let readSources: Set<DataSource>
     var athleteName: String?
     let weeklyStructure: WeeklyStructure
     let trainingPlan: TrainingPlan
@@ -34,7 +34,7 @@ struct DashboardView: View {
 
     private var context: DashboardContext {
         DashboardContext(
-            dataSource: dataSource,
+            readSources: readSources,
             weeklyStructure: weeklyStructure,
             trainingPlan: trainingPlan,
             makeBackend: makeBackend
@@ -413,15 +413,15 @@ struct DashboardView: View {
 /// exposing the common fields the shared row needs plus the source for navigation.
 private struct UpNextItem: Identifiable {
     let date: Date
-    let record: ActivityRecord?
-    let planned: ScheduledWorkoutRecord?
+    let record: WorkoutRecord?
+    let planned: WorkoutRecord?
 
-    init(date: Date, record: ActivityRecord) {
+    init(date: Date, record: WorkoutRecord) {
         self.date = date
         self.record = record
         self.planned = nil
     }
-    init(date: Date, planned: ScheduledWorkoutRecord) {
+    init(date: Date, planned: WorkoutRecord) {
         self.date = date
         self.record = nil
         self.planned = planned

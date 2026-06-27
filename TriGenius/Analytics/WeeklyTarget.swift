@@ -145,7 +145,7 @@ enum WeeklyTargets {
     /// single 53-TSS run doesn't shrink a 90-TSS weekly goal down to 53.
     @MainActor
     static func targets(
-        scheduled: [ScheduledWorkoutRecord],
+        scheduled: [WorkoutRecord],
         weeklyStructure: WeeklyStructure,
         plan: TrainingPlan,
         referenceDate: Date = Date()

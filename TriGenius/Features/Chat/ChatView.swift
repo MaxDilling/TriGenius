@@ -27,6 +27,12 @@ final class ChatViewModel {
 
     private let brain: CoachBrain
 
+    /// The coach bubble currently being streamed into, if any. Reset to `nil`
+    /// whenever a tool call is rendered, so text arriving *after* a tool call
+    /// starts a fresh bubble *below* it — keeping tool calls and reply text in
+    /// the chronological order they actually occurred.
+    private var currentCoachID: UUID?
+
     /// Computed once at init — avoids re-running brain.greeting() (memory
     /// access + Calendar allocation) on every body re-evaluation / keystroke.
     let greeting: String
@@ -47,12 +53,16 @@ final class ChatViewModel {
         // Debug Mode: render the coach's hidden tool calls inline. The handler
         // only fires when Debug Mode is on (gated in CoachBrain).
         brain.toolEventHandler = { [weak self] event in
-            self?.messages.append(ChatMessage(
+            guard let self else { return }
+            self.messages.append(ChatMessage(
                 author: .tool,
                 text: event.name,
                 timestamp: event.timestamp,
                 toolEvent: event
             ))
+            // Close the current coach segment: any reply text that streams in
+            // after this tool call belongs in a new bubble *below* it.
+            self.currentCoachID = nil
         }
     }
 
@@ -78,26 +88,34 @@ final class ChatViewModel {
         messages.append(ChatMessage(author: .user, text: text, timestamp: Date()))
 
         isThinking = true
-        let coachID = UUID()
-        var inserted = false
+        currentCoachID = nil
+        var produced = false
 
-        // `onPartial` delivers cumulative text. On the first chunk we swap the
-        // thinking indicator for a coach bubble; later chunks update it in place.
+        // `onPartial` delivers cumulative text for the current segment. The
+        // first chunk of a segment swaps the thinking indicator for a coach
+        // bubble; later chunks update it in place. A tool call between segments
+        // resets `currentCoachID` (see `attach()`), so text that follows starts
+        // a new bubble *below* the tool call — preserving chronological order.
         let final = await brain.sendMessage(text) { [weak self] partial in
             guard let self else { return }
-            if !inserted {
-                inserted = true
-                self.isThinking = false
-                self.messages.append(ChatMessage(id: coachID, author: .coach, text: partial, timestamp: Date()))
-            } else if let idx = self.messages.firstIndex(where: { $0.id == coachID }) {
+            self.isThinking = false
+            produced = true
+            if let id = self.currentCoachID,
+               let idx = self.messages.firstIndex(where: { $0.id == id }) {
                 self.messages[idx].text = partial
+            } else {
+                let id = UUID()
+                self.currentCoachID = id
+                self.messages.append(ChatMessage(id: id, author: .coach, text: partial, timestamp: Date()))
             }
         }
 
         // Fallback: if no partial ever arrived, show the final text.
-        if !inserted {
+        if !produced {
             isThinking = false
-            messages.append(ChatMessage(id: coachID, author: .coach, text: final, timestamp: Date()))
+            if !final.isEmpty {
+                messages.append(ChatMessage(author: .coach, text: final, timestamp: Date()))
+            }
         }
     }
 

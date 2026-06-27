@@ -260,8 +260,8 @@ struct WeekTimeGridView: View {
 /// One item in the all-day band: a workout (completed/planned), an all-day calendar
 /// event, or an overflow marker when a day has more than the band can show.
 private enum AllDayEntry: Identifiable {
-    case completed(ActivityRecord)
-    case planned(ScheduledWorkoutRecord)
+    case completed(WorkoutRecord)
+    case planned(WorkoutRecord)
     case event(BusyWindow)
     case overflow(Int)
 
@@ -332,12 +332,12 @@ private struct DayHeaderCell: View {
         case .completed(let activity):
             // Workouts get a second metadata line (TSS + distance/time).
             AllDayPill(sport: activity.sport, title: activity.name,
-                       subtitle: Self.metadata(for: activity), kind: .completed)
+                       subtitle: Self.completedMetadata(for: activity), kind: .completed)
                 .contentShape(Rectangle())
                 .onTapGesture { onOpen(.completed(activity)) }
         case .planned(let workout):
             AllDayPill(sport: workout.sport, title: workout.name,
-                       subtitle: Self.metadata(for: workout), kind: .planned)
+                       subtitle: Self.plannedMetadata(for: workout), kind: .planned)
                 .contentShape(Rectangle())
                 .onTapGesture { onOpen(.planned(workout)) }
                 .draggable(workout.id)
@@ -360,7 +360,7 @@ private struct DayHeaderCell: View {
     }
 
     /// Compact "TSS + (distance or time)" line for a completed activity.
-    private static func metadata(for activity: ActivityRecord) -> String? {
+    private static func completedMetadata(for activity: WorkoutRecord) -> String? {
         var parts: [String] = []
         if let tss = activity.tss, tss > 0 { parts.append("\(Int(tss.rounded())) TSS") }
         if activity.distanceKm > 0 {
@@ -372,7 +372,7 @@ private struct DayHeaderCell: View {
     }
 
     /// Compact "TSS target + duration" line for a planned workout.
-    private static func metadata(for workout: ScheduledWorkoutRecord) -> String? {
+    private static func plannedMetadata(for workout: WorkoutRecord) -> String? {
         var parts: [String] = []
         let family = SportFamily(sportKey: workout.sport)
         let tss = workout.targetTSS

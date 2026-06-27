@@ -153,7 +153,7 @@ enum PMCEngine {
     /// taken verbatim when the source set it, else estimated from the planned
     /// duration (same rule the weekly targets use).
     @MainActor
-    static func plannedTSSByDay(_ scheduled: [ScheduledWorkoutRecord]) -> [Date: Double] {
+    static func plannedTSSByDay(_ scheduled: [WorkoutRecord]) -> [Date: Double] {
         let cal = Calendar.current
         var byDay: [Date: Double] = [:]
         for w in scheduled {

@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - Planned workout structure (display model)
 //
 // Turns a planned workout's persisted compact steps
-// (`ScheduledWorkoutRecord.stepsJSON`) into a render-ready structure: a
+// (`WorkoutRecord.stepsJSON`) into a render-ready structure: a
 // repeat-preserving step list with formatted extent/target strings, an estimated
 // total distance, and abbreviated one-line summaries for compact rows. The step
 // parsing and the distance/intensity math live in `PlannedTSS`; this layer only
@@ -330,7 +330,7 @@ enum PlannedWorkoutFormat {
     }
 }
 
-// MARK: - ScheduledWorkoutRecord display bridge
+// MARK: - WorkoutRecord display bridge
 //
 // The single source of truth for a planned workout's derived display values,
 // shared by every compact row (Agenda, Calendar, Week) and the detail view so
@@ -342,7 +342,7 @@ struct PlannedDistance {
     var source: DistanceSource
 }
 
-extension ScheduledWorkoutRecord {
+extension WorkoutRecord {
     var family: SportFamily { SportFamily(sportKey: sport) }
 
     /// Parsed structured steps, when the workout carries any.

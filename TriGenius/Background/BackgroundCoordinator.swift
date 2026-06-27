@@ -92,9 +92,10 @@ final class BackgroundCoordinator {
     func runProactiveCheck() async {
         guard UserDefaults.standard.bool(forKey: AppSettings.proactiveNotificationsKey) else { return }
 
-        let source = DataSource(rawValue: UserDefaults.standard.string(forKey: "data_source") ?? "")
-            ?? .appleHealth
-        _ = await DataSyncCoordinator.shared.sync(source: source)
+        await DataSyncCoordinator.shared.syncAll(AppSettings.storedReadSources())
+        // Re-push local plan changes to the provider (incl. re-creating plans the
+        // athlete deleted on the provider side — local is the source of truth).
+        await DataSyncCoordinator.shared.reconcileWriteTarget(AppSettings.storedWriteTarget())
 
         // The snapshot doesn't need the forward projection (only the weekly-target
         // check below uses planned workouts), so skip it here.

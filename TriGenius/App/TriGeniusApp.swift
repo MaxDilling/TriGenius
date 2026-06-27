@@ -48,7 +48,7 @@ struct TriGeniusApp: App {
         NotificationCenterService.shared.onNotificationTap = { [router] prompt in
             router.openChat(prefill: prompt)
         }
-        let b = CoachBrain(memory: memory, dataSource: settings.dataSource)
+        let b = CoachBrain(memory: memory, readSources: settings.readSources, writeTarget: settings.writeTarget)
         // Live read of Debug Mode — captured once so toggling never resets the chat.
         b.isDebugEnabled = { [weak settings] in settings?.debugMode ?? false }
         applyBackend(to: b)
@@ -58,7 +58,10 @@ struct TriGeniusApp: App {
         // GOAL.md step 2: sync the latest activities into the local database
         // before revealing the UI, so the coach reads 100% fresh data.
         launchStatus = "Synchronisiere Aktivitäten…"
-        await DataSyncCoordinator.shared.sync(source: settings.dataSource)
+        await DataSyncCoordinator.shared.syncAll(settings.readSources)
+        // Push any upcoming plans the active write target hasn't seen yet (e.g. after
+        // a target switch), so nothing is lost.
+        await DataSyncCoordinator.shared.reconcileWriteTarget(settings.writeTarget)
         // Re-register OS-scheduled reminders — pending requests are cleared on
         // reboot / app update, so reconcile on every launch.
         await ReminderScheduler.shared.reconcile()
@@ -81,8 +84,10 @@ struct TriGeniusApp: App {
     }
 
     private func applyBackend(to brain: CoachBrain) {
-        brain.setDataSource(settings.dataSource)
+        brain.setSources(read: settings.readSources, write: settings.writeTarget)
         brain.setBackend(settings.makeBackend())
+        // Re-push upcoming plans to the (possibly newly chosen) write target.
+        Task { await DataSyncCoordinator.shared.reconcileWriteTarget(settings.writeTarget) }
     }
 }
 
@@ -99,7 +104,7 @@ struct RootTabView: View {
         TabView(selection: $router.selectedTab) {
             NavigationStack {
                 DashboardView(
-                    dataSource: settings.dataSource,
+                    readSources: settings.readSources,
                     athleteName: memory.userProfile.name,
                     weeklyStructure: memory.weeklyStructure,
                     trainingPlan: memory.trainingPlan,
@@ -132,7 +137,7 @@ struct RootTabView: View {
             }
 
             NavigationStack {
-                CalendarView(dataSource: settings.dataSource)
+                CalendarView(writeTarget: settings.writeTarget)
             }
             .tag(CoachRouter.RootTab.calendar)
             .tabItem {

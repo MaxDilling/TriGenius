@@ -187,7 +187,7 @@ enum TrainingLoadAnalytics {
     }
 
     /// The longest session of `family` with `start <= date < end`, by primary metric.
-    private static func longest(in records: [ActivityRecord], family: SportFamily, on start: Date, before end: Date) -> LongestSession? {
+    private static func longest(in records: [WorkoutRecord], family: SportFamily, on start: Date, before end: Date) -> LongestSession? {
         let matching = records.filter {
             SportFamily(sportKey: $0.sport) == family && $0.date >= start && $0.date < end
         }

@@ -64,9 +64,13 @@ final class DataSyncCoordinator {
             // scored by the store at ingest against the thresholds current on each
             // activity's own date (`snapshot(asOf:)`), so the FTP/CSS/threshold series
             // must already be present when the activities land. Non-fatal on its own.
-            let metricsDays = days ?? 14   // seed ~2 weeks on a first/full sync
-            if let from = Calendar.current.date(byAdding: .day, value: -metricsDays, to: Calendar.current.startOfDay(for: Date())) {
-                await syncGarminMetrics(from: from, to: Date())
+            // Only when Garmin is the chosen metrics source — otherwise the metrics
+            // come from the other provider and pulling them here would double-source.
+            if AppSettings.storedMetricsSource() == .garmin {
+                let metricsDays = days ?? 14   // seed ~2 weeks on a first/full sync
+                if let from = Calendar.current.date(byAdding: .day, value: -metricsDays, to: Calendar.current.startOfDay(for: Date())) {
+                    await syncGarminMetrics(from: from, to: Date())
+                }
             }
             // getActivities ingests (and the store scores) into the store as a side effect.
             let result = await GarminService.shared.getActivities(sport: nil, count: syncCount, days: days)
@@ -86,25 +90,52 @@ final class DataSyncCoordinator {
                 // the complete keep-set and doesn't drop legitimate older records.
                 let count = since == nil ? max(syncCount, 1000) : syncCount
                 let workouts = try await HealthKitService.shared.fetchRecentWorkouts(count: count, since: since)
-                // Ingest performance metrics before activities so the store scores
-                // each activity's TSS against the thresholds current on its date.
-                let metrics = (try? await HealthKitService.shared.fetchPerformanceMetrics()) ?? []
-                store.ingestMetrics(metrics)
+                // Ingest performance + wellness metrics before activities so the store
+                // scores each activity's TSS against the thresholds current on its date.
+                // Only when Apple Health is the chosen metrics source — otherwise the
+                // metrics come from the other provider (avoids double-sourcing FTP,
+                // sleep, etc.).
+                let metricsFromHere = AppSettings.storedMetricsSource() == .appleHealth
+                if metricsFromHere {
+                    let metrics = (try? await HealthKitService.shared.fetchPerformanceMetrics()) ?? []
+                    store.ingestMetrics(metrics)
+                }
                 let dtos = workouts.compactMap(Self.ingestDTO(from:))
                 store.ingest(dtos)
                 // Reconcile: remove HealthKit records no longer returned within the
                 // synced window — chiefly Garmin Connect workouts now filtered out
                 // at the source, which previously duplicated the Garmin data.
                 store.pruneActivities(source: "healthkit", from: since ?? .distantPast, keeping: Set(dtos.map(\.id)))
-                // TODO: Apple Health wellness → DB. Ingest daily sleep / resting HR
-                // / HRV as `MetricKeys.wellness` IngestedMetrics here (mirroring the
-                // Garmin `syncGarminMetrics` path) so the source-agnostic
-                // `healthMetrics(source:days:)` read path returns AH data too.
+                // Apple Health daily wellness (sleep / resting HR / HRV) → the same
+                // `MetricKeys.wellness` series the Garmin path populates.
+                if metricsFromHere {
+                    let wellnessSince = since ?? Calendar.current.date(byAdding: .day, value: -30, to: Calendar.current.startOfDay(for: Date()))
+                    let wellness = (try? await HealthKitService.shared.fetchWellnessMetrics(since: wellnessSince)) ?? []
+                    store.ingestMetrics(wellness)
+                }
                 markSynced(source)
                 return store.count
             } catch {
                 return nil
             }
+        }
+    }
+
+    /// Sync every enabled read source in turn (parallel read). Each source keeps its
+    /// own watermark, so they advance independently. Garmin is skipped silently when
+    /// not authenticated.
+    func syncAll(_ sources: Set<DataSource>) async {
+        // Sync the chosen metrics source first so the FTP/threshold series is present
+        // before the *other* source's activities are scored at ingest (ingest order is
+        // load-bearing — TSS is scored against the thresholds current on each date).
+        let metricsSource = AppSettings.storedMetricsSource()
+        let ordered = sources.sorted { a, b in
+            if a == metricsSource { return true }
+            if b == metricsSource { return false }
+            return a.rawValue < b.rawValue
+        }
+        for source in ordered {
+            _ = await sync(source: source)
         }
     }
 
@@ -127,8 +158,12 @@ final class DataSyncCoordinator {
         // Backfill the full window's wellness + historical performance series FIRST
         // — both the primary path that populates deep marker/recovery history AND the
         // prerequisite for as-of-date TSS scoring of the activities ingested next
-        // (each scored against the FTP/threshold current on its own date).
-        await syncGarminMetrics(from: from, to: today)
+        // (each scored against the FTP/threshold current on its own date). Skipped when
+        // Garmin isn't the chosen metrics source — those markers come from the other
+        // provider then, and activities are scored against whatever it already ingested.
+        if AppSettings.storedMetricsSource() == .garmin {
+            await syncGarminMetrics(from: from, to: today)
+        }
         let count = await GarminService.shared.backfillActivities(
             startDate: DateFormatter.ymd.string(from: from),
             endDate: DateFormatter.ymd.string(from: today),
@@ -174,21 +209,15 @@ final class DataSyncCoordinator {
     // MARK: - Coach read path — health metrics (DB-backed, source-agnostic)
 
     /// Serve `get_health_metrics` from the local wellness time series
-    /// (`resting_hr` / `hrv_overnight` / `sleep_*`), source-agnostic like
-    /// `activities(...)`. Builds the daily_metrics + summary JSON the coach
-    /// expects. If the window holds no wellness rows, sync once for the source
-    /// (Garmin) and retry; Apple Health is a no-op until its wellness sync exists.
-    func healthMetrics(source: DataSource, days: Int) async -> String {
+    /// (`resting_hr` / `hrv_overnight` / `sleep_*`), merged across every enabled read
+    /// source. If the window holds no wellness rows, sync the enabled sources once and
+    /// retry so a first conversation still sees recovery data.
+    func healthMetrics(days: Int) async -> String {
         let n = max(1, min(days, 30))
         if !hasWellnessRows(days: n) {
-            if source == .garmin, await GarminAuth.shared.isAuthenticated {
-                let today = Date()
-                if let from = Calendar.current.date(byAdding: .day, value: -max(n, 14), to: Calendar.current.startOfDay(for: today)) {
-                    await syncGarminMetrics(from: from, to: today)
-                }
-            }
+            await syncAll(AppSettings.storedReadSources())
         }
-        return healthMetricsResponse(source: source, days: n)
+        return healthMetricsResponse(days: n)
     }
 
     /// Latest-`days` start-of-day → value map for one wellness metric key.
@@ -206,7 +235,7 @@ final class DataSyncCoordinator {
         MetricKeys.wellness.contains { !wellnessByDay($0, days: days).isEmpty }
     }
 
-    private func healthMetricsResponse(source: DataSource, days: Int) -> String {
+    private func healthMetricsResponse(days: Int) -> String {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let rhr = wellnessByDay("resting_hr", days: days)
@@ -250,15 +279,12 @@ final class DataSyncCoordinator {
             "avg_sleep_hours": avg(Array(dur.values), 1),
             "resting_hr_trend": restingHRs.isEmpty ? "Unknown" : GarminTransform.analyzeTrend(restingHRs),
         ]
-        var data: [String: Any] = [
+        let data: [String: Any] = [
             "period": ["start": DateFormatter.ymd.string(from: cal.date(byAdding: .day, value: -(days - 1), to: today)!),
                        "end": DateFormatter.ymd.string(from: today), "days": days],
             "daily_metrics": daily,
             "summary": summary,
         ]
-        if source == .appleHealth, !hasWellnessRows(days: days) {
-            data["note"] = "Apple Health wellness sync is not implemented yet; no recovery data stored."
-        }
         let json = String(prettyJSON: data)
         return "✓ Retrieved health metrics for the last \(days) days (local)\n\(json)"
     }
@@ -287,8 +313,22 @@ final class DataSyncCoordinator {
         // A failed fetch returns "✗ …"; feeding that to replaceScheduled would wipe
         // the local mirror to match an empty result, so bail before touching it.
         guard !result.hasPrefix("✗"), let scheduled = Self.parseScheduledWorkouts(result) else { return }
+        // Detect TriGenius plans the athlete deleted on Garmin's side: a local plan
+        // whose recorded Garmin id is no longer in the calendar. Clear the dead ref so
+        // the write-target reconcile re-creates it (local plans are authoritative).
+        let presentGarminIds = Set(scheduled.compactMap { $0["workout_id"].map { "\($0)" } })
+        store.clearStaleWriteRefs(target: "garmin", present: presentGarminIds, from: from, to: to)
         let thresholds = store.latestSnapshot()
-        let planned = scheduled.compactMap { Self.scheduledDTO(from: $0, thresholds: thresholds) }
+        // Skip Garmin workouts that are TriGenius's own local plans pushed to Garmin —
+        // they already exist locally (as `local:` rows referencing this Garmin id), so
+        // re-mirroring them as separate `garmin:` rows would duplicate them.
+        let ownPushed = store.externalRefIds(target: "garmin", source: "local")
+        let planned = scheduled
+            .filter { item in
+                guard let wid = item["workout_id"] else { return true }
+                return !ownPushed.contains("\(wid)")
+            }
+            .compactMap { Self.scheduledDTO(from: $0, thresholds: thresholds) }
         store.replaceScheduled(source: "garmin", from: from, to: to, with: planned)
     }
 
@@ -319,7 +359,7 @@ final class DataSyncCoordinator {
             thresholds: thresholds
         )
         // Persist the structure verbatim so the UI can render it (see
-        // `ScheduledWorkoutRecord.stepsJSON`). No extra API calls — these steps were
+        // `WorkoutRecord.stepsJSON`). No extra API calls — these steps were
         // already fetched for the TSS estimate above.
         let stepsJSON = (try? JSONSerialization.data(withJSONObject: steps))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "[]"
@@ -330,6 +370,7 @@ final class DataSyncCoordinator {
             sport: sport,
             name: data["name"] as? String ?? "Scheduled Workout",
             targetDurationMinutes: (data["duration_minutes"] as? NSNumber)?.doubleValue ?? 0,
+            targetDistanceMeters: (data["distance_meters"] as? NSNumber)?.doubleValue ?? 0,
             targetTSS: targetTSS,
             notes: data["description"] as? String ?? "",
             stepsJSON: stepsJSON,
@@ -420,21 +461,92 @@ final class DataSyncCoordinator {
 
     // MARK: - Coach read path (DB-backed)
 
-    /// Serve `get_activities` from the local database. If the database is empty
-    /// (e.g. the launch sync hasn't completed yet), sync once and retry.
-    func activities(source: DataSource, sport: String?, count: Int, days: Int?) async -> String {
+    /// Serve `get_activities` from the local database, merged across every enabled
+    /// read source. If the database is empty (e.g. the launch sync hasn't completed
+    /// yet), sync the enabled sources once and retry.
+    func activities(sport: String?, count: Int, days: Int?) async -> String {
         var records = filtered(sport: sport, days: days)
         if records.isEmpty {
-            _ = await sync(source: source)
+            await syncAll(AppSettings.storedReadSources())
             records = filtered(sport: sport, days: days)
         }
         let limited = Array(records.prefix(count))
         return response(for: limited, sport: sport, days: days)
     }
 
+    // MARK: - Coach read path — workouts (planned + completed, local)
+
+    /// Serve `get_workouts` from the local store: `scheduled` (open plans, each with
+    /// its `workout_id` + a ready-to-reuse `workout_data`) and `completed` (finished
+    /// activities). Source-agnostic — the coach edits plans by their local id and the
+    /// write handler routes the change to the active target.
+    func workoutsResponse(from: Date, to: Date) -> String {
+        let scheduled = store.openScheduledWorkouts(from: from, to: to)
+        let completed = store.activities(from: from, to: to)
+        let scheduledOut: [[String: Any]] = scheduled.map { rec in
+            [
+                "workout_id": rec.id,
+                "date": DateFormatter.ymd.string(from: rec.date),
+                "sport": rec.sport,
+                "workout_data": WorkoutPayloadBuilder.workoutData(from: rec)
+            ]
+        }
+        let completedOut: [[String: Any]] = completed.compactMap { rec in
+            guard let data = rec.detailsJSON.data(using: .utf8),
+                  var obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            for key in Self.coachHiddenActivityKeys { obj.removeValue(forKey: key) }
+            return obj
+        }
+        let data: [String: Any] = [
+            "scheduled": scheduledOut,
+            "completed": completedOut,
+            "range": ["start": DateFormatter.ymd.string(from: from), "end": DateFormatter.ymd.string(from: to)]
+        ]
+        return "✓ Retrieved \(scheduledOut.count) scheduled + \(completedOut.count) completed workouts (local)\n\(String(prettyJSON: data))"
+    }
+
+    // MARK: - Write-target reconciliation (no plan lost on target switch)
+
+    /// Push every open future plan that the (newly selected) `target` hasn't seen yet
+    /// onto it, recording the returned external id. Called on launch and whenever the
+    /// write target changes, so switching targets never loses an upcoming plan.
+    func reconcileWriteTarget(_ target: WriteTarget) async {
+        let syncTarget = WorkoutTargetFactory.make(target)
+        guard await syncTarget.isAvailable else { return }
+        for plan in store.plansMissingRef(target: target.refKey, from: Date()) {
+            let payload = PlannedWorkout(
+                workoutData: WorkoutPayloadBuilder.workoutData(from: plan),
+                date: DateFormatter.ymd.string(from: plan.date)
+            )
+            let result = await syncTarget.schedule(payload)
+            if result.success, let ext = result.externalId {
+                store.setExternalRef(id: plan.id, target: target.refKey, externalId: ext)
+            }
+        }
+    }
+
+    // MARK: - Plan deletion (local + every provider it reached)
+
+    /// Delete a planned workout locally and from *every* write target it was pushed
+    /// to — not just the active one. A plan pushed to Garmin while the write target
+    /// is now the Apple Watch would otherwise be orphaned on Garmin. Resolves each
+    /// target's external id the same way the scheduling handler does (an explicit
+    /// `externalRefs` entry, or the raw provider id when the plan originated there).
+    func deletePlan(id: String) async {
+        if let rec = store.scheduledWorkout(id: id) {
+            for wt in WriteTarget.allCases {
+                let ext = rec.externalRefs[wt.refKey]
+                    ?? (rec.source == wt.refKey ? TrainingDataStore.rawId(rec.id) : nil)
+                guard let ext else { continue }
+                _ = await WorkoutTargetFactory.make(wt).delete(externalId: ext)
+            }
+        }
+        store.deleteScheduledWorkout(id: id)
+    }
+
     // MARK: - Querying / filtering
 
-    private func filtered(sport: String?, days: Int?) -> [ActivityRecord] {
+    private func filtered(sport: String?, days: Int?) -> [WorkoutRecord] {
         // Normalize the cutoff to the start of the day, otherwise `days: 1` at
         // 15:00 would drop yesterday-morning activities (cutoff "yesterday 15:00").
         // `days: 1` now means "today and yesterday", `days: 7` the last 7 days + today.
@@ -453,7 +565,7 @@ final class DataSyncCoordinator {
     /// load spine, and these EPOC-derived numbers only invite over-trust.
     private static let coachHiddenActivityKeys: Set<String> = ["training_load", "aerobic_te", "anaerobic_te"]
 
-    private func response(for records: [ActivityRecord], sport: String?, days: Int?) -> String {
+    private func response(for records: [WorkoutRecord], sport: String?, days: Int?) -> String {
         let formatted: [[String: Any]] = records.compactMap { rec in
             guard let data = rec.detailsJSON.data(using: .utf8),
                   var obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }

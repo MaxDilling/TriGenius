@@ -20,8 +20,8 @@ enum CalendarLayout {
 /// (rather than wrapping each chip in a `NavigationLink`) keeps the chips' `.draggable`
 /// working for drag-to-reschedule — a `NavigationLink` would swallow the drag gesture.
 enum CalendarDetailItem: Identifiable, Hashable {
-    case planned(ScheduledWorkoutRecord)
-    case completed(ActivityRecord)
+    case planned(WorkoutRecord)
+    case completed(WorkoutRecord)
     case event(BusyWindow)
 
     var id: String {
@@ -36,14 +36,14 @@ enum CalendarDetailItem: Identifiable, Hashable {
 }
 
 struct CalendarView: View {
-    let dataSource: DataSource
+    let writeTarget: WriteTarget
 
     @State private var viewModel: CalendarViewModel
     @State private var detail: CalendarDetailItem?
 
-    init(dataSource: DataSource) {
-        self.dataSource = dataSource
-        _viewModel = State(initialValue: CalendarViewModel(dataSource: dataSource))
+    init(writeTarget: WriteTarget) {
+        self.writeTarget = writeTarget
+        _viewModel = State(initialValue: CalendarViewModel(writeTarget: writeTarget))
     }
 
     #if os(iOS)
@@ -218,8 +218,8 @@ private struct WeekRow: View {
 
 private struct DayCell: View {
     let day: Date
-    let planned: [ScheduledWorkoutRecord]
-    let completed: [ActivityRecord]
+    let planned: [WorkoutRecord]
+    let completed: [WorkoutRecord]
     let segments: [TimeOfDaySegment: SegmentState]
     let isToday: Bool
     /// On roomy layouts (iPad / macOS) events show as icon-left + title rows,

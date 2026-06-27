@@ -8,17 +8,17 @@ import SwiftUI
 // the dashboard Agenda or the calendar's day detail / week view.
 
 struct PlannedWorkoutDetailView: View {
-    let initialWorkout: ScheduledWorkoutRecord
+    let initialWorkout: WorkoutRecord
     /// Live record, re-fetched on data changes so coach edits to the structure /
     /// targets appear without re-opening the screen (the handed-in record can be
     /// a stale snapshot once a sync replaces it). Falls back to `initialWorkout`.
-    @State private var live: ScheduledWorkoutRecord?
+    @State private var live: WorkoutRecord?
 
-    init(workout: ScheduledWorkoutRecord) {
+    init(workout: WorkoutRecord) {
         self.initialWorkout = workout
     }
 
-    private var workout: ScheduledWorkoutRecord { live ?? initialWorkout }
+    private var workout: WorkoutRecord { live ?? initialWorkout }
 
     private var family: SportFamily { workout.family }
     private var isEstimatedTSS: Bool { workout.isEstimatedTSS }

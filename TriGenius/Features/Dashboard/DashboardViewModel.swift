@@ -9,7 +9,7 @@ import Foundation
 /// the active data source, the plan/structure feeding weekly targets, and a
 /// factory for the active LLM backend (the AI insight). Lives on the MainActor.
 struct DashboardContext {
-    let dataSource: DataSource
+    let readSources: Set<DataSource>
     let weeklyStructure: WeeklyStructure
     let trainingPlan: TrainingPlan
     let makeBackend: () -> LLMBackend
@@ -19,8 +19,8 @@ struct DashboardContext {
 /// planned workouts (today + upcoming).
 struct AgendaDay: Identifiable {
     let date: Date
-    let completed: [ActivityRecord]
-    let planned: [ScheduledWorkoutRecord]
+    let completed: [WorkoutRecord]
+    let planned: [WorkoutRecord]
     var id: Date { date }
 }
 
@@ -57,9 +57,13 @@ final class DashboardViewModel {
         await load(context: context)
     }
 
-    /// Re-sync from the active source, then recompute everything.
+    /// Re-sync from all enabled sources, then recompute everything.
     func refresh(context: DashboardContext) async {
-        await DataSyncCoordinator.shared.sync(source: context.dataSource)
+        await DataSyncCoordinator.shared.syncAll(context.readSources)
+        // Push local plan changes down to the provider — including re-creating any
+        // TriGenius plan the athlete deleted on the provider side (local is source of
+        // truth). syncAll just cleared the dead refs; this re-pushes them.
+        await DataSyncCoordinator.shared.reconcileWriteTarget(AppSettings.storedWriteTarget())
         await load(context: context)
     }
 
@@ -101,7 +105,7 @@ final class DashboardViewModel {
     /// How many days ahead the Agenda surfaces planned workouts.
     private static let agendaUpcomingDays = 7
 
-    private static func buildAgenda(records: [ActivityRecord], store: TrainingDataStore) -> [AgendaDay] {
+    private static func buildAgenda(records: [WorkoutRecord], store: TrainingDataStore) -> [AgendaDay] {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
         let end = cal.date(byAdding: .day, value: agendaUpcomingDays, to: today) ?? today

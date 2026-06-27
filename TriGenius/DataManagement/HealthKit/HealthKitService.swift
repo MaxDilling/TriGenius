@@ -23,6 +23,7 @@ final class HealthKitService {
         let readTypes: Set<HKObjectType> = [
             HKObjectType.workoutType(),
             HKQuantityType(.heartRate),
+            HKQuantityType(.restingHeartRate),
             HKQuantityType(.heartRateVariabilitySDNN),
             HKQuantityType(.stepCount),
             HKQuantityType(.activeEnergyBurned),
@@ -205,6 +206,92 @@ final class HealthKitService {
         }
         if let weight = try await fetchLatestQuantity(HKQuantityType(.bodyMass), unit: .gramUnit(with: .kilo)), weight > 0 {
             out.append(IngestedMetric(metricKey: "weight_kg", value: weight, unit: "kg", source: "healthkit", date: now))
+        }
+        return out
+    }
+
+    // MARK: - Daily wellness (sleep / resting HR / HRV)
+
+    /// Daily wellness time series Apple Health exposes — resting HR, overnight HRV
+    /// (SDNN, ms) and sleep duration + stage breakdown. Mirrors the Garmin wellness
+    /// ingest so `MetricKeys.wellness` is populated source-agnostically. Apple Health
+    /// has no native sleep *score*, so `sleep_score` is omitted (only durations).
+    func fetchWellnessMetrics(since: Date?) async throws -> [IngestedMetric] {
+        let start = since ?? Calendar.current.date(byAdding: .day, value: -30, to: Calendar.current.startOfDay(for: Date()))!
+        async let rhr = dailyAverage(HKQuantityType(.restingHeartRate),
+                                     unit: HKUnit.count().unitDivided(by: .minute()),
+                                     key: "resting_hr", unitToken: "bpm", since: start)
+        async let hrv = dailyAverage(HKQuantityType(.heartRateVariabilitySDNN),
+                                     unit: HKUnit.secondUnit(with: .milli),
+                                     key: "hrv_overnight", unitToken: "ms", since: start)
+        async let sleep = sleepMetrics(since: start)
+        return try await rhr + hrv + sleep
+    }
+
+    /// Average of a quantity per calendar day (bucketed by each sample's end date),
+    /// emitted as one `IngestedMetric` per day under `key`.
+    private func dailyAverage(_ type: HKQuantityType, unit: HKUnit, key: String,
+                             unitToken: String, since: Date) async throws -> [IngestedMetric] {
+        let predicate = HKQuery.predicateForSamples(withStart: since, end: nil)
+        let samples: [HKQuantitySample] = try await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(sampleType: type, predicate: predicate,
+                                      limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, error in
+                if let error { continuation.resume(throwing: error); return }
+                continuation.resume(returning: (samples as? [HKQuantitySample]) ?? [])
+            }
+            store.execute(query)
+        }
+        let cal = Calendar.current
+        var sums: [Date: (total: Double, n: Int)] = [:]
+        for s in samples {
+            let day = cal.startOfDay(for: s.endDate)
+            let v = s.quantity.doubleValue(for: unit)
+            let cur = sums[day] ?? (0, 0)
+            sums[day] = (cur.total + v, cur.n + 1)
+        }
+        return sums.map { day, agg in
+            IngestedMetric(metricKey: key, value: agg.total / Double(agg.n), unit: unitToken, source: "healthkit", date: day)
+        }
+    }
+
+    /// Per-night sleep duration + stage breakdown (hours), bucketed by wake day.
+    private func sleepMetrics(since: Date) async throws -> [IngestedMetric] {
+        let predicate = HKQuery.predicateForSamples(withStart: since, end: nil)
+        let samples: [HKCategorySample] = try await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(sampleType: HKCategoryType(.sleepAnalysis), predicate: predicate,
+                                      limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, error in
+                if let error { continuation.resume(throwing: error); return }
+                continuation.resume(returning: (samples as? [HKCategorySample]) ?? [])
+            }
+            store.execute(query)
+        }
+        let cal = Calendar.current
+        // day → (deep, rem, light, awake) seconds
+        var nights: [Date: (deep: Double, rem: Double, light: Double, awake: Double)] = [:]
+        for s in samples {
+            let day = cal.startOfDay(for: s.endDate)  // attribute the night to the wake day
+            let dur = s.endDate.timeIntervalSince(s.startDate)
+            var n = nights[day] ?? (0, 0, 0, 0)
+            switch s.value {
+            case HKCategoryValueSleepAnalysis.asleepDeep.rawValue: n.deep += dur
+            case HKCategoryValueSleepAnalysis.asleepREM.rawValue: n.rem += dur
+            case HKCategoryValueSleepAnalysis.asleepCore.rawValue,
+                 HKCategoryValueSleepAnalysis.asleepUnspecified.rawValue: n.light += dur
+            case HKCategoryValueSleepAnalysis.awake.rawValue: n.awake += dur
+            default: break  // inBed overlaps the stages — ignore to avoid double-counting
+            }
+            nights[day] = n
+        }
+        var out: [IngestedMetric] = []
+        for (day, n) in nights {
+            let asleep = n.deep + n.rem + n.light
+            guard asleep > 0 else { continue }
+            func h(_ s: Double) -> Double { s / 3600 }
+            out.append(IngestedMetric(metricKey: "sleep_duration_h", value: h(asleep), unit: "h", source: "healthkit", date: day))
+            out.append(IngestedMetric(metricKey: "sleep_deep_h", value: h(n.deep), unit: "h", source: "healthkit", date: day))
+            out.append(IngestedMetric(metricKey: "sleep_rem_h", value: h(n.rem), unit: "h", source: "healthkit", date: day))
+            out.append(IngestedMetric(metricKey: "sleep_light_h", value: h(n.light), unit: "h", source: "healthkit", date: day))
+            out.append(IngestedMetric(metricKey: "sleep_awake_h", value: h(n.awake), unit: "h", source: "healthkit", date: day))
         }
         return out
     }

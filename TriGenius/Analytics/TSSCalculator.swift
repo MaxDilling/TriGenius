@@ -5,7 +5,7 @@ import Foundation
 // Replaces Garmin's EPOC `activityTrainingLoad` with a TrainingPeaks-style TSS,
 // validated offline in `ref/tss_lab/` (bike power-TSS reproduces Garmin's cycling
 // TSS within ~2 on two athletes; run pace-TSS matches an independent run-power
-// reference R²0.97). Computed once at ingest and cached on `ActivityRecord.tss`.
+// reference R²0.97). Computed once at ingest and cached on `WorkoutRecord.tss`.
 //
 // Brand-agnostic by design: it reads ONLY the normalized `detailsJSON` schema
 // (below) plus the athlete's `PerformanceSnapshot`. A new watch brand just has to

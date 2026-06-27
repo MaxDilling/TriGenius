@@ -12,6 +12,11 @@ import SwiftUI
 struct ToolDebugView: View {
     let brain: CoachBrain
 
+    private var toolsHeader: String {
+        let reads = brain.readSources.map(\.displayName).sorted().joined(separator: "+")
+        return "\(brain.registeredTools.count) tools · read: \(reads) · write: \(brain.writeTarget.displayName)"
+    }
+
     var body: some View {
         List {
             Section {
@@ -30,7 +35,7 @@ struct ToolDebugView: View {
                     }
                 }
             } header: {
-                Text("\(brain.registeredTools.count) tools · source: \(brain.dataSource.displayName)")
+                Text(toolsHeader)
             } footer: {
                 Text("Invoke any coach tool by hand and see its raw result. Calls run exactly as the coach would run them.")
             }

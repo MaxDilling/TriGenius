@@ -4,7 +4,7 @@ import Foundation
 //
 // Weekly aggregation of stored activities per sport family — the data behind the
 // dashboard's "volume per discipline" section. Source-agnostic: it reads
-// `ActivityRecord`s and classifies them via `SportFamily`, and reads TSS through
+// `WorkoutRecord`s and classifies them via `SportFamily`, and reads TSS through
 // the `TSS` abstraction.
 //
 // Weeks run Monday→Sunday. We expose the current week plus the previous 5
@@ -55,7 +55,7 @@ enum TrainingVolume {
     /// Aggregate `records` into the last `weeks` weekly buckets per sport family.
     @MainActor
     static func weeklyBuckets(
-        records: [ActivityRecord],
+        records: [WorkoutRecord],
         weeks: Int = 6,
         today: Date = Date()
     ) -> [WeekBucket] {

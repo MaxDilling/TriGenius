@@ -207,15 +207,19 @@ final class CoachBrain {
     private let memory: CoachMemory
     private var toolRegistry: CoachToolRegistry
     private var backend: LLMBackend
-    private(set) var dataSource: DataSource
+    /// Active read sources (parallel). The store merges them; tools read the union.
+    private(set) var readSources: Set<DataSource>
+    /// Where planned workouts are written (single active target).
+    private(set) var writeTarget: WriteTarget
 
     private let maxToolIterations = 8
 
     // MARK: - Init
 
-    init(memory: CoachMemory, dataSource: DataSource = .appleHealth) {
+    init(memory: CoachMemory, readSources: Set<DataSource> = [.appleHealth], writeTarget: WriteTarget = .garmin) {
         self.memory = memory
-        self.dataSource = dataSource
+        self.readSources = readSources
+        self.writeTarget = writeTarget
         self.toolRegistry = CoachToolRegistry()
         // Default to a placeholder backend; caller sets the real one via setBackend
         self.backend = NoAPIKeyBackend()
@@ -223,16 +227,20 @@ final class CoachBrain {
         configureTools()
     }
 
-    /// (Re)build the tool registry for the active data source. The Garmin and
-    /// HealthKit handlers register the same tool names, so only one is active.
+    /// (Re)build the tool registry for the active read sources + write target. The
+    /// reads (`get_activities`/`get_health_metrics`) and the workout-scheduling tools
+    /// are source-agnostic; only the Garmin-specific extras depend on Garmin being a
+    /// read source.
     private func configureTools() {
         let registry = CoachToolRegistry()
-        switch dataSource {
-        case .appleHealth:
-            registry.register(HealthKitToolHandler())
-        case .garmin:
-            registry.register(GarminToolHandler(memory: memory))
+        // Source-agnostic reads from the merged store.
+        registry.register(ActivityReadToolHandler())
+        // Garmin-only read extras (power curve, settings resync).
+        if readSources.contains(.garmin) {
+            registry.register(GarminToolHandler())
         }
+        // One planning API, routed to the active write target.
+        registry.register(WorkoutSchedulingToolHandler(writeTarget: writeTarget))
         registry.register(ProfileToolHandler(memory: memory))
         // Always-on, source-agnostic: derived training-load & injury-risk metrics.
         registry.register(TrainingLoadToolHandler())
@@ -245,9 +253,12 @@ final class CoachBrain {
         toolRegistry = registry
     }
 
-    func setDataSource(_ source: DataSource) {
-        guard source != dataSource else { return }
-        dataSource = source
+    /// Apply the latest read sources + write target. Rebuilds the tool registry and
+    /// resets the conversation only when something actually changed.
+    func setSources(read: Set<DataSource>, write: WriteTarget) {
+        guard read != readSources || write != writeTarget else { return }
+        readSources = read
+        writeTarget = write
         configureTools()
         reset()
     }
@@ -501,27 +512,26 @@ final class CoachBrain {
     }
 
     private var dataSourceSection: String {
-        switch dataSource {
-        case .appleHealth:
-            return """
-            === DATA FROM APPLE HEALTH ===
-
-            The athlete's data comes from Apple HealthKit.
-            - Workouts, heart rate, HRV, steps, sleep, active energy are available
-            - Device estimates may have inaccuracies — treat as guidance, not ground truth
-            - HR lags 30–90s behind effort during intervals — use RPE as cross-check
-            """
-        case .garmin:
-            return """
-            === DATA FROM GARMIN CONNECT ===
-
-            The athlete's data comes from Garmin Connect.
-            - Activities, HRV, sleep, training status, power curve, calendar are available
-            - You can also create, move and delete scheduled workouts and sync athlete settings (FTP, HR/power zones, VO2max, CSS)
-            - Device estimates may have inaccuracies — treat as guidance, not ground truth
-            - HR lags 30–90s behind effort during intervals — use RPE as cross-check
-            """
+        let sources = readSources.map(\.displayName).sorted().joined(separator: " + ")
+        var lines = [
+            "=== DATA & DEVICES ===",
+            "",
+            "Reading the athlete's data from: \(sources). Activities and recovery metrics are merged into one history regardless of source.",
+        ]
+        if readSources.contains(.garmin) {
+            lines.append("- Garmin extras available: power-duration curve (get_power_curve) and a settings/metrics resync (sync_user_settings).")
         }
+        switch writeTarget {
+        case .garmin:
+            lines.append("- Planned workouts you create (add_workouts / modify_workout / move_workout / delete_workout) are scheduled to Garmin Connect.")
+        case .appleWatch:
+            lines.append("- Planned workouts you create (add_workouts / modify_workout / move_workout / delete_workout) are sent to the athlete's Apple Watch (WorkoutKit) to start from the Workout app.")
+        }
+        lines.append(contentsOf: [
+            "- Device estimates may have inaccuracies — treat as guidance, not ground truth.",
+            "- HR lags 30–90s behind effort during intervals — use RPE as a cross-check.",
+        ])
+        return lines.joined(separator: "\n")
     }
 }
 

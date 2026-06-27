@@ -56,9 +56,9 @@ final class CalendarViewModel {
     let monthScrollWeeks: [Date]
 
     /// Planned workouts keyed by start-of-day.
-    private(set) var plannedByDay: [Date: [ScheduledWorkoutRecord]] = [:]
+    private(set) var plannedByDay: [Date: [WorkoutRecord]] = [:]
     /// Completed activities keyed by start-of-day.
-    private(set) var completedByDay: [Date: [ActivityRecord]] = [:]
+    private(set) var completedByDay: [Date: [WorkoutRecord]] = [:]
     /// Calendar busy windows keyed by start-of-day.
     private(set) var busyByDay: [Date: DayAvailability] = [:]
     /// Per-segment availability keyed by start-of-day.
@@ -69,7 +69,7 @@ final class CalendarViewModel {
     /// True when calendar access hasn't been granted, so the UI can offer to ask.
     private(set) var needsCalendarAccess: Bool = false
 
-    private let dataSource: DataSource
+    private let writeTarget: WriteTarget
     private static let modeKey = "calendar.mode"
     private let cal: Calendar = {
         var c = Calendar.current
@@ -77,8 +77,8 @@ final class CalendarViewModel {
         return c
     }()
 
-    init(dataSource: DataSource, today: Date = Date()) {
-        self.dataSource = dataSource
+    init(writeTarget: WriteTarget, today: Date = Date()) {
+        self.writeTarget = writeTarget
         let day = Calendar.current.startOfDay(for: today)
         var c = Calendar.current
         c.firstWeekday = 2
@@ -122,11 +122,11 @@ final class CalendarViewModel {
 
     // MARK: - Per-day accessors
 
-    func planned(on day: Date) -> [ScheduledWorkoutRecord] {
+    func planned(on day: Date) -> [WorkoutRecord] {
         plannedByDay[cal.startOfDay(for: day)] ?? []
     }
 
-    func completed(on day: Date) -> [ActivityRecord] {
+    func completed(on day: Date) -> [WorkoutRecord] {
         completedByDay[cal.startOfDay(for: day)] ?? []
     }
 
@@ -155,12 +155,12 @@ final class CalendarViewModel {
     // MARK: - Workout placement
 
     /// The segment a planned workout is assigned to via its local start time, if any.
-    func assignedSegment(_ workout: ScheduledWorkoutRecord) -> TimeOfDaySegment? {
+    func assignedSegment(_ workout: WorkoutRecord) -> TimeOfDaySegment? {
         workout.startMinute.flatMap { TimeOfDaySegment.containing(minute: $0) }
     }
 
     /// A planned workout conflicts when its assigned segment isn't completely free.
-    func conflict(for workout: ScheduledWorkoutRecord) -> Bool {
+    func conflict(for workout: WorkoutRecord) -> Bool {
         guard let segment = assignedSegment(workout) else { return false }
         return state(of: segment, on: workout.date) != .free
     }
@@ -258,7 +258,7 @@ final class CalendarViewModel {
     private func loadData(from start: Date, to end: Date) {
         let store = TrainingDataStore.shared
 
-        var completed: [Date: [ActivityRecord]] = [:]
+        var completed: [Date: [WorkoutRecord]] = [:]
         for r in store.activities(from: start, to: end) {
             completed[cal.startOfDay(for: r.date), default: []].append(r)
         }
@@ -266,7 +266,7 @@ final class CalendarViewModel {
 
         // `openScheduledWorkouts` drops plans whose completion has landed, so a
         // done session doesn't render twice in the grid / day detail.
-        var planned: [Date: [ScheduledWorkoutRecord]] = [:]
+        var planned: [Date: [WorkoutRecord]] = [:]
         for w in store.openScheduledWorkouts(from: start, to: end) {
             planned[cal.startOfDay(for: w.date), default: []].append(w)
         }
@@ -307,35 +307,36 @@ final class CalendarViewModel {
     // MARK: - Reschedule
 
     /// Move a planned workout to `newDay` and, when `segment` is given, anchor its
-    /// local start time to that segment. Updates the local store immediately and,
-    /// for Garmin-sourced workouts on the Garmin data source, pushes the day move to
-    /// Garmin in the background.
+    /// local start time to that segment. Updates the local store immediately and
+    /// pushes the day move to the active write target in the background.
     func move(workoutID: String, to newDay: Date, segment: TimeOfDaySegment? = nil) {
         let store = TrainingDataStore.shared
-        let target = cal.startOfDay(for: newDay)
+        let targetDay = cal.startOfDay(for: newDay)
         guard let record = scheduledRecord(id: workoutID) else { return }
         let fromDay = cal.startOfDay(for: record.date)
-        let dayChanged = fromDay != target
+        let dayChanged = fromDay != targetDay
         let minuteChanged = segment != nil && record.startMinute != segment?.anchorMinute
         guard dayChanged || minuteChanged else { return }
 
-        let source = record.source
-        let garminID = record.id.hasPrefix("garmin:") ? String(record.id.dropFirst("garmin:".count)) : nil
+        // Resolve the active target's external id for this plan before the local move.
+        let externalId = record.externalRefs[writeTarget.refKey]
+            ?? (record.source == writeTarget.refKey ? TrainingDataStore.rawId(record.id) : nil)
 
-        if dayChanged { store.moveScheduledWorkout(id: workoutID, to: target) }
+        if dayChanged { store.moveScheduledWorkout(id: workoutID, to: targetDay) }
         if let segment { store.setScheduledStartMinute(id: workoutID, minute: segment.anchorMinute) }
         load()
 
-        if dayChanged, dataSource == .garmin, source == "garmin", let garminID {
+        if dayChanged, let externalId {
             let from = DateFormatter.ymd.string(from: fromDay)
-            let to = DateFormatter.ymd.string(from: target)
-            Task { _ = await GarminService.shared.moveWorkout(workoutId: garminID, toDate: to, fromDate: from) }
+            let to = DateFormatter.ymd.string(from: targetDay)
+            let target = WorkoutTargetFactory.make(writeTarget)
+            Task { _ = await target.move(externalId: externalId, to: to, from: from) }
         }
     }
 
     /// Find a scheduled workout by id within the loaded window (falls back to a wide
     /// store lookup so a drag that crosses the window edge still resolves).
-    private func scheduledRecord(id: String) -> ScheduledWorkoutRecord? {
+    private func scheduledRecord(id: String) -> WorkoutRecord? {
         if let hit = plannedByDay.values.flatMap({ $0 }).first(where: { $0.id == id }) { return hit }
         guard let r = loadedRange else { return nil }
         return TrainingDataStore.shared.scheduledWorkouts(from: r.lowerBound, to: r.upperBound)
