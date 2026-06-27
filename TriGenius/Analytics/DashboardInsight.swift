@@ -46,9 +46,10 @@ enum DashboardInsight {
     named race.
     3. week_stage = mid/late, a discipline pace = behind AND gap_after_plan ≠ none: \
     open with what looks good, name the gap, offer an action link to fix it.
-    4. week_stage = mid/late, a discipline pace = behind BUT gap_after_plan = none: \
-    reassure — the planned sessions already close it, just execute. NEVER tell \
-    them to "prioritize" or "do more" of something already scheduled.
+    4. week_stage = mid/late, a discipline pace = on schedule (planned sessions still \
+    to come): the scheduled work already closes the target — reassure, just execute. \
+    NEVER call it "behind" (a session due later this week is not behind), and NEVER \
+    tell them to "prioritize" or "do more" of something already scheduled.
     5. A positive trend (vo2max rising, fitness on plan): reinforce it, tie it to the \
     named race if it's close.
     6. Nothing stands out: one honest, upbeat "strong, balanced week" line pointing \
@@ -64,13 +65,14 @@ enum DashboardInsight {
     - (start) "Last week you nailed all three sports and fitness keeps ticking up — let's carry that momentum into a strong week toward Wörthsee."
     - (start) "Big bike week behind you and form is fresh; this week's the one to get the run volume back on track for Wörthsee."
     - (mid/late, gap) "Swim and run are dialed in; bike's fallen behind pace with nothing left on the calendar. (Plan a ride)[Plan me an easy Z2 ride for the weekend]"
-    - (mid/late, covered) "Run's a touch behind pace, but today's strides and Sunday's long run already cover it — just execute and you're set."
+    - (mid/late, covered) "Run's the lighter one so far, but today's strides and Sunday's long run already cover the target — just execute and you're set."
     - (trend) "VO2max nudged up to 53 and form is peaking right on plan — 30 days out from Wörthsee, you're in a great spot."
     - (steady) "Strong, balanced week across all three sports — we're right on course for Wörthsee Triathlon."
 
     AVOID:
     - "Prioritize your run this week." (ignores a run is already planned)
     - "Run is behind." said on Monday (the week just reset — nothing is behind yet)
+    - "The run is technically behind." when the planned sessions cover the target (it's on schedule, not behind — drop the "behind" framing entirely)
     - "CTL 47, ATL 58, TSB -19 — productive build." (reads the dashboard back)
     """
 

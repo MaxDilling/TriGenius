@@ -218,8 +218,15 @@ enum DashboardInsightInput {
         for fam in SportFamily.triathlon {
             let actual = currentWeek?.totals(for: fam).tss ?? 0
             let target = targets[fam]?.tss ?? 0
-            let pace = paceLabel(actual: actual, target: target, stage: stage, weekFraction: weekFraction)
+            let rawPace = paceLabel(actual: actual, target: target, stage: stage, weekFraction: weekFraction)
             let gap = gapAfterPlan(target: target, projection: projections[fam])
+            // A session scheduled for later in the week reads "behind" against the
+            // pro-rated pace every day until it's done. If the remaining plan already
+            // covers the target the discipline isn't behind — it's on schedule with
+            // work still to come — so don't hand the model a "behind" it has to caveat.
+            let pace = (rawPace == "behind" && gap == "none")
+                ? "on schedule (planned sessions still to come)"
+                : rawPace
             let plannedDesc = plannedSessionsDescription(planned[fam] ?? [])
             rows.append("- \(fam.displayName): \(Int(actual.rounded()))/\(Int(target.rounded())) TSS · "
                 + "pace = \(pace) · gap_after_plan = \(gap) · planned: \(plannedDesc)")

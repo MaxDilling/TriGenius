@@ -25,6 +25,7 @@ struct TrainingDetailView: View {
     @State private var distanceInput = ""
 
     private var family: SportFamily { SportFamily(sportKey: record.sport) }
+    private var structure: PlannedWorkoutStructure? { record.structure }
     private var details: [String: Any] {
         guard let data = record.detailsJSON.data(using: .utf8),
               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
@@ -38,9 +39,13 @@ struct TrainingDetailView: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                 header
                 heroCapsule
+                comparisonCard
+                plannedStructureCard
                 tssBasisNote
                 // coachInsight
-                secondaryMetrics
+                activityCard
+                zonesCard
+                feelCard
                 computedCard
                 if isHealthKit {
                     heartRateCard
@@ -116,9 +121,7 @@ struct TrainingDetailView: View {
             HeroMetric(value: durationHM(record.durationMinutes), label: "Duration"),
             HeroMetric(value: record.tss.map { "\(Int($0.rounded()))" } ?? "—", label: "TSS"),
         ]
-        if let te = record.aerobicTE {
-            metrics.append(HeroMetric(value: String(format: "%.1f", te), label: "Aerobic TE"))
-        } else if record.distanceKm > 0 {
+        if record.distanceKm > 0 {
             metrics.append(HeroMetric(value: String(format: "%.1f km", record.distanceKm), label: "Distance"))
         }
         return metrics
@@ -144,6 +147,110 @@ struct TrainingDetailView: View {
         .padding(.vertical, Theme.Spacing.l)
         .padding(.horizontal, Theme.Spacing.m)
         .glassSurface(cornerRadius: Theme.Radius.l)
+    }
+
+    // MARK: Planned vs Completed
+    //
+    // When this record originated from a plan, the planned section survives the
+    // ingest fold — so we can show target vs achieved side by side. Deltas are
+    // neutral (over/under target is not framed as good or bad).
+
+    private struct ComparisonMetric: Identifiable {
+        let id = UUID()
+        let label: String
+        let planned: String
+        let completed: String
+        let delta: String?
+    }
+
+    private var comparisonMetrics: [ComparisonMetric] {
+        guard record.isPlanned else { return [] }
+        var rows: [ComparisonMetric] = []
+
+        let plannedMinutes = record.plannedDurationMinutes
+        if plannedMinutes > 0, record.durationMinutes > 0 {
+            rows.append(.init(label: "Duration",
+                              planned: durationHM(plannedMinutes),
+                              completed: durationHM(record.durationMinutes),
+                              delta: signedDuration(record.durationMinutes - plannedMinutes)))
+        }
+
+        if let planned = record.plannedDistance, planned.meters > 0, record.distanceKm > 0 {
+            let plannedKm = planned.meters / 1000
+            let prefix = planned.source == .fixed ? "" : "~"
+            rows.append(.init(label: "Distance",
+                              planned: prefix + String(format: "%.2f km", plannedKm),
+                              completed: String(format: "%.2f km", record.distanceKm),
+                              delta: signedKm(record.distanceKm - plannedKm)))
+        }
+
+        let targetTSS = record.resolvedTargetTSS
+        if targetTSS > 0, let actualTSS = record.tss {
+            let prefix = record.isEstimatedTSS ? "~" : ""
+            rows.append(.init(label: "TSS",
+                              planned: prefix + "\(Int(targetTSS.rounded()))",
+                              completed: "\(Int(actualTSS.rounded()))",
+                              delta: signedInt(actualTSS - targetTSS)))
+        }
+        return rows
+    }
+
+    @ViewBuilder
+    private var comparisonCard: some View {
+        let rows = comparisonMetrics
+        if !rows.isEmpty {
+            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                Label("Planned vs Completed", systemImage: "arrow.left.arrow.right")
+                    .font(.headline)
+                Grid(alignment: .leading, horizontalSpacing: Theme.Spacing.m,
+                     verticalSpacing: Theme.Spacing.s) {
+                    GridRow {
+                        Text("")
+                        Text("Planned").gridColumnAlignment(.trailing)
+                        Text("Completed").gridColumnAlignment(.trailing)
+                        Text("Δ").gridColumnAlignment(.trailing)
+                    }
+                    .font(.caption).foregroundStyle(.secondary)
+                    ForEach(rows) { row in
+                        Divider().gridCellColumns(4)
+                        GridRow {
+                            Text(row.label).font(.subheadline)
+                            Text(row.planned)
+                                .font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+                            Text(row.completed)
+                                .font(.subheadline.weight(.semibold)).monospacedDigit()
+                            Text(row.delta ?? "—")
+                                .font(.caption).monospacedDigit().foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .cardSurface()
+        }
+    }
+
+    @ViewBuilder
+    private var plannedStructureCard: some View {
+        if record.isPlanned, let structure, !structure.steps.isEmpty {
+            PlannedStructureCard(structure: structure, accent: family.color,
+                                 title: "Planned structure")
+        }
+    }
+
+    // Signed deltas — `nil` when the difference rounds away to nothing.
+    private func signedDuration(_ minutes: Double) -> String? {
+        guard abs(minutes) >= 0.5 else { return nil }
+        return (minutes >= 0 ? "+" : "−") + durationHM(abs(minutes))
+    }
+    private func signedKm(_ km: Double) -> String? {
+        guard abs(km) >= 0.01 else { return nil }
+        return (km >= 0 ? "+" : "−") + String(format: "%.2f km", abs(km))
+    }
+    private func signedInt(_ value: Double) -> String? {
+        let rounded = Int(value.rounded())
+        guard rounded != 0 else { return nil }
+        return (rounded > 0 ? "+" : "−") + "\(abs(rounded))"
     }
 
     // MARK: TSS provenance
@@ -185,7 +292,11 @@ struct TrainingDetailView: View {
         .coachAccent(family.color, cornerRadius: Theme.Radius.m)
     }
 
-    // MARK: Secondary metrics
+    // MARK: Activity metrics
+    //
+    // The achieved summary, sport-aware. Each row is conditional, so a sparse
+    // record (e.g. a HealthKit workout) simply shows fewer rows. Self-computed
+    // normalized values live in `computedCard`; zones + feel are their own cards.
 
     private struct SecondaryMetric: Identifiable {
         let id = UUID()
@@ -194,43 +305,180 @@ struct TrainingDetailView: View {
         let icon: String
     }
 
-    private var secondaryMetricList: [SecondaryMetric] {
+    private var activityMetricList: [SecondaryMetric] {
         var rows: [SecondaryMetric] = []
-        // Distance is a hero metric only when there's no Aerobic TE; otherwise
-        // it lives down here.
-        if record.aerobicTE != nil, record.distanceKm > 0 {
-            rows.append(.init(label: "Distance", value: String(format: "%.2f km", record.distanceKm), icon: "ruler"))
+        let running = details["running"] as? [String: Any]
+        let cycling = details["cycling"] as? [String: Any]
+        let swimming = details["swimming"] as? [String: Any]
+
+        if let hr = Coerce.int(details["avg_hr"]) {
+            rows.append(.init(label: "Avg HR", value: "\(hr) bpm", icon: "heart"))
+        }
+        if let hr = Coerce.int(details["max_hr"]) {
+            rows.append(.init(label: "Max HR", value: "\(hr) bpm", icon: "heart.fill"))
+        }
+        if let te = record.aerobicTE {
+            rows.append(.init(label: "Aerobic TE", value: String(format: "%.1f", te), icon: "lungs"))
         }
         if let te = record.anaerobicTE {
             rows.append(.init(label: "Anaerobic TE", value: String(format: "%.1f", te), icon: "bolt.heart"))
         }
-        if let hr = details["avg_hr"] as? Int {
-            rows.append(.init(label: "Avg HR", value: "\(hr) bpm", icon: "heart"))
+        if let cadence = Coerce.int(running?["avg_cadence_spm"]) {
+            rows.append(.init(label: "Avg Cadence", value: "\(cadence) spm", icon: "figure.run"))
+        } else if let cadence = Coerce.int(cycling?["avg_cadence_rpm"]) {
+            rows.append(.init(label: "Avg Cadence", value: "\(cadence) rpm", icon: "bicycle"))
         }
-        if let kcal = details["calories"] as? Int {
+        if let power = Coerce.int(cycling?["avg_power_w"]) ?? Coerce.int(running?["avg_power_w"]) {
+            rows.append(.init(label: "Avg Power", value: "\(power) W", icon: "bolt"))
+        }
+        if let speed = Coerce.double(cycling?["avg_speed_kmh"]), speed > 0 {
+            var value = String(format: "%.1f km/h", speed)
+            if let maxSpeed = Coerce.double(cycling?["max_speed_kmh"]), maxSpeed > 0 {
+                value += String(format: " (max %.1f)", maxSpeed)
+            }
+            rows.append(.init(label: "Avg Speed", value: value, icon: "speedometer"))
+        }
+        if let swolf = Coerce.int(swimming?["avg_swolf"]) {
+            rows.append(.init(label: "Avg SWOLF", value: "\(swolf)", icon: "figure.pool.swim"))
+        }
+        if let pace = Coerce.string(swimming?["avg_pace_per_100m"]) {
+            rows.append(.init(label: "Avg Pace", value: "\(pace) /100m", icon: "speedometer"))
+        }
+        if let gain = Coerce.int(details["elevation_gain_m"]), gain > 0 {
+            var value = "↑ \(gain) m"
+            if let loss = Coerce.int(details["elevation_loss_m"]), loss > 0 {
+                value += "   ↓ \(loss) m"
+            }
+            rows.append(.init(label: "Elevation", value: value, icon: "mountain.2"))
+        }
+        if let kcal = Coerce.int(details["calories"]) {
             rows.append(.init(label: "Calories", value: "\(kcal) kcal", icon: "flame"))
         }
         return rows
     }
 
     @ViewBuilder
-    private var secondaryMetrics: some View {
-        let rows = secondaryMetricList
+    private var activityCard: some View {
+        let rows = activityMetricList
         if !rows.isEmpty {
-            VStack(spacing: 0) {
-                ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
-                    if index > 0 { Divider() }
-                    HStack {
-                        Label(row.label, systemImage: row.icon).font(.subheadline)
-                        Spacer()
-                        Text(row.value)
-                            .font(.subheadline.weight(.medium))
-                            .foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                Text("Activity").font(.headline)
+                VStack(spacing: 0) {
+                    ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                        if index > 0 { Divider() }
+                        HStack {
+                            Label(row.label, systemImage: row.icon).font(.subheadline)
+                            Spacer()
+                            Text(row.value)
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, Theme.Spacing.s)
                     }
-                    .padding(.vertical, Theme.Spacing.s)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .cardSurface()
+        }
+    }
+
+    // MARK: Zones — time-in-zone distribution (HR and, for cycling, power)
+
+    private let zonePalette: [Color] = [
+        Theme.Palette.info, Theme.Palette.success, .yellow,
+        Theme.Palette.warning, Theme.Palette.danger,
+    ]
+
+    /// `z1…z5` seconds from a zone dict, or `[]` when absent / all-zero.
+    private func zoneSeconds(_ dict: [String: Any]?) -> [Double] {
+        guard let dict else { return [] }
+        let zones = (1...5).map { Coerce.double(dict["z\($0)"]) ?? 0 }
+        return zones.reduce(0, +) > 0 ? zones : []
+    }
+
+    @ViewBuilder
+    private var zonesCard: some View {
+        let hr = zoneSeconds(details["hr_zones_seconds"] as? [String: Any])
+        let power = zoneSeconds((details["cycling"] as? [String: Any])?["power_zones_seconds"] as? [String: Any])
+        if !hr.isEmpty || !power.isEmpty {
+            VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+                Text("Time in zone").font(.headline)
+                if !hr.isEmpty { zoneBar("Heart rate", zones: hr) }
+                if !power.isEmpty { zoneBar("Power", zones: power) }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .cardSurface()
+        }
+    }
+
+    private func zoneBar(_ title: String, zones: [Double]) -> some View {
+        let total = max(1, zones.reduce(0, +))
+        return VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            GeometryReader { geo in
+                HStack(spacing: 1) {
+                    ForEach(Array(zones.enumerated()), id: \.offset) { index, seconds in
+                        if seconds > 0 {
+                            zonePalette[min(index, zonePalette.count - 1)]
+                                .frame(width: max(2, geo.size.width * seconds / total))
+                        }
+                    }
+                }
+            }
+            .frame(height: 10)
+            .clipShape(Capsule())
+            HStack(spacing: Theme.Spacing.m) {
+                ForEach(Array(zones.enumerated()), id: \.offset) { index, seconds in
+                    if seconds > 0 {
+                        HStack(spacing: 3) {
+                            Circle().fill(zonePalette[min(index, zonePalette.count - 1)])
+                                .frame(width: 7, height: 7)
+                            Text("Z\(index + 1)").font(.caption2).foregroundStyle(.secondary)
+                            Text(zoneTime(seconds)).font(.caption2).monospacedDigit()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func zoneTime(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        return total >= 60 ? "\(total / 60)m" : "\(total)s"
+    }
+
+    // MARK: Feel & RPE — the athlete's subjective read on the session
+
+    @ViewBuilder
+    private var feelCard: some View {
+        let feel = Coerce.int(details["feel"])
+        let rpe = Coerce.int(details["rpe"])
+        let comment = Coerce.string(details["notes"])
+        if feel != nil || rpe != nil || (comment?.isEmpty == false) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                Label("How it felt", systemImage: "face.smiling").font(.headline)
+                if let feel {
+                    metricRow("Feel", feelLabel(feel), "face.smiling")
+                }
+                if let rpe {
+                    metricRow("RPE", "\(rpe) / 10", "gauge.with.dots.needle.bottom.50percent")
+                }
+                if let comment, !comment.isEmpty {
+                    Text(comment).font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .cardSurface()
+        }
+    }
+
+    private func feelLabel(_ value: Int) -> String {
+        switch value {
+        case ...1: return "Very Weak"
+        case 2:    return "Weak"
+        case 3:    return "Normal"
+        case 4:    return "Strong"
+        default:   return "Very Strong"
         }
     }
 

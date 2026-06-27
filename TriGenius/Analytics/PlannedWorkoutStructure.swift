@@ -350,6 +350,16 @@ extension WorkoutRecord {
         PlannedWorkoutStructure.make(stepsJSON: stepsJSON, family: family)
     }
 
+    /// Best planned duration in minutes. Prefers the structure-derived estimate,
+    /// which converts distance-prescribed steps (e.g. a "4 km @ 5:40/km" interval)
+    /// into time — something the stored `targetDurationMinutes` can't capture, so
+    /// for mixed time+distance sessions it would otherwise undercount. Falls back
+    /// to the explicit target when there is no structure.
+    var plannedDurationMinutes: Double {
+        if let estimated = structure?.estimatedDurationMinutes, estimated > 0 { return estimated }
+        return targetDurationMinutes
+    }
+
     /// True when the planned TSS is estimated from duration (no explicit target).
     var isEstimatedTSS: Bool { targetTSS == nil }
 

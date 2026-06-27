@@ -45,7 +45,7 @@ struct PlannedWorkoutDetailView: View {
                 heroCapsule
                 tssBasisNote
                 if let structure, !structure.steps.isEmpty {
-                    structureCard(structure)
+                    PlannedStructureCard(structure: structure, accent: family.color)
                 }
                 detailRows
                 if !workout.notes.isEmpty {
@@ -112,12 +112,13 @@ struct PlannedWorkoutDetailView: View {
 
     private var heroMetrics: [HeroMetric] {
         var metrics: [HeroMetric] = []
-        if workout.targetDurationMinutes > 0 {
-            metrics.append(HeroMetric(value: durationHM(workout.targetDurationMinutes), label: "Duration"))
-        } else if let estimated = structure?.estimatedDurationMinutes, estimated > 0 {
-            // Distance-prescribed sessions carry no explicit duration target — show
-            // the structure-derived estimate so duration is always present.
-            metrics.append(HeroMetric(value: "~" + durationHM(estimated), label: "Duration"))
+        // `plannedDurationMinutes` prefers the structure estimate, so mixed
+        // time+distance sessions count the distance steps too. "~" only when the
+        // session carries no explicit duration target (distance-prescribed).
+        let planned = workout.plannedDurationMinutes
+        if planned > 0 {
+            let prefix = workout.targetDurationMinutes > 0 ? "" : "~"
+            metrics.append(HeroMetric(value: prefix + durationHM(planned), label: "Duration"))
         }
         if let distanceText {
             metrics.append(HeroMetric(value: distanceText, label: "Distance"))
@@ -235,61 +236,6 @@ struct PlannedWorkoutDetailView: View {
             }
         }
         .cardSurface()
-    }
-
-    // MARK: Structure — the step-by-step breakdown of the session
-
-    private func structureCard(_ structure: PlannedWorkoutStructure) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            Label("Structure", systemImage: "list.bullet.indent").font(.headline)
-            VStack(spacing: 0) {
-                ForEach(Array(structure.steps.enumerated()), id: \.element.id) { index, step in
-                    if index > 0 { Divider() }
-                    stepRow(step, structure: structure)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .cardSurface()
-    }
-
-    @ViewBuilder
-    private func stepRow(_ step: PlannedDisplayStep, structure: PlannedWorkoutStructure) -> some View {
-        if step.isGroup {
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                HStack(spacing: 6) {
-                    Image(systemName: "repeat")
-                        .font(.caption.weight(.semibold)).foregroundStyle(family.color)
-                    Text("\(step.repeatCount)×").font(.subheadline.weight(.semibold))
-                    Spacer()
-                }
-                ForEach(step.steps) { leaf in
-                    leafRow(leaf, structure: structure)
-                        .padding(.leading, Theme.Spacing.l)
-                }
-            }
-            .padding(.vertical, Theme.Spacing.s)
-        } else if let leaf = step.leaf {
-            leafRow(leaf, structure: structure)
-                .padding(.vertical, Theme.Spacing.s)
-        }
-    }
-
-    private func leafRow(_ leaf: PlannedStepLeaf, structure: PlannedWorkoutStructure) -> some View {
-        HStack(spacing: Theme.Spacing.s) {
-            Image(systemName: leaf.icon)
-                .font(.caption).foregroundStyle(family.color)
-                .frame(width: 20)
-            Text(leaf.typeLabel).font(.subheadline)
-            Spacer()
-            VStack(alignment: .trailing, spacing: 1) {
-                Text(PlannedWorkoutFormat.extent(leaf))
-                    .font(.subheadline.weight(.medium)).monospacedDigit()
-                if let target = structure.targetText(leaf) {
-                    Text(target).font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                }
-            }
-        }
     }
 
     // MARK: Notes
