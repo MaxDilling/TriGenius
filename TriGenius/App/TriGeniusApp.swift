@@ -116,6 +116,14 @@ struct RootTabView: View {
             }
 
             NavigationStack {
+                PlanView(memory: memory)
+            }
+            .tag(CoachRouter.RootTab.plan)
+            .tabItem {
+                Label("Plan", systemImage: "calendar.day.timeline.left")
+            }
+
+            NavigationStack {
                 CoachChatView(brain: brain)
             }
             .tag(CoachRouter.RootTab.coach)

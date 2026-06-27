@@ -84,8 +84,20 @@ struct DashboardView: View {
 
     /// Cheap, DB-free fingerprint of the inputs the weekly targets depend on, so a
     /// coach-driven plan/structure edit triggers a dashboard reload.
+    ///
+    /// Built from a key-sorted JSON encoding, NOT `"\(dict)"`: a `[String: Any]`
+    /// has no stable iteration order (it depends on the per-process random hash
+    /// seed), so interpolating it produces a string that "flaps" between renders
+    /// even when the plan is unchanged — which made `.onChange` fire every render
+    /// and spun a 100×/s reload loop. `.sortedKeys` makes the fingerprint depend
+    /// only on the content.
     private var planSignature: String {
-        "\(trainingPlan.toDict())\n\(weeklyStructure.toDict())"
+        Self.stableJSON(trainingPlan.toDict()) + "\n" + Self.stableJSON(weeklyStructure.toDict())
+    }
+
+    private static func stableJSON(_ dict: [String: Any]) -> String {
+        (try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? ""
     }
 
     // MARK: Header
@@ -128,8 +140,8 @@ struct DashboardView: View {
 
     @ViewBuilder private var planBanner: some View {
         if TrainingPlanBanner.hasData(memory.trainingPlan) {
-            NavigationLink {
-                PlanView(memory: memory)
+            Button {
+                router.selectedTab = .plan
             } label: {
                 TrainingPlanBanner(plan: memory.trainingPlan)
             }

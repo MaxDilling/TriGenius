@@ -14,9 +14,9 @@ import SwiftUI
 @MainActor
 @Observable
 final class CoachRouter {
-    enum RootTab: Hashable { case dashboard, coach, calendar }
+    enum RootTab: Hashable { case dashboard, plan, coach, calendar }
 
-    var selectedTab: RootTab = .coach // TEMP DIAG: start on Coach to repro focus hang
+    var selectedTab: RootTab = .dashboard
     /// Text to pre-fill into the chat input, awaiting consumption by the chat view.
     var pendingPrompt: String?
 
