@@ -183,7 +183,16 @@ private struct MetricCard: View {
 
     @State private var showDetail = false
 
-    private var trend: MetricTrend { MetricTrend(metric: metric, points: points) }
+    /// The card sparkline summarises only the recent past — the last three
+    /// months — so day-to-day progression reads clearly without the whole
+    /// history compressing it flat. (The detail view still offers longer
+    /// windows.) The current value still comes from the full series' last point.
+    private var recentPoints: [MetricPoint] {
+        guard let start = Calendar.current.date(byAdding: .month, value: -3, to: Date()) else { return points }
+        return points.filter { $0.date >= start }
+    }
+
+    private var trend: MetricTrend { MetricTrend(metric: metric, points: recentPoints) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -235,20 +244,20 @@ private struct MetricCard: View {
 
     @ViewBuilder
     private var sparkline: some View {
-        if points.count >= 2 {
-            Chart(points) { p in
+        if recentPoints.count >= 2 {
+            Chart(recentPoints) { p in
                 LineMark(x: .value("Date", p.date), y: .value("Value", p.value))
-                    .interpolationMethod(.monotone)
+                    .interpolationMethod(.linear)
                     .foregroundStyle(metric.accent)
                 AreaMark(x: .value("Date", p.date), y: .value("Value", p.value))
-                    .interpolationMethod(.monotone)
+                    .interpolationMethod(.linear)
                     .foregroundStyle(metric.accent.opacity(0.12))
             }
             .chartXAxis(.hidden)
             .chartYAxis(.hidden)
             // Extra bottom buffer keeps the line floating above the card's lower
             // edge; the area still fills the gap beneath it.
-            .chartYScale(domain: tightDomain(points, topPad: 0.15, bottomPad: 0.45))
+            .chartYScale(domain: tightDomain(recentPoints, topPad: 0.15, bottomPad: 0.45))
             // `.monotone` can overshoot the data range and Charts does not clip
             // its plot to the frame by default — without this the area bleeds
             // far outside the small sparkline rect.
@@ -355,14 +364,14 @@ private struct MetricDetailView: View {
     }
 
     @ViewBuilder
-    private var chart: some View {
+private var chart: some View {
         if visiblePoints.count >= 2 {
             Chart(visiblePoints) { p in
                 LineMark(x: .value("Date", p.date), y: .value("Value", p.value))
-                    .interpolationMethod(.monotone)
+                    .interpolationMethod(.linear)
                     .foregroundStyle(metric.accent)
                 AreaMark(x: .value("Date", p.date), y: .value("Value", p.value))
-                    .interpolationMethod(.monotone)
+                    .interpolationMethod(.linear)
                     .foregroundStyle(
                         .linearGradient(
                             colors: [metric.accent.opacity(0.25), metric.accent.opacity(0.02)],
@@ -398,9 +407,10 @@ private struct MetricDetailView: View {
     private var stats: some View {
         let values = visiblePoints.map(\.value)
         if let lo = values.min(), let hi = values.max() {
+            let mean = values.reduce(0, +) / Double(values.count)
             HStack(spacing: Theme.Spacing.m) {
-                stat("Low", metric.format(lo))
-                stat("High", metric.format(hi))
+                stat("Low / High", "\(metric.format(lo)) – \(metric.format(hi))")
+                stat("Mean", metric.format(mean))
                 stat("Points", "\(visiblePoints.count)")
             }
         }
