@@ -47,6 +47,19 @@ protocol WorkoutSyncTarget {
     func update(externalId: String, _ workout: PlannedWorkout) async -> WorkoutWriteResult
     func move(externalId: String, to date: String, from: String?) async -> WorkoutWriteResult
     func delete(externalId: String) async -> WorkoutWriteResult
+
+    /// Remove every workout this target has scheduled whose external id is *not* in
+    /// `keeping` — orphans left when a plan was deleted through a path other than
+    /// `delete`, or when a store reset lost the refs. Reconciliation passes the live
+    /// set of local-plan refs; the target prunes the rest of its own schedule.
+    func prune(keeping liveExternalIds: Set<String>) async
+}
+
+extension WorkoutSyncTarget {
+    /// Default opt-out: a target that can't enumerate its own schedule, or whose
+    /// provider copy is authoritative rather than mirror-of-local (Garmin), does not
+    /// prune.
+    func prune(keeping liveExternalIds: Set<String>) async {}
 }
 
 /// Builds the active `WorkoutSyncTarget`. Mirrors `BackendFactory`.

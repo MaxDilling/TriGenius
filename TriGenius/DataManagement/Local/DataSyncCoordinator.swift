@@ -541,6 +541,10 @@ final class DataSyncCoordinator {
                 store.setExternalRef(id: plan.id, target: target.refKey, externalId: ext)
             }
         }
+        // Push first so re-created plans are in the live set, then drop whatever the
+        // target still holds for a plan that's gone (deleted outside `deletePlan`, or
+        // a ref lost to a store reset) — the watch otherwise keeps stale workouts.
+        await syncTarget.prune(keeping: store.liveExternalRefIds(target: target.refKey))
     }
 
     // MARK: - Plan deletion (local + every provider it reached)

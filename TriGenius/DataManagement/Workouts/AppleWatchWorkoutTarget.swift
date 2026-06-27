@@ -75,6 +75,15 @@ struct AppleWatchWorkoutTarget: WorkoutSyncTarget {
         }
     }
 
+    // `scheduledWorkouts` is scoped to plans TriGenius itself scheduled, so anything
+    // not in the live set is one of ours that lost its backing plan — safe to remove.
+    func prune(keeping liveExternalIds: Set<String>) async {
+        for s in await WorkoutScheduler.shared.scheduledWorkouts
+        where !liveExternalIds.contains(s.plan.id.uuidString) {
+            await WorkoutScheduler.shared.remove(s.plan, at: s.date)
+        }
+    }
+
     /// Schedule for the morning of the target day.
     private static func dateComponents(from ymd: String) -> DateComponents? {
         guard let date = DateFormatter.ymd.date(from: ymd) else { return nil }

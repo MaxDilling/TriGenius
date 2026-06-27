@@ -842,6 +842,18 @@ final class TrainingDataStore {
         return Set(plans.compactMap { $0.externalRefs[target] })
     }
 
+    /// Every external id still referenced for `target` by a planned row (any
+    /// source) — the live set `reconcileWriteTarget` keeps when pruning. Anything a
+    /// target has scheduled outside this set is an orphan: a plan since deleted, or a
+    /// ref lost to a store reset. Folded completed rows keep `isPlanned`, so a
+    /// finished workout's ref is retained and never pruned mid-flight.
+    func liveExternalRefIds(target: String) -> Set<String> {
+        let plans = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
+            predicate: #Predicate { $0.isPlanned }
+        ))) ?? []
+        return Set(plans.compactMap { $0.externalRefs[target] })
+    }
+
     /// Record (or clear) a plan's external id for a write target.
     func setExternalRef(id: String, target: String, externalId: String?) {
         guard let r = (try? context.fetch(
