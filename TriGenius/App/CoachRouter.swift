@@ -14,7 +14,7 @@ import SwiftUI
 @MainActor
 @Observable
 final class CoachRouter {
-    enum RootTab: Hashable { case dashboard, plan, coach, calendar }
+    enum RootTab: Hashable { case dashboard, plan, atp, coach, calendar }
 
     var selectedTab: RootTab = .dashboard
     /// Text to pre-fill into the chat input, awaiting consumption by the chat view.

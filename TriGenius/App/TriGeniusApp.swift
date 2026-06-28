@@ -40,6 +40,9 @@ struct TriGeniusApp: App {
     }
 
     private func setupBrain() async {
+        // The unit-test bundle is injected into this app as its host; skip the
+        // launch sync pipeline (network/HealthKit) so tests stay fast and offline.
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         // Allow notifications to present while the app is in the foreground —
         // without this, reminders fired from the Test Reminders screen are
         // silently suppressed by iOS.
@@ -126,6 +129,14 @@ struct RootTabView: View {
             .tag(CoachRouter.RootTab.plan)
             .tabItem {
                 Label("Plan", systemImage: "calendar.day.timeline.left")
+            }
+
+            NavigationStack {
+                ATPTabView()
+            }
+            .tag(CoachRouter.RootTab.atp)
+            .tabItem {
+                Label("ATP", systemImage: "chart.bar.xaxis")
             }
 
             NavigationStack {

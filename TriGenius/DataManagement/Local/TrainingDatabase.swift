@@ -398,12 +398,12 @@ final class TrainingDataStore {
 
     private init() {
         do {
-            container = try ModelContainer(for: WorkoutRecord.self, PerformanceMetricRecord.self)
+            container = try ModelContainer(for: WorkoutRecord.self, PerformanceMetricRecord.self, ATPConfig.self, ATPEvent.self, ATPWeekOverride.self)
         } catch {
             // An in-memory fallback keeps the app usable even if the on-disk
             // store can't be opened (e.g. an incompatible migration).
             let config = ModelConfiguration(isStoredInMemoryOnly: true)
-            container = try! ModelContainer(for: WorkoutRecord.self, PerformanceMetricRecord.self, configurations: config)
+            container = try! ModelContainer(for: WorkoutRecord.self, PerformanceMetricRecord.self, ATPConfig.self, ATPEvent.self, ATPWeekOverride.self, configurations: config)
         }
     }
 
@@ -1193,5 +1193,124 @@ extension WorkoutRecord {
         if let externalId { refs[target] = externalId } else { refs.removeValue(forKey: target) }
         externalRefsJSON = (try? JSONSerialization.data(withJSONObject: refs))
             .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    }
+}
+
+// MARK: - Annual Training Plan (ATP) store API
+//
+// Only inputs persist: a singleton config, the events, and sparse per-week
+// overrides (see `ATPModels.swift`). Reads return Sendable DTOs for the pure
+// engine; every mutation posts `trainingDataDidChange` so derived views recompute.
+// Kept in this file so the API can reach the store's private `context` /
+// `markChanged()`. ATP is plan config, not time-series, so `deleteAllData()`
+// leaves it intact.
+extension TrainingDataStore {
+
+    // MARK: Config (singleton)
+
+    private func atpConfigRecord() -> ATPConfig? {
+        try? context.fetch(FetchDescriptor<ATPConfig>()).first
+    }
+
+    /// The ATP config as a DTO, or nil when no plan exists yet.
+    func atpParams() -> ATPParams? {
+        atpConfigRecord().map {
+            ATPParams(startDate: $0.startDate, startingCTL: $0.startingCTL,
+                      methodology: $0.methodology, recoveryCycle: $0.recoveryCycle,
+                      maxRampRate: $0.maxRampRate, weeklyAverageTSS: $0.weeklyAverageTSS)
+        }
+    }
+
+    /// Create or update the singleton ATP config.
+    func saveATPParams(_ p: ATPParams) {
+        let record: ATPConfig
+        if let existing = atpConfigRecord() {
+            record = existing
+        } else {
+            record = ATPConfig(startDate: p.startDate, methodology: p.methodology)
+            context.insert(record)
+        }
+        record.startDate = p.startDate
+        record.startingCTL = p.startingCTL
+        record.methodology = p.methodology
+        record.recoveryCycle = p.recoveryCycle
+        record.maxRampRate = p.maxRampRate
+        record.weeklyAverageTSS = p.weeklyAverageTSS
+        try? context.save()
+        markChanged()
+    }
+
+    // MARK: Events
+
+    /// All ATP events, ascending by date.
+    func atpEvents() -> [ATPEventInput] {
+        let descriptor = FetchDescriptor<ATPEvent>(sortBy: [SortDescriptor(\.date, order: .forward)])
+        return ((try? context.fetch(descriptor)) ?? []).map {
+            ATPEventInput(id: $0.id, name: $0.name, date: $0.date, eventType: $0.eventType,
+                          priority: $0.priority, targetCTL: $0.targetCTL, notes: $0.notes)
+        }
+    }
+
+    /// Insert a new event or update the existing one with the same id.
+    func upsertATPEvent(_ e: ATPEventInput) {
+        let id = e.id
+        if let record = (try? context.fetch(
+            FetchDescriptor<ATPEvent>(predicate: #Predicate { $0.id == id })))?.first {
+            record.name = e.name
+            record.date = e.date
+            record.eventType = e.eventType
+            record.priority = e.priority
+            record.targetCTL = e.targetCTL
+            record.notes = e.notes
+        } else {
+            context.insert(ATPEvent(id: e.id, name: e.name, date: e.date, eventType: e.eventType,
+                                    priority: e.priority, targetCTL: e.targetCTL, notes: e.notes))
+        }
+        try? context.save()
+        markChanged()
+    }
+
+    /// Remove an event by id. No-op if it's gone.
+    func deleteATPEvent(id: String) {
+        guard let record = (try? context.fetch(
+            FetchDescriptor<ATPEvent>(predicate: #Predicate { $0.id == id })))?.first else { return }
+        context.delete(record)
+        try? context.save()
+        markChanged()
+    }
+
+    // MARK: Week overrides (sparse)
+
+    /// All week overrides, ascending by week.
+    func atpOverrides() -> [ATPWeekOverrideInput] {
+        let descriptor = FetchDescriptor<ATPWeekOverride>(sortBy: [SortDescriptor(\.weekStart, order: .forward)])
+        return ((try? context.fetch(descriptor)) ?? []).map {
+            ATPWeekOverrideInput(weekStart: $0.weekStart, pinnedTSS: $0.pinnedTSS, note: $0.note)
+        }
+    }
+
+    /// Pin a week's TSS (0 = rest/vacation), upserting by week start. The week is
+    /// snapped to its Monday so the key is stable regardless of the day passed in.
+    func setATPOverride(weekStart: Date, pinnedTSS: Double, note: String = "") {
+        let monday = TrainingVolume.weekStart(of: weekStart)
+        if let existing = (try? context.fetch(
+            FetchDescriptor<ATPWeekOverride>(predicate: #Predicate { $0.weekStart == monday })))?.first {
+            existing.pinnedTSS = pinnedTSS
+            existing.note = note
+        } else {
+            context.insert(ATPWeekOverride(weekStart: monday, pinnedTSS: pinnedTSS, note: note))
+        }
+        try? context.save()
+        markChanged()
+    }
+
+    /// Remove a week's pin. No-op if none.
+    func clearATPOverride(weekStart: Date) {
+        let monday = TrainingVolume.weekStart(of: weekStart)
+        guard let record = (try? context.fetch(
+            FetchDescriptor<ATPWeekOverride>(predicate: #Predicate { $0.weekStart == monday })))?.first else { return }
+        context.delete(record)
+        try? context.save()
+        markChanged()
     }
 }

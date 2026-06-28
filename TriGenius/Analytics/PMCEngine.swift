@@ -192,4 +192,42 @@ enum PMCEngine {
         )
         return PMCResult(points: result.points, forecast: forecast, snapshot: result.snapshot)
     }
+
+    // MARK: - Seeded simulation (ATP)
+
+    /// EWMA forward from an explicit anchor (date + seed CTL/ATL) over a daily TSS
+    /// map, one point per day through `end` (inclusive). Same EWMA core as
+    /// `compute`/`project`, just seeded explicitly instead of from history — the ATP
+    /// draws its plan-CTL curve from `(startDate, startingCTL)` over the planned TSS.
+    static func simulate(
+        anchorDate: Date,
+        ctl0: Double,
+        atl0: Double = 0,
+        dailyTSS: [Date: Double],
+        through end: Date
+    ) -> [PMCPoint] {
+        let cal = Calendar.current
+        var day = cal.startOfDay(for: anchorDate)
+        let endDay = cal.startOfDay(for: end)
+        guard day <= endDay else { return [] }
+        let aCTL = 1 - exp(-1 / ctlTimeConstant)
+        let aATL = 1 - exp(-1 / atlTimeConstant)
+        var ctl = ctl0, atl = atl0
+        var points = [PMCPoint(date: day, ctl: ctl, atl: atl, tsb: ctl - atl)]
+        while let next = cal.date(byAdding: .day, value: 1, to: day), next <= endDay {
+            day = next
+            let tss = dailyTSS[day] ?? 0
+            let tsb = ctl - atl
+            ctl += (tss - ctl) * aCTL
+            atl += (tss - atl) * aATL
+            points.append(PMCPoint(date: day, ctl: ctl, atl: atl, tsb: tsb))
+        }
+        return points
+    }
+
+    /// Pure detraining decay from an anchor with zero TSS ("if the athlete stops
+    /// training") — `simulate` with an empty plan.
+    static func decay(fromDate: Date, ctl0: Double, atl0: Double = 0, through end: Date) -> [PMCPoint] {
+        simulate(anchorDate: fromDate, ctl0: ctl0, atl0: atl0, dailyTSS: [:], through: end)
+    }
 }
