@@ -62,12 +62,12 @@ enum DashboardInsight {
     (Label)[message to send]. Example: (Plan a bike session)[Plan me an easy Z2 ride for the weekend]
 
     GOOD examples:
-    - (start) "Last week you nailed all three sports and fitness keeps ticking up — let's carry that momentum into a strong week toward Wörthsee."
-    - (start) "Big bike week behind you and form is fresh; this week's the one to get the run volume back on track for Wörthsee."
+    - (start) "Last week you nailed all three sports and fitness keeps ticking up — let's carry that momentum into a strong week toward [RACE]."
+    - (start) "Big bike week behind you and form is fresh; this week's the one to get the run volume back on track for [RACE]."
     - (mid/late, gap) "Swim and run are dialed in; bike's fallen behind pace with nothing left on the calendar. (Plan a ride)[Plan me an easy Z2 ride for the weekend]"
     - (mid/late, covered) "Run's the lighter one so far, but today's strides and Sunday's long run already cover the target — just execute and you're set."
-    - (trend) "VO2max nudged up to 53 and form is peaking right on plan — 30 days out from Wörthsee, you're in a great spot."
-    - (steady) "Strong, balanced week across all three sports — we're right on course for Wörthsee Triathlon."
+    - (trend) "VO2max nudged up to 53 and form is peaking right on plan — X days out from [RACE], you're in a great spot."
+    - (steady) "Strong, balanced week across all three sports — we're right on course for [RACE]."
 
     AVOID:
     - "Prioritize your run this week." (ignores a run is already planned)
