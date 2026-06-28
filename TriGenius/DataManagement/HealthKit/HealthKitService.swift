@@ -1,5 +1,6 @@
 import Foundation
 import HealthKit
+import CoreLocation
 
 // MARK: - HealthKit Service
 //
@@ -41,7 +42,8 @@ final class HealthKitService {
             HKQuantityType(.cyclingFunctionalThresholdPower),
             HKQuantityType(.vo2Max),
             HKQuantityType(.bodyMass),
-            HKCategoryType(.sleepAnalysis)
+            HKCategoryType(.sleepAnalysis),
+            HKSeriesType.workoutRoute()
         ]
 
         try await store.requestAuthorization(toShare: [], read: readTypes)
@@ -172,10 +174,11 @@ final class HealthKitService {
                 running["avg_cadence_spm"] = Int((steps / durationMin).rounded())
             }
             if let power = avg(.runningPower, .watt()) { running["avg_power_w"] = Int(power.rounded()) }
-            // Normalized pace (sec/km) for rTSS, from the running-speed (or distance)
-            // stream via the shared `NormalizedStream`. Left absent when no usable
-            // stream exists — never substituted with the average pace (that is a
-            // different number, not a normalized one). Grade ignored (future NGP).
+            // Normalized graded pace (sec/km) for rTSS — true NGP, from the running-speed
+            // (or distance) stream grade-adjusted via the GPS route, through the shared
+            // `GradeAdjustedPace` / `NormalizedStream`. Left absent when no usable stream
+            // exists — never substituted with the average pace (that is a different
+            // number, not a normalized one).
             if let normSpeed = try? await fetchNormalizedSpeed(during: workout), normSpeed > 0 {
                 running["normalized_pace_s_per_km"] = Self.round1(1000.0 / normSpeed)
             }
@@ -220,8 +223,8 @@ final class HealthKitService {
         return NormalizedStream.normalized(series.map { (value: $0.value, seconds: $0.duration) })
     }
 
-    /// Normalized speed (m/s) for a run, via the shared `NormalizedStream`. Nil when
-    /// no high-res signal exists (the caller then leaves the pace empty).
+    /// Normalized graded speed (m/s) for a run, via the shared `NormalizedStream`. Nil
+    /// when no high-res signal exists (the caller then leaves the pace empty).
     private func fetchNormalizedSpeed(during workout: HKWorkout) async throws -> Double? {
         NormalizedStream.normalized(try await speedStream(during: workout).samples)
     }
@@ -240,29 +243,105 @@ final class HealthKitService {
         return d
     }
 
-    /// Moving-speed samples for a run — each `value` (m/s) paired with the `seconds`
-    /// of real time it covers (its own measurement interval) — plus which stream they
-    /// came from: the device's running-speed series when present, else the distance
-    /// series turned into per-interval speed. Both carry HealthKit's own per-sample
-    /// interval, so the durations sum to MOVING time (the average's basis) and the
-    /// normalizer's window is real seconds. Stopped readings (≤ 0) are dropped: a
+    /// Grade-adjusted moving-speed samples for a run — each speed reading (m/s) turned
+    /// into its equivalent FLAT speed (`GradeAdjustedPace`, true NGP) and paired with
+    /// the `seconds` of real time it covers (its own measurement interval) — plus which
+    /// stream they came from: the device's running-speed series when present, else the
+    /// distance series turned into per-interval speed. Both carry HealthKit's own
+    /// per-sample interval, so the durations sum to MOVING time (the average's basis)
+    /// and the normalizer's window is real seconds. The gradient at each sample comes
+    /// from the GPS route (outdoor runs); without a route every grade is 0, so the
+    /// result reduces to plain normalized speed. Stopped readings (≤ 0) are dropped: a
     /// running pace is over moving time, and counting paused time pulls the normalized
     /// speed below the moving average (impossible for a real normalized value). Empty
     /// when neither stream exists.
     private func speedStream(during workout: HKWorkout) async throws
         -> (source: String, samples: [NormalizedStream.Sample]) {
         let mps = HKUnit.meter().unitDivided(by: .second())
-        let speed = try await quantityIntervalSeries(.runningSpeed, unit: mps, during: workout)
+        let running = try await quantityIntervalSeries(.runningSpeed, unit: mps, during: workout)
             .filter { $0.duration > 0 && $0.value > 0 }
-            .map { (value: $0.value, seconds: $0.duration) }
-        if !speed.isEmpty { return ("runningSpeed", speed) }
+        let source: String
+        let raw: [(start: Date, speed: Double, seconds: Double)]
+        if !running.isEmpty {
+            source = "runningSpeed"
+            raw = running.map { (start: $0.start, speed: $0.value, seconds: $0.duration) }
+        } else {
+            // No speed series: per-interval speed from the distance stream (a paused
+            // interval covers ~0 distance → ~0 speed → dropped by the same moving filter).
+            source = "distanceWalkingRunning"
+            raw = try await quantityIntervalSeries(.distanceWalkingRunning, unit: .meter(), during: workout)
+                .filter { $0.duration > 0 && $0.value > 0 }
+                .map { (start: $0.start, speed: $0.value / $0.duration, seconds: $0.duration) }
+        }
+        guard !raw.isEmpty else { return (source, []) }
 
-        // No speed series: per-interval speed from the distance stream (a paused
-        // interval covers ~0 distance → ~0 speed → dropped by the same moving filter).
-        let derived = try await quantityIntervalSeries(.distanceWalkingRunning, unit: .meter(), during: workout)
-            .filter { $0.duration > 0 && $0.value > 0 }
-            .map { (value: $0.value / $0.duration, seconds: $0.duration) }
-        return ("distanceWalkingRunning", derived)
+        let grades = (try? await routeGradeSegments(during: workout)) ?? []
+        let paired = raw.map {
+            (speed: $0.speed, grade: Self.grade(at: $0.start, in: grades), seconds: $0.seconds)
+        }
+        return (source + (grades.isEmpty ? "" : "+route"), GradeAdjustedPace.adjusted(paired))
+    }
+
+    /// Per-segment gradient (rise/run, fraction) along the GPS route — each segment spans
+    /// its two route points' timestamps and carries the de-noised
+    /// `GradeAdjustedPace.smoothedGrades` value (central difference over a fixed horizontal
+    /// span, not the raw point-to-point delta, which GPS/barometer noise would bias upward
+    /// through the convex cost factor). Empty for indoor runs (no route).
+    private func routeGradeSegments(during workout: HKWorkout) async throws -> [(start: Date, end: Date, grade: Double)] {
+        let locations = try await routeLocations(during: workout).sorted { $0.timestamp < $1.timestamp }
+        guard locations.count >= 2 else { return [] }
+        var distance = [0.0]
+        var altitude = [locations[0].altitude]
+        for i in 1..<locations.count {
+            distance.append(distance[i - 1] + locations[i].distance(from: locations[i - 1]))
+            altitude.append(locations[i].altitude)
+        }
+        let grades = GradeAdjustedPace.smoothedGrades(distance: distance, altitude: altitude)
+        return (1..<locations.count).map {
+            (start: locations[$0 - 1].timestamp, end: locations[$0].timestamp, grade: grades[$0])
+        }
+    }
+
+    /// Gradient of the route segment covering `time` (0 when none — e.g. a sample before
+    /// the GPS lock). `segments` are sorted, non-overlapping; binary-search the last one
+    /// starting at/before `time`.
+    private static func grade(at time: Date, in segments: [(start: Date, end: Date, grade: Double)]) -> Double {
+        guard !segments.isEmpty else { return 0 }
+        var lo = 0, hi = segments.count - 1, found = -1
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if segments[mid].start <= time { found = mid; lo = mid + 1 } else { hi = mid - 1 }
+        }
+        guard found >= 0, time <= segments[found].end else { return 0 }
+        return segments[found].grade
+    }
+
+    /// The workout's GPS route as `CLLocation`s (altitude + timestamp), via the
+    /// `workoutRoute` series sample. Empty when the workout has no route (indoor).
+    private func routeLocations(during workout: HKWorkout) async throws -> [CLLocation] {
+        let routes: [HKWorkoutRoute] = try await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(sampleType: HKSeriesType.workoutRoute(),
+                                      predicate: HKQuery.predicateForObjects(from: workout),
+                                      limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, error in
+                if let error { continuation.resume(throwing: error); return }
+                continuation.resume(returning: (samples as? [HKWorkoutRoute]) ?? [])
+            }
+            store.execute(query)
+        }
+        guard let route = routes.first else { return [] }
+        return try await withCheckedThrowingContinuation { continuation in
+            var collected: [CLLocation] = []
+            var didResume = false
+            let query = HKWorkoutRouteQuery(route: route) { _, locations, done, error in
+                if let error {
+                    if !didResume { didResume = true; continuation.resume(throwing: error) }
+                    return
+                }
+                if let locations { collected.append(contentsOf: locations) }
+                if done, !didResume { didResume = true; continuation.resume(returning: collected) }
+            }
+            store.execute(query)
+        }
     }
 
     /// Like `quantitySeries`, but keeps each point's interval duration — needed to
@@ -275,7 +354,7 @@ final class HealthKitService {
     /// back to the time range for older/third-party workouts that don't associate their
     /// samples with the workout (else the scoped query is empty).
     private func quantityIntervalSeries(_ id: HKQuantityTypeIdentifier, unit: HKUnit,
-                                        during workout: HKWorkout) async throws -> [(duration: TimeInterval, value: Double)] {
+                                        during workout: HKWorkout) async throws -> [(start: Date, duration: TimeInterval, value: Double)] {
         let scoped = try await intervalSeries(id, unit: unit, predicate: HKQuery.predicateForObjects(from: workout))
         if !scoped.isEmpty { return scoped }
         return try await intervalSeries(id, unit: unit,
@@ -283,10 +362,10 @@ final class HealthKitService {
     }
 
     private func intervalSeries(_ id: HKQuantityTypeIdentifier, unit: HKUnit,
-                                predicate: NSPredicate) async throws -> [(duration: TimeInterval, value: Double)] {
+                                predicate: NSPredicate) async throws -> [(start: Date, duration: TimeInterval, value: Double)] {
         let type = HKQuantityType(id)
         return try await withCheckedThrowingContinuation { continuation in
-            var collected: [(duration: TimeInterval, value: Double)] = []
+            var collected: [(start: Date, duration: TimeInterval, value: Double)] = []
             var didResume = false
             let query = HKQuantitySeriesSampleQuery(quantityType: type, predicate: predicate) {
                 _, quantity, dateInterval, _, done, error in
@@ -295,7 +374,7 @@ final class HealthKitService {
                     return
                 }
                 if let quantity, let dateInterval {
-                    collected.append((dateInterval.duration, quantity.doubleValue(for: unit)))
+                    collected.append((dateInterval.start, dateInterval.duration, quantity.doubleValue(for: unit)))
                 }
                 if done, !didResume {
                     didResume = true

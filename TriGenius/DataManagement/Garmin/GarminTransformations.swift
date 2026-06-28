@@ -152,13 +152,70 @@ nonisolated enum GarminTransform {
         metricSegments(details, key: "directPower")
     }
 
-    /// Normalized speed (m/s) — the pace analogue of normalized power. Shapes the
-    /// 1 Hz `directSpeed` stream into samples (each covering 1 s), then defers the math
-    /// to the shared `NormalizedStream`. Grade is ignored (a future NGP refinement,
-    /// see FEATURES.md).
+    /// Normalized graded speed (m/s) — true NGP, the pace analogue of normalized power.
+    /// Shapes the 1 Hz `directSpeed` stream into (speed, grade, 1 s) samples, then
+    /// defers the grade adjustment + math to the shared `GradeAdjustedPace` /
+    /// `NormalizedStream`. Grade-less runs (no `directGrade`/`directElevation`) reduce
+    /// to plain normalized speed.
     static func normalizedSpeedMps(_ details: [String: Any]) -> Double? {
-        let samples = metricSegments(details, key: "directSpeed").flatMap { $0 }.filter { $0 >= 0 }
-        return NormalizedStream.normalized(samples.map { (value: $0, seconds: 1.0) })
+        let samples = gradedSpeedSamples(details)
+        guard !samples.isEmpty else { return nil }
+        return NormalizedStream.normalized(GradeAdjustedPace.adjusted(samples))
+    }
+
+    /// Walk the activity-detail rows once into index-aligned `directSpeed` samples (m/s,
+    /// 1 s) and their gradient: `directGrade` (percent) per row when present — Garmin
+    /// pre-smooths it — else the de-noised `GradeAdjustedPace.smoothedGrades` over the
+    /// `directElevation`/`sumDistance` series (last values carried across the odd missing
+    /// row), else flat.
+    private static func gradedSpeedSamples(_ details: [String: Any]) -> [(speed: Double, grade: Double, seconds: Double)] {
+        guard let descriptors = details["metricDescriptors"] as? [[String: Any]],
+              let rows = details["activityDetailMetrics"] as? [[String: Any]],
+              !descriptors.isEmpty, !rows.isEmpty else { return [] }
+
+        var indexes: [String: Int] = [:]
+        for d in descriptors {
+            if let k = d["key"] as? String, let idx = d["metricsIndex"] as? Int { indexes[k] = idx }
+        }
+        guard let speedIdx = indexes["directSpeed"] else { return [] }
+        let gradeIdx = indexes["directGrade"]
+        let elevIdx = indexes["directElevation"]
+        let distIdx = indexes["sumDistance"]
+        let haveElevation = elevIdx != nil && distIdx != nil
+
+        func value(_ metrics: [Any], _ idx: Int?) -> Double? {
+            guard let idx, idx < metrics.count else { return nil }
+            return (metrics[idx] as? NSNumber)?.doubleValue
+        }
+
+        var speeds: [Double] = []
+        var directGrades: [Double] = []
+        var elevations: [Double] = []
+        var distances: [Double] = []
+        var lastElevation = 0.0, lastDistance = 0.0
+
+        for row in rows {
+            guard let metrics = row["metrics"] as? [Any],
+                  let speed = value(metrics, speedIdx), speed >= 0 else { continue }
+            speeds.append(speed)
+            if let g = value(metrics, gradeIdx) { directGrades.append(g / 100.0) }
+            if haveElevation {
+                lastElevation = value(metrics, elevIdx) ?? lastElevation
+                lastDistance = value(metrics, distIdx) ?? lastDistance
+                elevations.append(lastElevation); distances.append(lastDistance)
+            }
+        }
+        guard !speeds.isEmpty else { return [] }
+
+        let grades: [Double]
+        if directGrades.count == speeds.count {
+            grades = directGrades
+        } else if haveElevation {
+            grades = GradeAdjustedPace.smoothedGrades(distance: distances, altitude: elevations)
+        } else {
+            grades = Array(repeating: 0, count: speeds.count)
+        }
+        return zip(speeds, grades).map { (speed: $0, grade: $1, seconds: 1.0) }
     }
 
     /// Flatten a swim's lap DTOs into the ACTIVE pool lengths (idle/rest lengths

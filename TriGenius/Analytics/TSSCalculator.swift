@@ -15,7 +15,7 @@ import Foundation
 //     sport: String                         · duration_minutes: Number
 //     hr_zones_seconds: {z1…z5: seconds}    (HR fallback)
 //     cycling.normalized_power_w: Number    (bike)
-//     running.normalized_pace_s_per_km: Number   (run; normalized, grade ignored)
+//     running.normalized_pace_s_per_km: Number   (run; normalized, grade-adjusted NGP)
 //     swimming.cleaned_distance_m: Number   · swimming.swim_time_s: Number  (swim)
 //
 // Dispatch: bike → power, run/swim → pace, everything else → HR zone-load. Each
