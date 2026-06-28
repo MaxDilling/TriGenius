@@ -24,6 +24,8 @@ struct TrainingDetailView: View {
     @State private var showDistanceEdit = false
     @State private var distanceInput = ""
     @State private var showDeleteConfirm = false
+    @State private var showUnlinkConfirm = false
+    @State private var showIgnoreConfirm = false
     @Environment(\.dismiss) private var dismiss
 
     private var family: SportFamily { SportFamily(sportKey: record.sport) }
@@ -35,6 +37,18 @@ struct TrainingDetailView: View {
         return obj
     }
     private var isHealthKit: Bool { record.source == "healthkit" }
+
+    /// Open plans this standalone completed activity could be linked to (same day +
+    /// sport family). Empty unless the row is a standalone completed activity.
+    private var linkCandidates: [WorkoutRecord] {
+        guard record.isCompleted, !record.isPlanned else { return [] }
+        return TrainingDataStore.shared.openPlansMatching(activity: record)
+    }
+
+    private func planMenuLabel(_ plan: WorkoutRecord) -> String {
+        guard plan.targetDurationMinutes > 0 else { return plan.name }
+        return "\(plan.name) · \(Int(plan.targetDurationMinutes)) min"
+    }
 
     var body: some View {
         ScrollView {
@@ -60,6 +74,38 @@ struct TrainingDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
+            if record.isPlanned, record.isCompleted {
+                ToolbarItem(placement: .primaryAction) {
+                    Button { showUnlinkConfirm = true } label: {
+                        Label("Unlink actual", systemImage: "personalhotspot.slash")
+                    }
+                }
+            }
+            if !linkCandidates.isEmpty {
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        ForEach(linkCandidates, id: \.id) { plan in
+                            Button {
+                                TrainingDataStore.shared.linkActual(activityId: record.id, toPlanId: plan.id)
+                                dismiss()
+                            } label: {
+                                Text(planMenuLabel(plan))
+                            }
+                        }
+                    } label: {
+                        Label("Link to planned workout", systemImage: "link.badge.plus")
+                    }
+                }
+            }
+            if record.isCompleted, !record.isPlanned {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(role: .destructive) {
+                        showIgnoreConfirm = true
+                    } label: {
+                        Label("Ignore workout", systemImage: "eye.slash")
+                    }
+                }
+            }
             if debugModeEnabled {
                 ToolbarItem(placement: .primaryAction) {
                     Button(action: exportDebugJSON) {
@@ -83,6 +129,24 @@ struct TrainingDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Removes the stored row. A full re-sync of its source re-creates it — use this to verify the sync rebuilds the record.")
+        }
+        .confirmationDialog("Unlink this activity from its plan?", isPresented: $showUnlinkConfirm, titleVisibility: .visible) {
+            Button("Unlink", role: .destructive) {
+                TrainingDataStore.shared.unlinkActual(planId: record.id)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Splits this row into the open plan and a standalone activity, so you can link the correct activity to the plan.")
+        }
+        .confirmationDialog("Ignore this workout?", isPresented: $showIgnoreConfirm, titleVisibility: .visible) {
+            Button("Ignore", role: .destructive) {
+                TrainingDataStore.shared.ignoreActivity(id: record.id)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Removes this workout and stops it from re-syncing — for a duplicate recorded on another device. Restore it anytime from Settings → Ignored workouts.")
         }
         .task { await loadHeartRate() }
         .sheet(item: $exportFile) { file in ShareSheet(items: [file.url]) }

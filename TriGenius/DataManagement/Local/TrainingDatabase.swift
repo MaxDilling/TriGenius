@@ -459,22 +459,39 @@ final class TrainingDataStore {
     func ingest(_ activities: [IngestedActivity]) {
         guard !activities.isEmpty else { return }
         let history = performanceHistory()
+        let ignored = IgnoredWorkouts.ids
         for a in activities {
+            // Blacklisted by the athlete → never give it a row (so it stays gone from
+            // every surface and never re-syncs). Checked before scoring/folding.
+            if ignored.contains(a.id) { continue }
             let scored = Self.score(a, history: history)
-            // 1) An existing row already keyed by this activity id → update in place.
             let id = a.id
+            // 1) Already folded into a completed plan (its actuals live on the plan
+            // row, keyed by `completedRef` — not by this id) → refresh that plan and
+            // drop any stray standalone with this id, never re-insert. Checked before
+            // the id-match so that a duplicate the old fold path left behind self-heals;
+            // without it a same-day re-sync re-creates the standalone the fold absorbed.
+            if let plan = foldedPlan(forActivityId: id, on: a.date) {
+                Self.applyCompleted(scored, of: a, to: plan)
+                if let stray = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
+                    predicate: #Predicate { $0.id == id && !$0.isPlanned })))?.first {
+                    context.delete(stray)
+                }
+                continue
+            }
+            // 2) An existing row already keyed by this activity id → update in place.
             if let record = (try? context.fetch(
                 FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.id == id })))?.first {
                 Self.applyCompleted(scored, of: a, to: record)
                 continue
             }
-            // 2) Otherwise try to fold it into a matching open plan.
+            // 3) Otherwise try to fold it into a matching open plan.
             if let plan = matchingOpenPlan(for: a) {
                 Self.applyCompleted(scored, of: a, to: plan)
                 plan.setExternalRef(target: Self.completedRefKey, externalId: a.id)
                 continue
             }
-            // 3) Else insert a fresh completed-only row.
+            // 4) Else insert a fresh completed-only row.
             let rec = WorkoutRecord(
                 id: a.id, source: a.source, date: a.date, sport: a.sport, name: a.name,
                 startMinute: WorkoutRecord.clockMinute(fromDetails: scored.detailsJSON),
@@ -541,6 +558,18 @@ final class TrainingDataStore {
     private static func startGap(_ a: Int?, _ b: Int?) -> Int {
         guard let a, let b else { return Int.max / 2 }
         return abs(a - b)
+    }
+
+    /// The completed plan that already absorbed the activity `id` (folded, so its
+    /// actuals live on the plan via `completedRef`). `externalRefs` is JSON-decoded,
+    /// so it can't be a `#Predicate`; the day filter (the fold is same-day) bounds the
+    /// scan. Used by ingest to refresh rather than duplicate an already-folded actual.
+    private func foldedPlan(forActivityId id: String, on date: Date) -> WorkoutRecord? {
+        let day = Calendar.current.startOfDay(for: date)
+        let plans = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
+            predicate: #Predicate { $0.isPlanned && $0.isCompleted && $0.date == day }
+        ))) ?? []
+        return plans.first { $0.externalRefs[Self.completedRefKey] == id }
     }
 
     /// `externalRefs` key holding the completed activity a plan was linked to
@@ -752,6 +781,14 @@ final class TrainingDataStore {
         guard let activity = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
             predicate: #Predicate { $0.id == standaloneId && $0.isCompleted && !$0.isPlanned }
         )))?.first else { return }
+        fold(activity: activity, into: plan)
+    }
+
+    /// Fold a standalone completed `activity` into an open `plan`: copy its actuals
+    /// onto the plan, link it (`completedRef`) and drop the standalone — the single
+    /// place a separate completed row collapses into its plan, shared by the
+    /// calendar-driven `foldStandaloneCompleted` and the manual `linkActual`.
+    private func fold(activity: WorkoutRecord, into plan: WorkoutRecord) {
         plan.isCompleted = true
         plan.durationMinutes = activity.durationMinutes
         plan.distanceKm = activity.distanceKm
@@ -760,7 +797,77 @@ final class TrainingDataStore {
         plan.anaerobicTE = activity.anaerobicTE
         plan.detailsJSON = activity.detailsJSON
         if plan.startMinute == nil { plan.startMinute = activity.startMinute }
+        plan.setExternalRef(target: Self.completedRefKey, externalId: activity.id)
         context.delete(activity)
+    }
+
+    // MARK: - Manual pairing override
+    //
+    // The automatic ingest fold pairs a completed activity to a plan by the
+    // provider's explicit link or a same-day/same-sport/nearest-start heuristic.
+    // When that heuristic picks the wrong actual — e.g. a plan run on the Apple
+    // Watch but a parallel Garmin session ingested first — these two let the
+    // athlete correct it by hand: split the wrong pairing, then attach the right
+    // activity.
+
+    /// Split a folded plan row (`isPlanned && isCompleted`) back into an open plan
+    /// and a standalone completed activity. The actual is re-materialized as its own
+    /// row keyed by the completion id (`externalRefs["completed"]`), so it is
+    /// preserved and re-upserts in place on the next provider sync (which re-heals
+    /// the source/name the plan overrode at fold time); the plan returns to open.
+    /// No-op unless the row is a folded plan carrying a completion link.
+    func unlinkActual(planId: String) {
+        guard let plan = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
+                  predicate: #Predicate { $0.id == planId && $0.isPlanned && $0.isCompleted }
+              )))?.first,
+              let activityId = plan.externalRefs[Self.completedRefKey] else { return }
+        let activity = WorkoutRecord(
+            id: activityId,
+            source: activityId.components(separatedBy: ":").first ?? plan.source,
+            date: plan.date, sport: plan.sport, name: plan.name,
+            startMinute: WorkoutRecord.clockMinute(fromDetails: plan.detailsJSON),
+            isCompleted: true,
+            durationMinutes: plan.durationMinutes, distanceKm: plan.distanceKm,
+            tss: plan.tss, aerobicTE: plan.aerobicTE, anaerobicTE: plan.anaerobicTE,
+            detailsJSON: plan.detailsJSON
+        )
+        context.insert(activity)
+        plan.isCompleted = false
+        plan.durationMinutes = 0
+        plan.distanceKm = 0
+        plan.tss = nil
+        plan.aerobicTE = nil
+        plan.anaerobicTE = nil
+        plan.detailsJSON = ""
+        plan.setExternalRef(target: Self.completedRefKey, externalId: nil)
+        try? context.save()
+        markChanged()
+    }
+
+    /// Fold a standalone completed activity into an open plan by hand — the
+    /// athlete-driven counterpart to the automatic ingest fold. No-op unless the
+    /// activity is a standalone completed row and the target an open plan.
+    func linkActual(activityId: String, toPlanId planId: String) {
+        guard let activity = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
+                  predicate: #Predicate { $0.id == activityId && $0.isCompleted && !$0.isPlanned }
+              )))?.first,
+              let plan = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
+                  predicate: #Predicate { $0.id == planId && $0.isPlanned && !$0.isCompleted }
+              )))?.first else { return }
+        fold(activity: activity, into: plan)
+        try? context.save()
+        markChanged()
+    }
+
+    /// Open plans (`isPlanned && !isCompleted`) on the same day and sport family as
+    /// `activity` — the candidates the detail view offers for a manual link.
+    func openPlansMatching(activity: WorkoutRecord) -> [WorkoutRecord] {
+        let day = Calendar.current.startOfDay(for: activity.date)
+        let plans = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
+            predicate: #Predicate { $0.isPlanned && !$0.isCompleted && $0.date == day }
+        ))) ?? []
+        let family = SportFamily(sportKey: activity.sport)
+        return plans.filter { SportFamily(sportKey: $0.sport) == family }
     }
 
     /// Planned workouts in `[from, to]` that are still outstanding (not yet
@@ -945,6 +1052,27 @@ final class TrainingDataStore {
         try? context.save()
         markChanged()
         return true
+    }
+
+    /// Blacklist a completed activity and drop its row — `ingest` then skips this id
+    /// on every future sync, so the workout stays hidden (see `IgnoredWorkouts`). For
+    /// a duplicate session recorded on a second device. No-op if the row is missing.
+    func ignoreActivity(id: String) {
+        guard let record = (try? context.fetch(
+            FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.id == id })))?.first else { return }
+        IgnoredWorkouts.add(IgnoredWorkout(
+            id: record.id, name: record.name, date: record.date,
+            sport: record.sport, source: record.source))
+        context.delete(record)
+        try? context.save()
+        markChanged()
+    }
+
+    /// Remove a workout from the blacklist. The row reappears on the next full
+    /// re-sync of its source (the caller triggers that — an incremental sync won't
+    /// re-fetch past its watermark).
+    func restoreIgnoredWorkout(id: String) {
+        IgnoredWorkouts.remove(id: id)
     }
 
     /// Replace all `source`-originated OPEN plans within `[from, to]` with a fresh

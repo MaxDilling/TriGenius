@@ -425,6 +425,11 @@ struct SettingsView: View {
                         Label("Reports", systemImage: "exclamationmark.bubble")
                     }
                 }
+                NavigationLink {
+                    IgnoredWorkoutsView()
+                } label: {
+                    Label("Ignored workouts", systemImage: "eye.slash")
+                }
                 Button(role: .destructive) {
                     showClearDataConfirm = true
                 } label: {
