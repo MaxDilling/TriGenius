@@ -11,7 +11,16 @@ actor GarminClient {
 
     private let host = "https://connectapi.garmin.com"
     private let auth = GarminAuth.shared
-    private let session = URLSession(configuration: .default)
+    // Live reads must always hit the network: the activity-list GET is a fixed
+    // URL, so the default URLCache would serve a stale list within a running
+    // process and a freshly-synced activity would only surface after a restart.
+    // The store is our real cache; HTTP caching buys nothing here.
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil
+        return URLSession(configuration: config)
+    }()
 
     private var cachedDisplayName: String?
 
