@@ -11,7 +11,6 @@ import Foundation
 struct DashboardContext {
     let readSources: Set<DataSource>
     let weeklyStructure: WeeklyStructure
-    let trainingPlan: TrainingPlan
     let makeBackend: () -> LLMBackend
 }
 
@@ -75,6 +74,7 @@ final class DashboardViewModel {
         let records = store.activities() // newest first
         pmc = PMCEngine.current()
         weeklyBuckets = TrainingVolume.weeklyBuckets(records: records)
+        let atpPlan = ATPEngine.current()
 
         // This week's planned workouts drive the per-discipline targets.
         let cal = Calendar.current
@@ -84,7 +84,7 @@ final class DashboardViewModel {
         targets = WeeklyTargets.targets(
             scheduled: weekScheduled,
             weeklyStructure: context.weeklyStructure,
-            plan: context.trainingPlan
+            atpPlan: atpPlan
         )
         projections = WeeklyTargets.projection(store: store)
 
@@ -138,7 +138,7 @@ final class DashboardViewModel {
             targets: targets,
             projections: projections,
             weeklyStructure: context.weeklyStructure,
-            plan: context.trainingPlan
+            atpPlan: ATPEngine.current()
         )
 
         if let cached = DashboardInsight.cached(signature: signature) {
@@ -198,6 +198,7 @@ final class DashboardViewModel {
         let store = TrainingDataStore.shared
         let pmc = PMCEngine.current()
         let weeklyBuckets = TrainingVolume.weeklyBuckets(records: store.activities())
+        let atpPlan = ATPEngine.current()
 
         let cal = Calendar.current
         let weekStart = TrainingVolume.weekStart(of: Date())
@@ -205,7 +206,7 @@ final class DashboardViewModel {
         let targets = WeeklyTargets.targets(
             scheduled: store.scheduledWorkouts(from: weekStart, to: weekEnd),
             weeklyStructure: context.weeklyStructure,
-            plan: context.trainingPlan
+            atpPlan: atpPlan
         )
         let projections = WeeklyTargets.projection(store: store)
 
@@ -216,7 +217,7 @@ final class DashboardViewModel {
             targets: targets,
             projections: projections,
             weeklyStructure: context.weeklyStructure,
-            plan: context.trainingPlan
+            atpPlan: atpPlan
         )
         return """
         ===== SYSTEM PROMPT =====

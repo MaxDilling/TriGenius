@@ -23,6 +23,83 @@ enum ATPEventPriority: String, Codable, Sendable, CaseIterable {
     case c = "C"
 }
 
+/// Sport family an event belongs to. Picks which `ATPEventType` options apply;
+/// derived from the chosen type, never stored on its own.
+enum ATPEventDiscipline: String, Codable, Sendable, CaseIterable {
+    case triathlon, cycling, running, other
+
+    var label: String {
+        switch self {
+        case .triathlon: "Triathlon"
+        case .cycling: "Cycling"
+        case .running: "Running"
+        case .other: "Other"
+        }
+    }
+}
+
+/// Specific event type within a discipline — TrainingPeaks' per-discipline lists
+/// (ATP_TODO Appendix B). The duration bucket the suggested-volume helper keys on.
+enum ATPEventType: String, Codable, Sendable, CaseIterable {
+    // Triathlon
+    case triSprint = "tri_sprint"
+    case triOlympic = "tri_olympic"
+    case triHalf = "tri_half"
+    case triFull = "tri_full"
+    // Cycling
+    case roadRace = "road_race"
+    case century = "century"
+    case gravelFondo = "gravel_fondo"
+    case mtbXCO = "mtb_xco"
+    case mtbMarathon = "mtb_marathon"
+    case mtbUltra = "mtb_ultra"
+    // Running
+    case run5k10k = "run_5k_10k"
+    case halfMarathon = "half_marathon"
+    case marathon = "marathon"
+    case ultra = "ultra"
+    // Other (by "A" race duration)
+    case otherUpTo3h = "other_up_to_3h"
+    case other3to8h = "other_3_to_8h"
+    case other8hPlus = "other_8h_plus"
+
+    var discipline: ATPEventDiscipline {
+        switch self {
+        case .triSprint, .triOlympic, .triHalf, .triFull: .triathlon
+        case .roadRace, .century, .gravelFondo, .mtbXCO, .mtbMarathon, .mtbUltra: .cycling
+        case .run5k10k, .halfMarathon, .marathon, .ultra: .running
+        case .otherUpTo3h, .other3to8h, .other8hPlus: .other
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .triSprint: "Sprint"
+        case .triOlympic: "Olympic"
+        case .triHalf: "Half-Distance"
+        case .triFull: "Full-Distance"
+        case .roadRace: "Road Racing"
+        case .century: "Century / Metric"
+        case .gravelFondo: "Gravel / Fondo"
+        case .mtbXCO: "MTB XCO"
+        case .mtbMarathon: "MTB Marathon"
+        case .mtbUltra: "MTB Ultra"
+        case .run5k10k: "5k–10k"
+        case .halfMarathon: "Half-Marathon"
+        case .marathon: "Marathon"
+        case .ultra: "Ultra"
+        case .otherUpTo3h: "Up to 3h"
+        case .other3to8h: "3–8h"
+        case .other8hPlus: "8h+"
+        }
+    }
+
+    /// The types belonging to a discipline, in declaration order.
+    static func types(in discipline: ATPEventDiscipline) -> [ATPEventType] {
+        allCases.filter { $0.discipline == discipline }
+    }
+}
+
 /// Singleton ATP config — "the thing that computes target TSS". One athlete ⇒ one
 /// plan, so there is at most one row (no name / active flag); the constant unique
 /// `id` makes that structural. No `endDate`: the horizon rolls to the last event.
@@ -63,15 +140,15 @@ final class ATPEvent {
     var name: String
     /// Event day (start of day, local).
     var date: Date
-    /// Raw event-type token (Appendix C list).
-    var eventType: String
+    /// Discipline + duration bucket; its `discipline` drives the suggested-volume helper.
+    var eventType: ATPEventType
     var priority: ATPEventPriority
     /// Target CTL on the event day (target-CTL methodology). Nil otherwise.
     var targetCTL: Double?
     /// Free-text description; coach context. Detailed goals (time/place/PR) deferred.
     var notes: String
 
-    init(id: String = UUID().uuidString, name: String, date: Date, eventType: String,
+    init(id: String = UUID().uuidString, name: String, date: Date, eventType: ATPEventType,
          priority: ATPEventPriority, targetCTL: Double? = nil, notes: String = "") {
         self.id = id
         self.name = name
@@ -117,7 +194,7 @@ struct ATPEventInput: Sendable, Identifiable {
     let id: String
     let name: String
     let date: Date
-    let eventType: String
+    let eventType: ATPEventType
     let priority: ATPEventPriority
     let targetCTL: Double?
     let notes: String

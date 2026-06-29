@@ -14,7 +14,7 @@ private func params(_ start: Date, ctl: Double? = nil, method: ATPMethodology = 
               recoveryCycle: 4, maxRampRate: 7, weeklyAverageTSS: avg)
 }
 private func event(_ date: Date, _ prio: ATPEventPriority, ctl: Double? = nil) -> ATPEventInput {
-    ATPEventInput(id: UUID().uuidString, name: "E", date: date, eventType: "tri",
+    ATPEventInput(id: UUID().uuidString, name: "E", date: date, eventType: .triOlympic,
                   priority: prio, targetCTL: ctl, notes: "")
 }
 
@@ -45,6 +45,31 @@ private func event(_ date: Date, _ prio: ATPEventPriority, ctl: Double? = nil) -
     // the weekly average.
     let free = result.dropFirst()
     #expect(free.reduce(0) { $0 + $1.plannedTSS } / Double(free.count) > 600)
+}
+
+@Test func weeklyTSS_flagsRampExceeded() {
+    let s = monday()
+    let shells = ATPPeriodization.layout(params: params(s, avg: 600), events: [event(weeks(s, 10), .a)])
+    // A tiny ceiling → ramping weeks trip the flag; a huge one → none do.
+    let strict = ATPParams(startDate: s, startingCTL: 40, methodology: .weeklyTSS,
+                           recoveryCycle: 4, maxRampRate: 0.5, weeklyAverageTSS: 600)
+    #expect(ATPEngine.weeklyTSS(shells: shells, params: strict, overrides: []).contains { $0.rampExceeded })
+    let loose = ATPParams(startDate: s, startingCTL: 40, methodology: .weeklyTSS,
+                          recoveryCycle: 4, maxRampRate: 1000, weeklyAverageTSS: 600)
+    #expect(ATPEngine.weeklyTSS(shells: shells, params: loose, overrides: []).allSatisfy { !$0.rampExceeded })
+}
+
+@Test func targetCTL_lowerEventNeverReducesTraining() {
+    let s = monday()
+    let aWeek = weeks(s, 16), bWeek = weeks(s, 8)
+    // Same shells for both so we compare only the TSS solve.
+    let shells = ATPPeriodization.layout(params: params(s), events: [event(bWeek, .b), event(aWeek, .a)])
+    let p = params(s, ctl: 40, method: .targetCTL)
+    let high = ATPEngine.targetCTL(shells: shells, params: p, events: [event(aWeek, .a, ctl: 90)], overrides: [])
+    // A low-CTL event placed before the A must not pull any week down.
+    let both = ATPEngine.targetCTL(shells: shells, params: p,
+                                   events: [event(bWeek, .b, ctl: 30), event(aWeek, .a, ctl: 90)], overrides: [])
+    for (a, b) in zip(high, both) { #expect(b.plannedTSS >= a.plannedTSS - 0.5) }
 }
 
 @Test func targetCTL_planCurveHitsTarget() {

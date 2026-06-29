@@ -371,16 +371,6 @@ struct SettingsView: View {
                 Text("Synced automatically from \(settings.metricsSource.displayName). History is kept in the local database.")
             }
 
-            // Training plan section
-            if memory.trainingPlan.targetEvent != nil || memory.trainingPlan.currentPhase != nil {
-                Section("Training Plan") {
-                    profileRow("Target event", value: memory.trainingPlan.targetEvent)
-                    profileRow("Date", value: memory.trainingPlan.eventDate)
-                    profileRow("Phase", value: memory.trainingPlan.currentPhase?.uppercased())
-                    profileRow("Focus", value: memory.trainingPlan.monthlyFocus)
-                }
-            }
-
             // Developer section
             Section {
                 Toggle(isOn: $settings.debugMode) {
@@ -407,7 +397,6 @@ struct SettingsView: View {
                             context: DashboardContext(
                                 readSources: settings.readSources,
                                 weeklyStructure: memory.weeklyStructure,
-                                trainingPlan: memory.trainingPlan,
                                 makeBackend: settings.makeBackend
                             )
                         )
@@ -606,7 +595,6 @@ struct SettingsView: View {
         memory.updateProfile { $0 = UserProfile() }
         memory.updateWeeklyStructure { $0 = WeeklyStructure() }
         memory.updatePreferences { $0 = AthletePreferences() }
-        memory.updateTrainingPlan { $0 = TrainingPlan() }
     }
 
     /// Wipe the local time-series database (workouts, performance metrics,

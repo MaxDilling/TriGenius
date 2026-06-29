@@ -18,7 +18,6 @@ struct DashboardView: View {
     let readSources: Set<DataSource>
     var athleteName: String?
     let weeklyStructure: WeeklyStructure
-    let trainingPlan: TrainingPlan
     @ObservedObject var memory: CoachMemory
     let makeBackend: () -> LLMBackend
     // Settings is reached from the dashboard header (BUGS.md: the calendar moved to
@@ -36,7 +35,6 @@ struct DashboardView: View {
         DashboardContext(
             readSources: readSources,
             weeklyStructure: weeklyStructure,
-            trainingPlan: trainingPlan,
             makeBackend: makeBackend
         )
     }
@@ -51,7 +49,6 @@ struct DashboardView: View {
                         ProgressView("Loading…").padding(.top, 60)
                     } else {
                         header
-                        planBanner
                         performanceInsights
                         weeklyTarget
                         aiInsightCard
@@ -73,26 +70,28 @@ struct DashboardView: View {
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
             Task { await viewModel.load(context: context) }
         }
-        // Plan/structure live in `coach_memory.json`, not the DB, so a coach edit
-        // there bypasses the notification above. Reload when the plan signature
-        // changes so the weekly targets recompute. `.onChange` fires after the new
-        // value is in place, so `context` already carries the fresh plan.
-        .onChange(of: planSignature) {
+        // The ATP lives in SwiftData and posts `trainingDataDidChange` on every
+        // change, so the notification above already reloads when the plan moves.
+        // `weeklyStructure` (the sport-split ratio) lives in `coach_memory.json`, so
+        // a coach edit there bypasses that notification — reload on its signature.
+        // `.onChange` fires after the new value is in place, so `context` already
+        // carries the fresh structure.
+        .onChange(of: structureSignature) {
             Task { await viewModel.load(context: context) }
         }
     }
 
-    /// Cheap, DB-free fingerprint of the inputs the weekly targets depend on, so a
-    /// coach-driven plan/structure edit triggers a dashboard reload.
+    /// Cheap, DB-free fingerprint of the non-DB inputs the weekly targets depend on
+    /// (the sport-split ratio/floors), so a coach-driven structure edit triggers a
+    /// dashboard reload.
     ///
     /// Built from a key-sorted JSON encoding, NOT `"\(dict)"`: a `[String: Any]`
     /// has no stable iteration order (it depends on the per-process random hash
     /// seed), so interpolating it produces a string that "flaps" between renders
-    /// even when the plan is unchanged — which made `.onChange` fire every render
-    /// and spun a 100×/s reload loop. `.sortedKeys` makes the fingerprint depend
-    /// only on the content.
-    private var planSignature: String {
-        Self.stableJSON(trainingPlan.toDict()) + "\n" + Self.stableJSON(weeklyStructure.toDict())
+    /// even when unchanged — which made `.onChange` fire every render and spun a
+    /// 100×/s reload loop. `.sortedKeys` makes the fingerprint depend only on content.
+    private var structureSignature: String {
+        Self.stableJSON(weeklyStructure.toDict())
     }
 
     private static func stableJSON(_ dict: [String: Any]) -> String {
@@ -131,19 +130,6 @@ struct DashboardView: View {
                     .font(.title3)
                     .frame(width: 44, height: 44)
                     .glassEffect(.regular, in: .circle)
-            }
-            .buttonStyle(.plain)
-        }
-    }
-
-    // MARK: Training-plan banner
-
-    @ViewBuilder private var planBanner: some View {
-        if TrainingPlanBanner.hasData(memory.trainingPlan) {
-            Button {
-                router.selectedTab = .plan
-            } label: {
-                TrainingPlanBanner(plan: memory.trainingPlan)
             }
             .buttonStyle(.plain)
         }

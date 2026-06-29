@@ -197,8 +197,10 @@ private func params(_ f: PlanFixture) -> ATPParams {
 
 private func events(_ f: PlanFixture) -> [ATPEventInput] {
     f.events_sent.map {
+        // eventType doesn't drive the engine (A-only periodization), so the TP raw
+        // token in the fixture maps to a fixed placeholder.
         ATPEventInput(id: UUID().uuidString, name: $0.name, date: parseDay($0.eventDate),
-                      eventType: $0.eventType, priority: priority($0.atpPriority),
+                      eventType: .triOlympic, priority: priority($0.atpPriority),
                       targetCTL: $0.ctlTarget, notes: "")
     }
 }

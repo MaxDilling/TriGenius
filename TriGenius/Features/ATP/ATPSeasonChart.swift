@@ -17,6 +17,22 @@ extension ATPEventPriority {
     }
 }
 
+extension ATPPeriod {
+    /// Band color, base→race ramping blue→warm (TP's period palette); transition grey.
+    var tint: Color {
+        switch self {
+        case .base1: Color(red: 0.56, green: 0.71, blue: 0.85)
+        case .base2: Color(red: 0.27, green: 0.47, blue: 0.71)
+        case .base3: Color(red: 0.16, green: 0.31, blue: 0.55)
+        case .build1: Color(red: 0.30, green: 0.62, blue: 0.55)
+        case .build2: Color(red: 0.36, green: 0.61, blue: 0.36)
+        case .peak: Color(red: 0.91, green: 0.62, blue: 0.25)
+        case .race: Theme.Palette.danger
+        case .transition: Color.gray
+        }
+    }
+}
+
 /// Everything the hover tooltip shows for one day.
 private struct DayReadout: Equatable {
     let date: Date
@@ -32,11 +48,19 @@ private struct DayReadout: Equatable {
 
 struct ATPSeasonChart: View {
     let plan: ATPPlan
+    /// Commit a manual weekly-TSS pin (drag a bar up/down). Nil ⇒ read-only chart.
+    var onPinWeek: ((Date, Double) -> Void)?
 
     @State private var hoveredDate: Date?
     @State private var hoverX: CGFloat = 0
+    // Live drag preview: the dragged week's Monday + its in-flight TSS (committed on release).
+    @State private var dragWeek: Date?
+    @State private var dragTSS: Double = 0
+    @State private var showForm = true
 
     private let cal = Calendar.current
+    /// Form (TSB) amber — orange/gold, as in TrainingPeaks.
+    private let formColor = Color(red: 0.93, green: 0.69, blue: 0.13)
 
     private var seasonStart: Date { plan.weeks.first?.weekStart ?? Date() }
     private var seasonEnd: Date { plan.planCurve.last?.date ?? seasonStart }
@@ -69,6 +93,41 @@ struct ATPSeasonChart: View {
         let step = max(10, (ctlMax / 5 / 10).rounded() * 10)
         return Array(stride(from: 0, through: ctlMax, by: step))
     }
+    private var tssTicks: [Double] {
+        let step = max(100, (tssMax / 5 / 100).rounded() * 100)
+        return Array(stride(from: 0, through: tssMax, by: step))
+    }
+
+    // MARK: Form (TSB) — its own virtual scale, centred so TSB = 0 sits at the
+    // vertical middle of the plot and the curve swings symmetrically up/down (TSB is
+    // signed, so the shared CTL scale would clip the negatives below the baseline).
+
+    /// Largest |TSB| across both curves (floored so a near-flat curve isn't blown up).
+    private var tsbAbsMax: Double {
+        max(20, (plan.planCurve + actual).map { abs($0.tsb) }.max() ?? 20)
+    }
+    private var formCenter: Double { tssMax * 0.5 }
+    private func scaleTSB(_ tsb: Double) -> Double { formCenter + tsb / tsbAbsMax * tssMax * 0.42 }
+
+    // MARK: Period band — a thin lane below the zero baseline (negative y-space), so
+    // the colored blocks align to the bars without overlapping any data.
+
+    private var bandTop: Double { -tssMax * 0.02 }
+    private var bandBottom: Double { -tssMax * 0.10 }
+
+    /// Contiguous runs of equal period (recovery weeks share their block's period; a
+    /// period can recur across multiple events, so group by adjacency, not value).
+    private var periodSegments: [(period: ATPPeriod, start: Date, end: Date)] {
+        var segs: [(ATPPeriod, Date, Date)] = []
+        for w in plan.weeks {
+            if let last = segs.last, last.0 == w.period {
+                segs[segs.count - 1].2 = weekEnd(w.weekStart)
+            } else {
+                segs.append((w.period, w.weekStart, weekEnd(w.weekStart)))
+            }
+        }
+        return segs.map { (period: $0.0, start: $0.1, end: $0.2) }
+    }
 
     private func weekEnd(_ weekStart: Date) -> Date {
         cal.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
@@ -94,12 +153,58 @@ struct ATPSeasonChart: View {
                           yStart: .value("Zero", 0), yEnd: .value("Completed TSS", b.tss))
                 .foregroundStyle(Theme.Palette.info.opacity(0.85))
         }
+        // Pinned weeks: an orange cap at the planned top so manual overrides read at a glance.
+        ForEach(plan.weeks.filter { $0.pinned && $0.weekStart != dragWeek }) { w in
+            let r = barRange(w.weekStart)
+            RectangleMark(xStart: .value("Start", r.0), xEnd: .value("End", r.1),
+                          yStart: .value("Cap bottom", max(w.plannedTSS - tssMax * 0.012, 0)),
+                          yEnd: .value("Pinned TSS", w.plannedTSS))
+                .foregroundStyle(Theme.Palette.warning)
+        }
+        // Live drag preview of the bar being pinned (value label is in the overlay so
+        // it stays on top of the curves/area when dragging up).
+        if let wk = dragWeek {
+            let r = barRange(wk)
+            RectangleMark(xStart: .value("Start", r.0), xEnd: .value("End", r.1),
+                          yStart: .value("Zero", 0), yEnd: .value("Drag TSS", dragTSS))
+                .foregroundStyle(Theme.Palette.warning.opacity(0.55))
+        }
     }
 
     /// X-range of a week's bar, centred with a ~30% gap to its neighbours.
     private func barRange(_ weekStart: Date) -> (Date, Date) {
         let week = 7.0 * 86400, gap = 7.0 * 86400 * 0.30
         return (weekStart.addingTimeInterval(gap / 2), weekStart.addingTimeInterval(week - gap / 2))
+    }
+
+    @ChartContentBuilder private var periodBandMarks: some ChartContent {
+        ForEach(periodSegments, id: \.start) { seg in
+            RectangleMark(xStart: .value("Start", seg.start), xEnd: .value("End", seg.end),
+                          yStart: .value("Band bottom", bandBottom), yEnd: .value("Band top", bandTop))
+                .foregroundStyle(seg.period.tint)
+        }
+    }
+
+    // Form (TSB): an amber area + dashed line for the ATP plan, a solid line for the
+    // actual — on its own centred scale, filled from the (middle) zero line.
+    @ChartContentBuilder private var formMarks: some ChartContent {
+        RuleMark(y: .value("Form zero", formCenter))
+            .foregroundStyle(formColor.opacity(0.25))
+            .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
+        ForEach(plan.planCurve) { p in
+            AreaMark(x: .value("Date", p.date),
+                     yStart: .value("Form zero", formCenter), yEnd: .value("Form", scaleTSB(p.tsb)))
+                .foregroundStyle(formColor.opacity(0.15))
+        }
+        ForEach(plan.planCurve) { p in
+            LineMark(x: .value("Date", p.date), y: .value("Form", scaleTSB(p.tsb)), series: .value("c", "formPlan"))
+                .foregroundStyle(formColor)
+                .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+        }
+        ForEach(actual) { p in
+            LineMark(x: .value("Date", p.date), y: .value("Form", scaleTSB(p.tsb)), series: .value("c", "formActual"))
+                .foregroundStyle(formColor)
+        }
     }
 
     @ChartContentBuilder private var curveMarks: some ChartContent {
@@ -133,16 +238,36 @@ struct ATPSeasonChart: View {
         }
     }
 
+    // Weeks ramping faster than the athlete's max — a red warning over the bar top.
+    // Drawn last so its annotation stays above the curves/area.
+    @ChartContentBuilder private var rampWarningMarks: some ChartContent {
+        ForEach(plan.weeks.filter(\.rampExceeded)) { w in
+            let r = barRange(w.weekStart)
+            let mid = Date(timeIntervalSince1970: (r.0.timeIntervalSince1970 + r.1.timeIntervalSince1970) / 2)
+            PointMark(x: .value("Week", mid), y: .value("TSS", w.plannedTSS))
+                .symbolSize(0)
+                .annotation(position: .top, spacing: 1) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 8)).foregroundStyle(Theme.Palette.danger)
+                }
+        }
+    }
+
+    private var rampWarningCount: Int { plan.weeks.filter(\.rampExceeded).count }
+
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
             Chart {
+                periodBandMarks
                 barMarks
+                if showForm { formMarks }
                 curveMarks
                 eventMarks
+                rampWarningMarks
             }
-            .chartYScale(domain: 0...tssMax)
+            .chartYScale(domain: bandBottom...tssMax)
             .chartYAxis {
-                AxisMarks(position: .leading)
+                AxisMarks(position: .leading, values: tssTicks)
                 AxisMarks(position: .trailing, values: ctlTicks.map(scaleCTL)) { value in
                     AxisTick()
                     AxisValueLabel {
@@ -153,6 +278,7 @@ struct ATPSeasonChart: View {
                 }
             }
             .chartXAxis { AxisMarks(values: .stride(by: .month)) }
+            .chartOverlay { proxy in periodLabelLayer(proxy) }
             .chartOverlay { proxy in hoverLayer(proxy) }
             .frame(height: 280)
 
@@ -161,9 +287,51 @@ struct ATPSeasonChart: View {
                 legend(Theme.Palette.info, "Completed")
                 legend(.blue, "Fitness ATP")
                 legend(Theme.Palette.success, "Actual")
+                Button { showForm.toggle() } label: {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        Circle().fill(showForm ? formColor : .secondary.opacity(0.3)).frame(width: 7, height: 7)
+                        Text("Form").foregroundStyle(showForm ? .secondary : .tertiary)
+                    }
+                }
+                .buttonStyle(.plain)
+                if onPinWeek != nil { legend(Theme.Palette.warning, "Pinned") }
             }
             .font(.caption2)
             .foregroundStyle(.secondary)
+
+            if rampWarningCount > 0 {
+                Label("\(rampWarningCount) week\(rampWarningCount == 1 ? "" : "s") ramp faster than your max — fitness is climbing aggressively.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption2).foregroundStyle(Theme.Palette.danger)
+            }
+
+            if onPinWeek != nil {
+                Text("Drag a bar up or down to pin that week's TSS.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    /// Period names centred on their band blocks; scales down / drops out when a
+    /// block is too narrow to read (the color still carries the period; hover has it).
+    private func periodLabelLayer(_ proxy: ChartProxy) -> some View {
+        GeometryReader { geo in
+            if let frame = proxy.plotFrame {
+                let f = geo[frame]
+                ForEach(periodSegments, id: \.start) { seg in
+                    if let x0 = proxy.position(forX: seg.start),
+                       let x1 = proxy.position(forX: seg.end),
+                       let y = proxy.position(forY: (bandTop + bandBottom) / 2) {
+                        Text(seg.period.label)
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.white)
+                            .lineLimit(1).minimumScaleFactor(0.6)
+                            .frame(width: max(x1 - x0 - 2, 0))
+                            .position(x: f.minX + (x0 + x1) / 2, y: f.minY + y)
+                            .allowsHitTesting(false)
+                    }
+                }
+            }
         }
     }
 
@@ -185,15 +353,54 @@ struct ATPSeasonChart: View {
                             hoveredDate = nil
                         }
                     }
+                    .gesture(pinDrag(proxy, geo))
+                if let wk = dragWeek, let frame = proxy.plotFrame {
+                    let r = barRange(wk)
+                    let mid = Date(timeIntervalSince1970: (r.0.timeIntervalSince1970 + r.1.timeIntervalSince1970) / 2)
+                    if let x = proxy.position(forX: mid), let y = proxy.position(forY: dragTSS) {
+                        let f = geo[frame]
+                        Text("\(Int(dragTSS))")
+                            .font(.caption2.bold()).foregroundStyle(Theme.Palette.warning)
+                            .position(x: f.minX + x, y: f.minY + y - 9)
+                            .allowsHitTesting(false)
+                    }
+                }
                 if let d = hoveredDate {
                     let width: CGFloat = 210
+                    let gap: CGFloat = 16
+                    // Sit to the right of the cursor while it fits, else flip to the left.
+                    let fitsRight = hoverX + gap + width <= geo.size.width
+                    let centerX = fitsRight ? hoverX + gap + width / 2 : hoverX - gap - width / 2
                     tooltip(readout(on: d))
                         .frame(width: width)
                         .allowsHitTesting(false)   // pointer passes through → no flicker over the card
-                        .position(x: min(max(hoverX, width / 2 + 4), geo.size.width - width / 2 - 4), y: 96)
+                        .position(x: centerX, y: 96)
                 }
             }
         }
+    }
+
+    /// Drag a week's bar up/down to pin its TSS; commits on release. No-op read-only.
+    private func pinDrag(_ proxy: ChartProxy, _ geo: GeometryProxy) -> some Gesture {
+        DragGesture(minimumDistance: 6)
+            .onChanged { value in
+                guard onPinWeek != nil, let frame = proxy.plotFrame else { return }
+                let plot = geo[frame]
+                if dragWeek == nil {
+                    let x = value.startLocation.x - plot.minX
+                    guard let date = proxy.value(atX: x, as: Date.self),
+                          let wk = plan.weeks.first(where: { date >= $0.weekStart && date <= weekEnd($0.weekStart) })
+                    else { return }
+                    dragWeek = wk.weekStart
+                }
+                if let tss = proxy.value(atY: value.location.y - plot.minY, as: Double.self) {
+                    dragTSS = (min(max(tss, 0), tssMax) / 5).rounded() * 5
+                }
+            }
+            .onEnded { _ in
+                if let wk = dragWeek { onPinWeek?(wk, dragTSS) }
+                dragWeek = nil
+            }
     }
 
     private func readout(on day: Date) -> DayReadout {

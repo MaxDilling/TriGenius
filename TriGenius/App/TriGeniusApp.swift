@@ -110,7 +110,6 @@ struct RootTabView: View {
                     readSources: settings.readSources,
                     athleteName: memory.userProfile.name,
                     weeklyStructure: memory.weeklyStructure,
-                    trainingPlan: memory.trainingPlan,
                     memory: memory,
                     makeBackend: { settings.makeBackend() },
                     brain: brain,
@@ -124,19 +123,11 @@ struct RootTabView: View {
             }
 
             NavigationStack {
-                PlanView(memory: memory)
+                ATPTabView()
             }
             .tag(CoachRouter.RootTab.plan)
             .tabItem {
-                Label("Plan", systemImage: "calendar.day.timeline.left")
-            }
-
-            NavigationStack {
-                ATPTabView()
-            }
-            .tag(CoachRouter.RootTab.atp)
-            .tabItem {
-                Label("ATP", systemImage: "chart.bar.xaxis")
+                Label("Plan", systemImage: "chart.bar.xaxis")
             }
 
             NavigationStack {

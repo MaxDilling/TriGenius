@@ -198,7 +198,10 @@ Example — fix just the description, keep the steps:
 
 ## 7. Planning a week
 
-1. `set_training_plan` (once) defines the phases and weekly per-sport targets — the high-level plan.
+1. The ATP is the high-level plan: `set_atp` sets the methodology + volume, `set_atp_event` adds/edits
+   each race, `delete_atp_event` removes one, and `pin_atp_week`/`unpin_atp_week` lock a specific
+   week's TSS (e.g. a vacation = 0). The engine periodizes the weekly TSS + CTL projection. `get_atp`
+   reads the current period and this week's TSS target to size the week's sessions.
 2. `read_calendar_availability` shows the athlete's real-world busy/free days so you place sessions
    on days that work.
 3. `add_workouts` — build the whole week's sessions and schedule them in **one** call (see §5).

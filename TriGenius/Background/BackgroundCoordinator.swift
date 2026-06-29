@@ -114,7 +114,7 @@ final class BackgroundCoordinator {
         let targets = WeeklyTargets.targets(
             scheduled: weekScheduled,
             weeklyStructure: memory.weeklyStructure,
-            plan: memory.trainingPlan
+            atpPlan: ATPEngine.current()
         )
         let projection = WeeklyTargets.projection(store: TrainingDataStore.shared)
         signals += ProactiveCoach.weeklyTargetSignals(targets: targets, projection: projection)

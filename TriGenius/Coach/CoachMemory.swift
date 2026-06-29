@@ -24,7 +24,6 @@ final class CoachMemory: ObservableObject {
     @Published private(set) var userProfile: UserProfile
     @Published private(set) var weeklyStructure: WeeklyStructure
     @Published private(set) var preferences: AthletePreferences
-    @Published private(set) var trainingPlan: TrainingPlan
     @Published private(set) var sportProgress: SportProgressMap
     @Published private(set) var feedbackHistory: [FeedbackEntry]
     @Published private(set) var onboardingComplete: Bool
@@ -42,7 +41,6 @@ final class CoachMemory: ObservableObject {
         userProfile = UserProfile()
         weeklyStructure = WeeklyStructure()
         preferences = AthletePreferences()
-        trainingPlan = TrainingPlan()
         sportProgress = SportProgressMap()
         feedbackHistory = []
         onboardingComplete = false
@@ -59,7 +57,6 @@ final class CoachMemory: ObservableObject {
         if let p = raw["user_profile"] as? [String: Any] { userProfile = UserProfile(from: p) }
         if let w = raw["weekly_structure"] as? [String: Any] { weeklyStructure = WeeklyStructure(from: w) }
         if let pref = raw["preferences"] as? [String: Any] { preferences = AthletePreferences(from: pref) }
-        if let tp = raw["training_plan"] as? [String: Any] { trainingPlan = TrainingPlan(from: tp) }
         if let sp = raw["sport_progress"] as? [String: Any] { sportProgress = SportProgressMap(from: sp) }
         if let fb = raw["feedback_history"] as? [[String: Any]] {
             feedbackHistory = fb.compactMap(FeedbackEntry.init(from:))
@@ -81,7 +78,6 @@ final class CoachMemory: ObservableObject {
         userProfile = (raw["user_profile"] as? [String: Any]).map { UserProfile(from: $0) } ?? UserProfile()
         weeklyStructure = (raw["weekly_structure"] as? [String: Any]).map { WeeklyStructure(from: $0) } ?? WeeklyStructure()
         preferences = (raw["preferences"] as? [String: Any]).map { AthletePreferences(from: $0) } ?? AthletePreferences()
-        trainingPlan = (raw["training_plan"] as? [String: Any]).map { TrainingPlan(from: $0) } ?? TrainingPlan()
         sportProgress = (raw["sport_progress"] as? [String: Any]).map { SportProgressMap(from: $0) } ?? SportProgressMap()
         feedbackHistory = (raw["feedback_history"] as? [[String: Any]] ?? []).compactMap(FeedbackEntry.init(from:))
         onboardingComplete = raw["onboarding_complete"] as? Bool ?? false
@@ -93,7 +89,6 @@ final class CoachMemory: ObservableObject {
             "user_profile": userProfile.toDict(),
             "weekly_structure": weeklyStructure.toDict(),
             "preferences": preferences.toDict(),
-            "training_plan": trainingPlan.toDict(),
             "sport_progress": sportProgress.toDict(),
             "feedback_history": feedbackHistory.map { $0.toDict() },
             "onboarding_complete": onboardingComplete
@@ -118,7 +113,6 @@ final class CoachMemory: ObservableObject {
             "user_profile": userProfile.toDict(),
             "weekly_structure": weeklyStructure.toDict(),
             "preferences": preferences.toDict(),
-            "training_plan": trainingPlan.toDict(),
             "sport_progress": sportProgress.toDict(),
             "feedback_history": feedbackHistory.map { $0.toDict() },
             "onboarding_complete": onboardingComplete
@@ -144,11 +138,6 @@ final class CoachMemory: ObservableObject {
 
     func updatePreferences(_ update: (inout AthletePreferences) -> Void) {
         update(&preferences)
-        save()
-    }
-
-    func updateTrainingPlan(_ update: (inout TrainingPlan) -> Void) {
-        update(&trainingPlan)
         save()
     }
 
@@ -210,43 +199,8 @@ final class CoachMemory: ObservableObject {
         if let maxH = weeklyStructure.maxHours { parts.append("Max weekly hours: \(maxH)") }
         if let rd = weeklyStructure.preferredRestDay { parts.append("Rest day: \(rd)") }
 
-        // Training plan
-        let plan = trainingPlan
-        if plan.targetEvent != nil || plan.currentPhase != nil || !plan.phases.isEmpty {
-            parts.append("\n=== TRAINING PLAN ===")
-            if let ev = plan.targetEvent {
-                var s = "Target event: \(ev)"
-                if let d = plan.eventDate { s += " (\(d))" }
-                parts.append(s)
-            }
-            if !plan.phases.isEmpty {
-                if let week = plan.currentWeek(), let total = plan.totalWeeks {
-                    parts.append("Plan progress: week \(week) of \(total)")
-                }
-                if let current = plan.phase() {
-                    parts.append("Current phase: \(current.name.rawValue.uppercased()) (\(current.startDate) to \(current.endDate))")
-                }
-                parts.append("Phases:")
-                for p in plan.phases {
-                    var line = "  • \(p.name.rawValue) [\(p.startDate) → \(p.endDate)]"
-                    if let f = p.focus, !f.isEmpty { line += " — \(f)" }
-                    let targets = ["swimming", "cycling", "running", "strength"].compactMap { sport -> String? in
-                        guard let t = p.sportTargets[sport], t.hasData else { return nil }
-                        var tp: [String] = []
-                        if let km = t.weeklyDistanceKm { tp.append("\(Int(km.rounded()))km") }
-                        if let tss = t.weeklyTSS { tp.append("\(tss)TSS") }
-                        return "\(sport): \(tp.joined(separator: "/"))"
-                    }
-                    if !targets.isEmpty { line += " | targets/wk: \(targets.joined(separator: ", "))" }
-                    parts.append(line)
-                }
-            } else if let phase = plan.currentPhase {
-                var s = "Current phase: \(phase.uppercased())"
-                if let s1 = plan.phaseStartDate, let e1 = plan.phaseEndDate { s += " (\(s1) to \(e1))" }
-                parts.append(s)
-            }
-            if let focus = plan.monthlyFocus { parts.append("Focus this month: \(focus)") }
-        }
+        // Season plan: the ATP (deterministic, in SwiftData) is injected separately
+        // into the system prompt via ATPToolHandler.promptSection — not here.
 
         // Sport progress
         let sports = ["swimming", "cycling", "running", "strength"]
@@ -340,6 +294,15 @@ struct WeeklyStructure {
     var preferredRestDay: String?
     var longRunDay: String?
     var longRideDay: String?
+    /// Per-discipline weekly-TSS weights for the ATP sport split (approach A) — the
+    /// only sport-aware input to the otherwise sport-agnostic ATP. Defaults to the
+    /// classic 20/50/30 swim/bike/run; keys are `SportFamily` raw values.
+    var sportRatio: [SportFamily: Double] = WeeklyStructure.defaultSportRatio
+    /// Optional per-discipline minimum weekly TSS (e.g. a swim floor for a bike-heavy
+    /// athlete who'd otherwise neglect it). Empty by default.
+    var sportFloors: [SportFamily: Double] = [:]
+
+    static let defaultSportRatio: [SportFamily: Double] = [.swim: 0.20, .bike: 0.50, .run: 0.30]
 
     init() {}
 
@@ -348,6 +311,8 @@ struct WeeklyStructure {
         preferredRestDay = d["preferred_rest_day"] as? String
         longRunDay = d["long_run_day"] as? String
         longRideDay = d["long_ride_day"] as? String
+        if let r = d["sport_ratio"] as? [String: Any] { sportRatio = WeeklyStructure.familyMap(r) }
+        if let f = d["sport_floors"] as? [String: Any] { sportFloors = WeeklyStructure.familyMap(f) }
     }
 
     func toDict() -> [String: Any] {
@@ -356,7 +321,21 @@ struct WeeklyStructure {
         if let v = preferredRestDay { d["preferred_rest_day"] = v }
         if let v = longRunDay { d["long_run_day"] = v }
         if let v = longRideDay { d["long_ride_day"] = v }
+        if !sportRatio.isEmpty { d["sport_ratio"] = stringKeyed(sportRatio) }
+        if !sportFloors.isEmpty { d["sport_floors"] = stringKeyed(sportFloors) }
         return d
+    }
+
+    private static func familyMap(_ d: [String: Any]) -> [SportFamily: Double] {
+        var out: [SportFamily: Double] = [:]
+        for (k, v) in d {
+            guard let fam = SportFamily(rawValue: k.lowercased()), let n = (v as? NSNumber)?.doubleValue else { continue }
+            out[fam] = n
+        }
+        return out
+    }
+    private func stringKeyed(_ m: [SportFamily: Double]) -> [String: Double] {
+        Dictionary(uniqueKeysWithValues: m.map { ($0.key.rawValue, $0.value) })
     }
 }
 
@@ -386,200 +365,6 @@ struct AthletePreferences {
         if let v = morningWorkouts { d["morning_workouts"] = v }
         if let v = indoorTrainerAvailable { d["indoor_trainer_available"] = v }
         return d
-    }
-}
-
-/// Standard triathlon periodization phases. A fixed set — the coach and UI pick
-/// from these exact values rather than fuzzy-matching free text.
-enum PhaseName: String, CaseIterable, Identifiable {
-    case prep       = "Prep"
-    case base       = "Base"
-    case build      = "Build"
-    case peak       = "Peak"
-    case taper      = "Taper"
-    case race       = "Race"
-    case recovery   = "Recovery"
-    case transition = "Transition"
-
-    var id: String { rawValue }
-
-    /// Exact (case-insensitive) match only — no fuzzy/substring matching.
-    init?(stored raw: String) {
-        let needle = raw.lowercased()
-        guard let match = PhaseName.allCases.first(where: { $0.rawValue.lowercased() == needle }) else { return nil }
-        self = match
-    }
-}
-
-/// A per-discipline weekly target inside a phase. Either expressed as a weekly
-/// distance, a weekly TSS load, or both — whatever the athlete/coach sets.
-struct SportTarget {
-    var weeklyDistanceKm: Double?
-    var weeklyTSS: Int?
-
-    var hasData: Bool { weeklyDistanceKm != nil || weeklyTSS != nil }
-
-    init(weeklyDistanceKm: Double? = nil, weeklyTSS: Int? = nil) {
-        self.weeklyDistanceKm = weeklyDistanceKm
-        self.weeklyTSS = weeklyTSS
-    }
-
-    init(from d: [String: Any]) {
-        weeklyDistanceKm = (d["weekly_distance_km"] as? NSNumber)?.doubleValue
-        weeklyTSS = (d["weekly_tss"] as? NSNumber)?.intValue
-    }
-
-    func toDict() -> [String: Any] {
-        var d: [String: Any] = [:]
-        if let v = weeklyDistanceKm { d["weekly_distance_km"] = v }
-        if let v = weeklyTSS { d["weekly_tss"] = v }
-        return d
-    }
-}
-
-/// One block of the training plan: a named phase with a date range, a focus
-/// line, and per-sport weekly targets (keyed by sport: swimming/cycling/running/strength).
-struct Phase: Identifiable {
-    var id = UUID()
-    var name: PhaseName
-    var startDate: String   // ISO "yyyy-MM-dd"
-    var endDate: String     // ISO "yyyy-MM-dd"
-    var focus: String?
-    var sportTargets: [String: SportTarget] = [:]
-
-    init(name: PhaseName, startDate: String, endDate: String, focus: String? = nil,
-         sportTargets: [String: SportTarget] = [:]) {
-        self.name = name
-        self.startDate = startDate
-        self.endDate = endDate
-        self.focus = focus
-        self.sportTargets = sportTargets
-    }
-
-    init?(from d: [String: Any]) {
-        guard let rawName = d["name"] as? String, let phase = PhaseName(stored: rawName),
-              let start = d["start_date"] as? String, let end = d["end_date"] as? String else { return nil }
-        name = phase
-        startDate = start
-        endDate = end
-        focus = d["focus"] as? String
-        if let targets = d["sport_targets"] as? [String: Any] {
-            for (sport, val) in targets {
-                if let t = val as? [String: Any] { sportTargets[sport.lowercased()] = SportTarget(from: t) }
-            }
-        }
-    }
-
-    func toDict() -> [String: Any] {
-        var d: [String: Any] = [
-            "name": name.rawValue,
-            "start_date": startDate,
-            "end_date": endDate
-        ]
-        if let v = focus { d["focus"] = v }
-        if !sportTargets.isEmpty {
-            d["sport_targets"] = sportTargets.mapValues { $0.toDict() }
-        }
-        return d
-    }
-
-    func start() -> Date? { TrainingPlan.isoDate(startDate) }
-    func end() -> Date? { TrainingPlan.isoDate(endDate) }
-}
-
-struct TrainingPlan {
-    var targetEvent: String?
-    var eventDate: String?
-    var currentPhase: String?
-    var phaseStartDate: String?
-    var phaseEndDate: String?
-    var monthlyFocus: String?
-    var notes: String?
-    var phases: [Phase] = []
-
-    init() {}
-
-    init(from d: [String: Any]) {
-        targetEvent = d["target_event"] as? String
-        eventDate = d["event_date"] as? String
-        currentPhase = d["current_phase"] as? String
-        phaseStartDate = d["phase_start_date"] as? String
-        phaseEndDate = d["phase_end_date"] as? String
-        monthlyFocus = d["monthly_focus"] as? String
-        notes = d["notes"] as? String
-        if let raw = d["phases"] as? [[String: Any]] {
-            phases = raw.compactMap { Phase(from: $0) }.sorted { ($0.start() ?? .distantPast) < ($1.start() ?? .distantPast) }
-        }
-    }
-
-    func toDict() -> [String: Any] {
-        var d: [String: Any] = [:]
-        if let v = targetEvent { d["target_event"] = v }
-        if let v = eventDate { d["event_date"] = v }
-        if let v = currentPhase { d["current_phase"] = v }
-        if let v = phaseStartDate { d["phase_start_date"] = v }
-        if let v = phaseEndDate { d["phase_end_date"] = v }
-        if let v = monthlyFocus { d["monthly_focus"] = v }
-        if let v = notes { d["notes"] = v }
-        if !phases.isEmpty { d["phases"] = phases.map { $0.toDict() } }
-        return d
-    }
-
-    // MARK: - Derived plan geometry
-
-    static let isoFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.calendar = Calendar(identifier: .gregorian)
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = .current
-        f.dateFormat = "yyyy-MM-dd"
-        return f
-    }()
-
-    static func isoDate(_ s: String?) -> Date? {
-        guard let s, !s.isEmpty else { return nil }
-        return isoFormatter.date(from: s)
-    }
-
-    var eventDay: Date? { TrainingPlan.isoDate(eventDate) }
-
-    /// The phase covering `date` (inclusive of both ends).
-    func phase(on date: Date = Date()) -> Phase? {
-        let day = Calendar.current.startOfDay(for: date)
-        return phases.first { p in
-            guard let s = p.start(), let e = p.end() else { return false }
-            return day >= Calendar.current.startOfDay(for: s) && day <= Calendar.current.startOfDay(for: e)
-        }
-    }
-
-    /// First phase start (plan beginning).
-    var planStart: Date? { phases.compactMap { $0.start() }.min() }
-
-    /// Plan end — the event day if set, else the last phase end.
-    var planEnd: Date? {
-        eventDay ?? phases.compactMap { $0.end() }.max()
-    }
-
-    /// Total number of calendar weeks the plan spans (≥ 1 when dated).
-    var totalWeeks: Int? {
-        guard let start = planStart, let end = planEnd, end > start else { return nil }
-        let days = Calendar.current.dateComponents([.day], from: start, to: end).day ?? 0
-        return max(1, Int(ceil(Double(days) / 7.0)))
-    }
-
-    /// 1-based index of the current week within the plan, clamped to the plan span.
-    func currentWeek(on date: Date = Date()) -> Int? {
-        guard let start = planStart, let total = totalWeeks else { return nil }
-        let days = Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: start),
-                                                   to: Calendar.current.startOfDay(for: date)).day ?? 0
-        return min(max(1, days / 7 + 1), total)
-    }
-
-    /// Whole days from `date` until the event (negative once it has passed).
-    func daysUntilEvent(from date: Date = Date()) -> Int? {
-        guard let event = eventDay else { return nil }
-        return Calendar.current.dateComponents([.day], from: Calendar.current.startOfDay(for: date),
-                                               to: Calendar.current.startOfDay(for: event)).day
     }
 }
 

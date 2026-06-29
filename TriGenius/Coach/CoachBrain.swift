@@ -242,6 +242,7 @@ final class CoachBrain {
         // One planning API, routed to the active write target.
         registry.register(WorkoutSchedulingToolHandler(writeTarget: writeTarget))
         registry.register(ProfileToolHandler(memory: memory))
+        registry.register(ATPToolHandler())
         // Always-on, source-agnostic: derived training-load & injury-risk metrics.
         registry.register(TrainingLoadToolHandler())
         // Always-on, source-independent: real-world schedule awareness.
@@ -497,7 +498,8 @@ final class CoachBrain {
         let loadSection = ProactiveCoach.loadPromptSection(
             TrainingLoadAnalytics.summary(snapshot: pmcSnapshot)
         )
-        let pmcContext = [pmc, loadSection].filter { !$0.isEmpty }.joined(separator: "\n\n")
+        let atp = ATPToolHandler.promptSection()
+        let pmcContext = [pmc, loadSection, atp].filter { !$0.isEmpty }.joined(separator: "\n\n")
         let performance = TrainingDataStore.shared.latestSnapshot()
 
         let onboarding = memory.onboardingComplete ? "" : ONBOARDING_SECTION

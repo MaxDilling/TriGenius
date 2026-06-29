@@ -14,7 +14,7 @@ private func params(_ start: Date, recovery: Int = 4) -> ATPParams {
               recoveryCycle: recovery, maxRampRate: 7, weeklyAverageTSS: 600)
 }
 private func event(_ date: Date, _ prio: ATPEventPriority, ctl: Double? = nil) -> ATPEventInput {
-    ATPEventInput(id: UUID().uuidString, name: "E", date: date, eventType: "tri",
+    ATPEventInput(id: UUID().uuidString, name: "E", date: date, eventType: .triOlympic,
                   priority: prio, targetCTL: ctl, notes: "")
 }
 

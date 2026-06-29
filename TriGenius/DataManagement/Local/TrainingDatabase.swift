@@ -1313,4 +1313,13 @@ extension TrainingDataStore {
         try? context.save()
         markChanged()
     }
+
+    /// Drop every week pin (Save ATP resets all manual bar overrides).
+    func clearAllATPOverrides() {
+        let all = (try? context.fetch(FetchDescriptor<ATPWeekOverride>())) ?? []
+        guard !all.isEmpty else { return }
+        for record in all { context.delete(record) }
+        try? context.save()
+        markChanged()
+    }
 }

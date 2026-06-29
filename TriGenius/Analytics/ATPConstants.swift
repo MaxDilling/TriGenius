@@ -53,14 +53,15 @@ enum ATPConstants {
     /// Per-period multiplier on the weekly-average TSS (the relative load shape).
     static let periodLoad: [ATPPeriod: Double] = [
         .base1: 0.85, .base2: 0.95, .base3: 1.05, .build1: 1.15, .build2: 1.25,
-        .peak: 0.80, .race: 0.50, .transition: 0.50,
+        .peak: 0.80, .race: 0.40, .transition: 0.20,
     ]
     /// Recovery week load relative to its period (an easier week every N).
     static let recoveryLoadFactor = 0.60
     /// Mid-block (B-event) taper week load — peak/race already carry their own dip.
     static let taperLoadFactor = 0.70
 
-    /// Hard bounds on a week's TSS, as fractions of the weekly average.
+    /// Hard bounds on a week's TSS, as fractions of the weekly average. The easiest
+    /// floor doesn't apply to race/transition weeks — those stay naturally light.
     static let easiestFraction = 0.60
     static let hardestFraction = 1.35
 
@@ -71,4 +72,34 @@ enum ATPConstants {
     static let startingCTLPerHour: [String: Double] = [
         "cyclist": 7, "triathlete": 8, "runner": 9,
     ]
+
+    // MARK: Suggested volume (Appendix B)
+
+    /// TP "Suggested Weekly TSS and Target CTL" per event type — pre-fills the wizard.
+    /// `weeklyTSS` low…high, `targetCTL` low…high. (Weekly-TSS ÷ 7 ≈ Target CTL.)
+    static func suggestedVolume(for type: ATPEventType) -> (weeklyTSS: ClosedRange<Double>, targetCTL: ClosedRange<Double>) {
+        switch type {
+        // Triathlon
+        case .triSprint:   return (290...740,  40...105)
+        case .triOlympic:  return (390...880,  55...125)
+        case .triHalf:     return (490...980,  70...140)
+        case .triFull:     return (590...1470, 85...210)
+        // Cycling
+        case .roadRace:    return (290...1230, 40...175)
+        case .century:     return (290...740,  40...105)
+        case .gravelFondo: return (490...1230, 70...175)
+        case .mtbXCO:      return (290...980,  40...140)
+        case .mtbMarathon: return (390...1230, 55...175)
+        case .mtbUltra:    return (390...1230, 55...175)
+        // Running
+        case .run5k10k:      return (220...820,  35...135)
+        case .halfMarathon:  return (330...990,  55...160)
+        case .marathon:      return (440...990,  70...160)
+        case .ultra:         return (550...1100, 90...180)
+        // Other (by "A" race duration)
+        case .otherUpTo3h: return (290...880,  40...125)
+        case .other3to8h:  return (390...1080, 55...155)
+        case .other8hPlus: return (490...1230, 70...175)
+        }
+    }
 }

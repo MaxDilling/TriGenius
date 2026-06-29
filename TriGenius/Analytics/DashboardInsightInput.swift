@@ -44,7 +44,7 @@ enum DashboardInsightInput {
         targets: [SportFamily: WeeklyTarget],
         projections: [SportFamily: WeeklyProjection],
         weeklyStructure: WeeklyStructure,
-        plan: TrainingPlan,
+        atpPlan: ATPPlan?,
         today: Date = Date()
     ) -> (summary: String, signature: Int) {
         let cal = Calendar.current
@@ -55,14 +55,14 @@ enum DashboardInsightInput {
         let stage = weekStage(currentWeek: currentWeek, targets: targets)
 
         var lines: [String] = []
-        lines.append(headerLine(plan: plan, stage: stage, today: today))
-        if let race = goalRaceLine(plan: plan, today: today) { lines.append(race) }
+        lines.append(headerLine(atpPlan: atpPlan, stage: stage, today: today))
+        if let race = goalRaceLine(atpPlan: atpPlan, today: today) { lines.append(race) }
         lines.append(contentsOf: fitnessLines(pmc: pmc))
         if let vo2 = vo2maxLine(store: store, today: today) { lines.append(vo2) }
 
         lines.append("")
         lines.append("LAST WEEK (completed) — done vs target:")
-        let lwTargets = lastWeekTargets(store: store, weeklyStructure: weeklyStructure, plan: plan, today: today)
+        let lwTargets = lastWeekTargets(store: store, weeklyStructure: weeklyStructure, atpPlan: atpPlan, today: today)
         lines.append(contentsOf: lastWeekLines(lastWeek: lastWeek, targets: lwTargets))
 
         lines.append("")
@@ -78,27 +78,38 @@ enum DashboardInsightInput {
 
     // MARK: Header & race
 
-    private static func headerLine(plan: TrainingPlan, stage: WeekStage, today: Date) -> String {
+    /// The ATP week containing `today`, if the plan covers it.
+    private static func currentATPWeek(_ atpPlan: ATPPlan?, today: Date) -> ATPWeekPlan? {
+        guard let atpPlan else { return nil }
+        let cal = Calendar.current
+        let day = cal.startOfDay(for: today)
+        return atpPlan.weeks.first { wk in
+            let end = cal.date(byAdding: .day, value: 6, to: wk.weekStart) ?? wk.weekStart
+            return day >= wk.weekStart && day <= end
+        }
+    }
+
+    private static func headerLine(atpPlan: ATPPlan?, stage: WeekStage, today: Date) -> String {
         var parts = ["Date: \(DateFormatter.insightHeader.string(from: today))"]
-        let phaseName = plan.currentPhase ?? plan.phase(on: today)?.name.rawValue
-        if let phaseName {
-            if let week = plan.currentWeek(on: today), let total = plan.totalWeeks {
-                parts.append("\(phaseName) phase, week \(week)/\(total)")
-            } else {
-                parts.append("\(phaseName) phase")
-            }
+        if let wk = currentATPWeek(atpPlan, today: today) {
+            parts.append("\(wk.period.label), week \(wk.periodWeekIndex)")
         }
         parts.append("week_stage = \(stage.rawValue)")
         return parts.joined(separator: " · ")
     }
 
-    /// Goal race as its own field so the prompt degrades gracefully — omitted
-    /// entirely when no dated event is set or it has already passed.
-    private static func goalRaceLine(plan: TrainingPlan, today: Date) -> String? {
-        guard let event = plan.targetEvent, !event.isEmpty,
-              let days = plan.daysUntilEvent(from: today), days >= 0 else { return nil }
+    /// Goal race as its own field so the prompt degrades gracefully — the next
+    /// upcoming A/B event from the ATP; omitted when none is scheduled.
+    private static func goalRaceLine(atpPlan: ATPPlan?, today: Date) -> String? {
+        guard let atpPlan else { return nil }
+        let cal = Calendar.current
+        let day = cal.startOfDay(for: today)
+        guard let next = atpPlan.events
+            .filter({ $0.priority != .c && $0.date >= day })
+            .min(by: { $0.date < $1.date }) else { return nil }
+        let days = cal.dateComponents([.day], from: day, to: cal.startOfDay(for: next.date)).day ?? 0
         let when = days == 0 ? "today" : "in \(days) day\(days == 1 ? "" : "s")"
-        return "Goal race: \(event) · \(when)"
+        return "Goal race: \(next.name) · \(when)"
     }
 
     // MARK: Fitness (PMC) — pre-classified
@@ -147,10 +158,10 @@ enum DashboardInsightInput {
 
     // MARK: Last week (completed)
 
-    /// Last week's per-discipline targets, computed against last week's own plan
-    /// phase and its own scheduled workouts (not today's) so the verdict is honest.
+    /// Last week's per-discipline targets, computed against last week's own ATP week
+    /// and its own scheduled workouts (not today's) so the verdict is honest.
     private static func lastWeekTargets(
-        store: TrainingDataStore, weeklyStructure: WeeklyStructure, plan: TrainingPlan, today: Date
+        store: TrainingDataStore, weeklyStructure: WeeklyStructure, atpPlan: ATPPlan?, today: Date
     ) -> [SportFamily: WeeklyTarget] {
         let cal = Calendar.current
         let lwAnchor = cal.date(byAdding: .day, value: -7, to: today) ?? today
@@ -158,7 +169,7 @@ enum DashboardInsightInput {
         let lwEnd = cal.date(byAdding: .day, value: 6, to: lwStart) ?? lwStart
         return WeeklyTargets.targets(
             scheduled: store.scheduledWorkouts(from: lwStart, to: lwEnd),
-            weeklyStructure: weeklyStructure, plan: plan, referenceDate: lwStart
+            weeklyStructure: weeklyStructure, atpPlan: atpPlan, referenceDate: lwStart
         )
     }
 

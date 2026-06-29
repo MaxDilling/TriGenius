@@ -4,9 +4,11 @@ import Foundation
 //
 // The per-discipline weekly volume goal ("Wochensoll") the dashboard rings fill
 // against. The base goal is the athlete's PLAN:
-//   1. the current training-plan phase's per-sport weekly TSS target; falling back to
-//   2. a heuristic from the athlete's weekly hour budget (`weeklyStructure`)
-//      shaped by the current periodisation phase (`trainingPlan`).
+//   1. the ATP's weekly TSS for the week, divided across disciplines by
+//      `ATPSportSplit` (the athlete's ratio + floors from `WeeklyStructure`);
+//      falling back to
+//   2. a heuristic from the athlete's weekly hour budget (`weeklyStructure`) when
+//      there is no ATP yet.
 // PLANNED workouts for the week (the scheduled-workout store) then only *raise*
 // the goal — a week scheduled beyond the plan targets the larger volume — but a
 // partially-scheduled week never pulls it below the plan.
@@ -75,7 +77,7 @@ enum WeeklyTargets {
         minutes / 60 * kmPerHour(family)
     }
 
-    // MARK: Heuristic fallback
+    // MARK: Heuristic fallback (no ATP yet)
 
     /// Fraction of the weekly triathlon time budget that goes to each discipline
     /// (a classic ~20/50/30 swim/bike/run split). Strength is a small fixed add.
@@ -88,66 +90,66 @@ enum WeeklyTargets {
         }
     }
 
-    /// Volume multiplier applied to the weekly hour budget for the current phase.
-    /// `maxHours` is treated as the build-phase ceiling; other phases scale off it.
-    private static func phaseMultiplier(_ phase: String?) -> Double {
-        switch phase?.lowercased() {
-        case .some(let p) where p.contains("taper"):     return 0.55
-        case .some(let p) where p.contains("recover"):   return 0.60
-        case .some(let p) where p.contains("base"):      return 0.85
-        case .some(let p) where p.contains("peak"):      return 1.00
-        case .some(let p) where p.contains("build"):     return 1.00
-        default:                                         return 0.90
-        }
-    }
-
+    /// Flat volume multiplier on the weekly hour budget when there's no ATP to
+    /// shape the week — `maxHours` is a ceiling, so the everyday goal sits below it.
+    private static let heuristicVolumeFactor = 0.90
     /// Default weekly hours when the athlete hasn't set a budget yet.
     private static let defaultWeeklyHours = 8.0
-    /// Fixed weekly strength target (minutes) — small, phase-independent.
+    /// Fixed weekly strength target (minutes) — small, sits outside the ATP TSS budget.
     private static let strengthMinutes = 45.0
 
-    private static func heuristicTarget(for family: SportFamily, weeklyStructure: WeeklyStructure, plan: TrainingPlan) -> WeeklyTarget {
-        if family == .strength {
-            return WeeklyTarget(durationMinutes: strengthMinutes,
-                                tss: estimatedTSS(family: .strength, minutes: strengthMinutes))
-        }
+    private static func heuristicTarget(for family: SportFamily, weeklyStructure: WeeklyStructure) -> WeeklyTarget {
         let hours = Double(weeklyStructure.maxHours ?? Int(defaultWeeklyHours))
-        let budgetMinutes = hours * 60 * phaseMultiplier(plan.currentPhase)
-        let minutes = budgetMinutes * split(family)
+        let minutes = hours * 60 * heuristicVolumeFactor * split(family)
         return WeeklyTarget(durationMinutes: minutes.rounded(),
                             tss: estimatedTSS(family: family, minutes: minutes).rounded(),
                             distanceKm: estimatedDistanceKm(family: family, minutes: minutes).rounded())
     }
 
-    /// The current phase's stated weekly target for a discipline. The dashboard
-    /// rings fill against TSS, so this only applies when the phase sets a weekly
-    /// TSS for the sport; the matching duration is back-estimated from it so the
-    /// time-based insight gaps still work, and the weekly distance is taken from
-    /// the phase if stated (else estimated from the duration).
-    private static func phaseTarget(for family: SportFamily, phase: Phase?) -> WeeklyTarget? {
-        guard let phase,
-              let target = phase.sportTargets.first(where: { SportFamily(sportKey: $0.key) == family })?.value,
-              let tss = target.weeklyTSS, tss > 0 else { return nil }
-        let minutes = (Double(tss) / tssPerHour(family) * 60).rounded()
-        let km = target.weeklyDistanceKm ?? estimatedDistanceKm(family: family, minutes: minutes).rounded()
-        return WeeklyTarget(durationMinutes: minutes, tss: Double(tss), distanceKm: km)
+    // MARK: ATP-fed base goal
+
+    /// The week's base per-discipline goal. When the ATP sets a weekly TSS for the
+    /// week, divide it across swim/bike/run by the athlete's ratio + floors
+    /// (`ATPSportSplit`) and back-estimate each discipline's duration/distance from
+    /// its TSS; otherwise fall back to the hour-budget heuristic. Strength sits
+    /// outside the ATP triathlon TSS budget as a small fixed target.
+    private static func baseTargets(weeklyStructure: WeeklyStructure, atpWeekTSS: Double?) -> [SportFamily: WeeklyTarget] {
+        var out: [SportFamily: WeeklyTarget] = [
+            .strength: WeeklyTarget(durationMinutes: strengthMinutes,
+                                    tss: estimatedTSS(family: .strength, minutes: strengthMinutes)),
+            .other: WeeklyTarget(durationMinutes: 0, tss: 0)
+        ]
+        if let total = atpWeekTSS, total > 0 {
+            let dist = ATPSportSplit.split(weeklyTSS: total, ratio: weeklyStructure.sportRatio, floors: weeklyStructure.sportFloors)
+            for family in SportFamily.triathlon {
+                let tss = dist[family] ?? 0
+                let minutes = (tss / tssPerHour(family) * 60).rounded()
+                out[family] = WeeklyTarget(durationMinutes: minutes, tss: tss.rounded(),
+                                           distanceKm: estimatedDistanceKm(family: family, minutes: minutes).rounded())
+            }
+        } else {
+            for family in SportFamily.triathlon {
+                out[family] = heuristicTarget(for: family, weeklyStructure: weeklyStructure)
+            }
+        }
+        return out
     }
 
     // MARK: Public API
 
-    /// Per-discipline weekly targets for the current week. The base goal is the
-    /// athlete's plan: the current phase's stated weekly target, falling back to a
-    /// heuristic off the weekly hour budget. `scheduled` are the planned workouts
-    /// whose date falls in the displayed week; they only *raise* the goal — a week
-    /// scheduled beyond the plan targets the larger volume. A partially-scheduled
-    /// week must NOT pull the goal below the plan, so the target is the per-metric
-    /// max of (scheduled sum, plan target). This keeps the ring honest: planning a
-    /// single 53-TSS run doesn't shrink a 90-TSS weekly goal down to 53.
+    /// Per-discipline weekly targets for the reference week. The base goal is the
+    /// athlete's plan: the ATP's weekly TSS split across disciplines, falling back to
+    /// a heuristic off the weekly hour budget when no ATP exists. `scheduled` are the
+    /// planned workouts whose date falls in the displayed week; they only *raise* the
+    /// goal — a week scheduled beyond the plan targets the larger volume. A partially
+    /// scheduled week must NOT pull the goal below the plan, so the target is the
+    /// per-metric max of (scheduled sum, plan target). This keeps the ring honest:
+    /// planning a single 53-TSS run doesn't shrink a 90-TSS weekly goal down to 53.
     @MainActor
     static func targets(
         scheduled: [WorkoutRecord],
         weeklyStructure: WeeklyStructure,
-        plan: TrainingPlan,
+        atpPlan: ATPPlan?,
         referenceDate: Date = Date()
     ) -> [SportFamily: WeeklyTarget] {
         var planned: [SportFamily: WeeklyTarget] = [:]
@@ -161,13 +163,13 @@ enum WeeklyTargets {
             planned[family] = t
         }
 
-        let currentPhase = plan.phase(on: referenceDate)
+        let weekStart = TrainingVolume.weekStart(of: referenceDate)
+        let atpWeekTSS = atpPlan?.weeks.first { $0.weekStart == weekStart }?.plannedTSS
+        let base = baseTargets(weeklyStructure: weeklyStructure, atpWeekTSS: atpWeekTSS)
 
         var out: [SportFamily: WeeklyTarget] = [:]
         for family in SportFamily.allCases {
-            // The plan's goal for the week: phase target, else heuristic estimate.
-            let base = phaseTarget(for: family, phase: currentPhase)
-                ?? heuristicTarget(for: family, weeklyStructure: weeklyStructure, plan: plan)
+            let base = base[family] ?? WeeklyTarget(durationMinutes: 0, tss: 0)
 
             guard let p = planned[family], p.durationMinutes > 0 || p.tss > 0 else {
                 out[family] = base

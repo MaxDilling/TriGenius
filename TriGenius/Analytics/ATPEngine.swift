@@ -20,6 +20,7 @@ struct ATPWeekPlan: Sendable, Identifiable {
     let isTaper: Bool
     let plannedTSS: Double
     let rampRate: Double          // ΔCTL vs the previous week (from the plan curve)
+    let rampExceeded: Bool        // ramp climbs faster than params.maxRampRate (TP's unsustainable-ramp flag)
     let pinned: Bool
     let weeksToNextEvent: Int?
     let nextEventID: String?
@@ -93,7 +94,9 @@ enum ATPEngine {
                 tss[i] = p
             } else if weightSum > 0 {
                 let raw = freeBudget * shape(s) / weightSum
-                tss[i] = min(hardest, max(easiest, raw)).rounded()
+                // Race/transition are deliberately light — don't lift them to the easiest floor.
+                let floor = (s.period == .race || s.period == .transition) ? 0 : easiest
+                tss[i] = min(hardest, max(floor, raw)).rounded()
             }
         }
         return assemble(shells: shells, tss: tss, pins: pins, params: params)
@@ -101,53 +104,54 @@ enum ATPEngine {
 
     // MARK: Target-CTL mode
 
-    /// Back-solve the weekly TSS so the projected CTL hits each event's `targetCTL`.
-    /// CTL is linear in TSS, so each segment between anchors needs only a single
-    /// scale on its free weeks' shape: `s = (target − fixed) / freeContribution`.
+    /// Back-solve the weekly TSS so the projected CTL **reaches** each event's
+    /// `targetCTL` — treating every target as a *lower bound*, not an exact hit.
+    ///
+    /// The plan is the pointwise max of each target's standalone ramp-then-maintain
+    /// plan (ramp from the start CTL to the target by its week, then hold it). Taking
+    /// the max guarantees the invariant the athlete expects: adding an event can only
+    /// ever *raise* a week's load, never lower it — so a lower-CTL event placed before
+    /// a higher-CTL one never forces detraining "down to" it (you train through it).
+    /// Priority is irrelevant here; an A or B target behaves the same.
     static func targetCTL(shells: [ATPWeekShell], params: ATPParams, events: [ATPEventInput], overrides: [ATPWeekOverrideInput]) -> [ATPWeekPlan] {
         let pins = pinMap(overrides)
         let beta = weeklyDecay
         let k = (1 - beta) / 7
         let n = shells.count
-        var tss = [Double](repeating: 0, count: n)
+        let c0 = params.startingCTL ?? 0
+        func maintain(_ ctl: Double, _ i: Int) -> Double { ctl * 7 * (ATPConstants.periodLoad[shells[i].period] ?? 0.5) }
 
-        // Event week → target CTL (only events that set one).
-        var targetAt: [Int: Double] = [:]
-        for ev in events {
+        let anchors: [(aw: Int, target: Double)] = events.compactMap { ev in
             guard let t = ev.targetCTL,
                   let wi = shells.firstIndex(where: { $0.weekStart == TrainingVolume.weekStart(of: ev.date) })
-            else { continue }
-            targetAt[wi] = t
+            else { return nil }
+            return (wi, t)
         }
 
-        var prevC = params.startingCTL ?? 0
-        var segStart = 0
-        for aw in targetAt.keys.sorted() {
-            let target = targetAt[aw]!
-            // C_aw = c0·β^len + Σ coeff_i·T_i ,  coeff_i = k·β^(aw−i). Split fixed (pins)
-            // from free (shape·s) and solve the scale.
-            var fixed = prevC * pow(beta, Double(aw - segStart + 1))
+        var tss = [Double](repeating: 0, count: n)
+        if anchors.isEmpty {
+            // No target set: maintain current fitness, shaped by the period.
+            for i in 0..<n { tss[i] = maintain(c0, i) }
+        }
+        for (aw, target) in anchors {
+            // Scale the free weeks in [0...aw] so CTL hits `target` ramping from c0:
+            // C_aw = c0·β^(aw+1) + Σ coeff_i·T_i ,  coeff_i = k·β^(aw−i).
+            var fixed = c0 * pow(beta, Double(aw + 1))
             var freeContribution = 0.0
-            for i in segStart...aw {
+            for i in 0...aw {
                 let coeff = k * pow(beta, Double(aw - i))
                 if let p = pins[shells[i].weekStart] { fixed += coeff * p }
                 else { freeContribution += coeff * shape(shells[i]) }
             }
             let scale = freeContribution > 0 ? max(0, (target - fixed) / freeContribution) : 0
-            for i in segStart...aw {
-                tss[i] = pins[shells[i].weekStart] ?? (scale * shape(shells[i])).rounded()
+            for i in 0..<n {
+                let v = i <= aw ? scale * shape(shells[i]) : maintain(target, i)
+                if v > tss[i] { tss[i] = v }     // pointwise max → targets only raise load
             }
-            prevC = forwardWeeklyCTL(tss: Array(tss[segStart...aw]), c0: prevC, beta: beta).last ?? target
-            segStart = aw + 1
         }
 
-        // Tail past the last anchor (or the whole season when no target was set):
-        // maintain current fitness, shaped by the period (transition tail decays).
-        if segStart < n {
-            for i in segStart..<n {
-                tss[i] = pins[shells[i].weekStart] ?? (prevC * 7 * (ATPConstants.periodLoad[shells[i].period] ?? 0.5)).rounded()
-            }
-        }
+        // Pins are hard overrides; everything else rounds.
+        for i in 0..<n { tss[i] = (pins[shells[i].weekStart] ?? tss[i]).rounded() }
         return assemble(shells: shells, tss: tss, pins: pins, params: params)
     }
 
@@ -163,6 +167,7 @@ enum ATPEngine {
             out.append(ATPWeekPlan(
                 weekStart: s.weekStart, period: s.period, periodWeekIndex: s.periodWeekIndex,
                 isRecovery: s.isRecovery, isTaper: s.isTaper, plannedTSS: tss[i], rampRate: ramp,
+                rampExceeded: params.maxRampRate > 0 && ramp > params.maxRampRate,
                 pinned: pins[s.weekStart] != nil,
                 weeksToNextEvent: s.weeksToNextEvent, nextEventID: s.nextEventID))
         }
@@ -245,7 +250,8 @@ enum ATPEngine {
     /// Read the store + the actual PMC and build the current plan. Mirrors
     /// `PMCEngine.current` / `WeeklyTargets.targets`. Nil when no ATP exists yet.
     @MainActor
-    static func current(store: TrainingDataStore = .shared, today: Date = Date()) -> ATPPlan? {
+    static func current(store: TrainingDataStore? = nil, today: Date = Date()) -> ATPPlan? {
+        let store = store ?? .shared
         guard let params = store.atpParams() else { return nil }
         let history = PMCEngine.current(store: store, today: today, forecastDays: 0).points
         // Completed TSS per week, for the "done" bars over the plan.
