@@ -35,8 +35,7 @@ enum ATPConstants {
     /// Ladder consumed backward from each A event (race-proximal first).
     static let ladder: [ATPPeriod] = [.race, .peak, .build2, .build1, .base3, .base2, .base1]
 
-    /// Recovery weeks after an A event before the next block begins (also the tail
-    /// length past the last event).
+    /// Recovery weeks after an A event before the next block begins.
     static let transitionWeeks = 1
 
     /// Weeks of detraining tail the CTL curves run past the last event ("Not-Set"
@@ -63,7 +62,7 @@ enum ATPConstants {
     /// Hard bounds on a week's TSS, as fractions of the weekly average. The easiest
     /// floor doesn't apply to race/transition weeks — those stay naturally light.
     static let easiestFraction = 0.60
-    static let hardestFraction = 1.35
+    static let hardestFraction = 1.45
 
     // MARK: Starting-CTL estimate (Appendix A)
 

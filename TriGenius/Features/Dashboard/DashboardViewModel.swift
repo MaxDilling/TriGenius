@@ -12,6 +12,8 @@ struct DashboardContext {
     let readSources: Set<DataSource>
     let weeklyStructure: WeeklyStructure
     let makeBackend: () -> LLMBackend
+    /// Whether the athlete opted into the AI insight card (Settings → Dashboard).
+    let aiInsightEnabled: Bool
 }
 
 /// One day in the forward-looking Agenda: completed activities (today) and
@@ -130,6 +132,11 @@ final class DashboardViewModel {
     // MARK: - AI insight
 
     private func refreshInsight(context: DashboardContext) {
+        guard context.aiInsightEnabled else {
+            insightTask?.cancel()
+            insight = nil
+            return
+        }
         let fallback = Self.heuristicInsight(targets: targets, currentWeek: currentWeek)
         let (summary, signature) = DashboardInsightInput.build(
             store: TrainingDataStore.shared,

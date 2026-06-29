@@ -215,9 +215,15 @@ struct ATPTabView: View {
                      + (current.weeksToNextEvent.map { " · \($0) wk to event" } ?? ""))
                     .font(.caption).foregroundStyle(.secondary)
             }
-            ATPSeasonChart(plan: plan) { week, tss in
-                TrainingDataStore.shared.setATPOverride(weekStart: week, pinnedTSS: tss)
-            }
+            ATPSeasonChart(
+                plan: plan,
+                onPinWeek: { week, tss in
+                    TrainingDataStore.shared.setATPOverride(weekStart: week, pinnedTSS: tss)
+                },
+                onUnpinWeek: { week in
+                    TrainingDataStore.shared.clearATPOverride(weekStart: week)
+                },
+                edgeBleed: Theme.Spacing.l)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(Theme.Spacing.l)

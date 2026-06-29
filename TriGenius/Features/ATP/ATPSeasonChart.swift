@@ -50,9 +50,18 @@ struct ATPSeasonChart: View {
     let plan: ATPPlan
     /// Commit a manual weekly-TSS pin (drag a bar up/down). Nil ⇒ read-only chart.
     var onPinWeek: ((Date, Double) -> Void)?
+    /// Clear a week's pin (tap its orange bar). Nil ⇒ read-only chart.
+    var onUnpinWeek: ((Date) -> Void)?
+    /// Bleed the plot this far past its trailing edge so the chart reaches the card's
+    /// right edge (cancels the enclosing card padding). 0 ⇒ no bleed.
+    var edgeBleed: CGFloat = 0
 
-    @State private var hoveredDate: Date?
-    @State private var hoverX: CGFloat = 0
+    // Pointer location (chart-frame coords) driving the hover tooltip; pointer-only.
+    @State private var hoverLoc: CGPoint?
+    // Live leading-edge date of the visible (scrolled) window — lets overlays clamp to
+    // the on-screen domain in date space, the only way to keep them inside the plot when
+    // scrolling (the proxy reports full-content pixel coords, not the visible viewport).
+    @State private var scrollX = Calendar.current.date(byAdding: .day, value: -14, to: Date()) ?? Date()
     // Live drag preview: the dragged week's Monday + its in-flight TSS (committed on release).
     @State private var dragWeek: Date?
     @State private var dragTSS: Double = 0
@@ -231,56 +240,123 @@ struct ATPSeasonChart: View {
                     Text(e.priority.rawValue).font(.caption2.bold()).foregroundStyle(e.priority.tint)
                 }
         }
-        if let d = hoveredDate {
-            RuleMark(x: .value("Hover", d))
-                .foregroundStyle(.secondary.opacity(0.45))
-                .lineStyle(StrokeStyle(lineWidth: 1))
-        }
-    }
-
-    // Weeks ramping faster than the athlete's max — a red warning over the bar top.
-    // Drawn last so its annotation stays above the curves/area.
-    @ChartContentBuilder private var rampWarningMarks: some ChartContent {
-        ForEach(plan.weeks.filter(\.rampExceeded)) { w in
-            let r = barRange(w.weekStart)
-            let mid = Date(timeIntervalSince1970: (r.0.timeIntervalSince1970 + r.1.timeIntervalSince1970) / 2)
-            PointMark(x: .value("Week", mid), y: .value("TSS", w.plannedTSS))
-                .symbolSize(0)
-                .annotation(position: .top, spacing: 1) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 8)).foregroundStyle(Theme.Palette.danger)
-                }
-        }
     }
 
     private var rampWarningCount: Int { plan.weeks.filter(\.rampExceeded).count }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            Chart {
-                periodBandMarks
-                barMarks
-                if showForm { formMarks }
-                curveMarks
-                eventMarks
-                rampWarningMarks
-            }
-            .chartYScale(domain: bandBottom...tssMax)
-            .chartYAxis {
-                AxisMarks(position: .leading, values: tssTicks)
-                AxisMarks(position: .trailing, values: ctlTicks.map(scaleCTL)) { value in
-                    AxisTick()
-                    AxisValueLabel {
-                        if let scaled = value.as(Double.self) {
-                            Text("\(Int((scaled / tssMax * ctlMax).rounded()))").foregroundStyle(.blue)
+    /// Center date of a week's bar (matches `barRange`), for positioning marks/labels.
+    private func weekMid(_ weekStart: Date) -> Date {
+        let r = barRange(weekStart)
+        return Date(timeIntervalSince1970: (r.0.timeIntervalSince1970 + r.1.timeIntervalSince1970) / 2)
+    }
+
+    /// Visible (scrolled) date window — the whole season when it all fits. Overlays clamp
+    /// to this in date space so a placed mark can only land inside the plot.
+    private func visibleWindow(in width: CGFloat) -> (start: Date, end: Date) {
+        let visible = visibleWeeks(in: width)
+        guard visible < plan.weeks.count else { return (seasonStart, xDomainEnd) }
+        return (scrollX, scrollX.addingTimeInterval(Double(visible) * 7 * 86400))
+    }
+
+    // Weeks ramping faster than the athlete's max — a red triangle just above the bar top.
+    // An overlay (a mark annotation doesn't render here); each triangle is clamped in date
+    // space to the visible window so it stays inside the plot instead of bleeding into the
+    // pinned axes when scrolling.
+    private func rampWarningLayer(_ proxy: ChartProxy) -> some View {
+        GeometryReader { geo in
+            if let frame = proxy.plotFrame {
+                let f = geo[frame]
+                let win = visibleWindow(in: geo.size.width)
+                ZStack(alignment: .topLeading) {
+                    ForEach(plan.weeks.filter(\.rampExceeded)) { w in
+                        let mid = weekMid(w.weekStart)
+                        if mid >= win.start, mid <= win.end,
+                           let x = proxy.position(forX: mid),
+                           let y = proxy.position(forY: w.plannedTSS) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 8)).foregroundStyle(Theme.Palette.danger)
+                                .position(x: f.minX + x, y: f.minY + y - 7)
                         }
                     }
                 }
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+                .clipped()
+                .allowsHitTesting(false)
             }
-            .chartXAxis { AxisMarks(values: .stride(by: .month)) }
-            .chartOverlay { proxy in periodLabelLayer(proxy) }
-            .chartOverlay { proxy in hoverLayer(proxy) }
+        }
+    }
+
+    /// Minimum px per week below which the bars read as squeezed → switch to scrolling.
+    private let minWeekWidth: CGFloat = 26
+
+    /// Weeks that fit at a readable density in `width`; full season when it all fits.
+    private func visibleWeeks(in width: CGFloat) -> Int {
+        let total = max(plan.weeks.count, 1)
+        guard width > 0 else { return total }
+        return min(max(1, Int(width / minWeekWidth)), total)
+    }
+
+    /// End of the X span — the later of the last week's end and the last curve point.
+    private var xDomainEnd: Date {
+        max(seasonEnd, plan.weeks.last.map { weekEnd($0.weekStart) } ?? seasonEnd)
+    }
+
+    /// Initial scroll lands ~2 weeks before today so the current state is in view.
+    private var scrollAnchor: Date {
+        let anchor = cal.date(byAdding: .day, value: -14, to: cal.startOfDay(for: Date())) ?? seasonStart
+        return min(max(anchor, seasonStart), seasonEnd)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            GeometryReader { geo in
+                let visible = visibleWeeks(in: geo.size.width)
+                let scrollable = visible < plan.weeks.count
+                Chart {
+                    periodBandMarks
+                    barMarks
+                    if showForm { formMarks }
+                    curveMarks
+                    eventMarks
+                }
+                .chartYScale(domain: bandBottom...tssMax)
+                // Pin the X span to the season so Charts adds no trailing padding (which
+                // otherwise leaves dead width on the right).
+                .chartXScale(domain: seasonStart...xDomainEnd)
+                .chartYAxis {
+                    AxisMarks(position: .leading, values: tssTicks)
+                    AxisMarks(position: .trailing, values: ctlTicks.map(scaleCTL)) { value in
+                        AxisTick()
+                        AxisValueLabel {
+                            if let scaled = value.as(Double.self) {
+                                Text("\(Int((scaled / tssMax * ctlMax).rounded()))").foregroundStyle(.blue)
+                            }
+                        }
+                    }
+                }
+                .chartXAxis { AxisMarks(values: .stride(by: .month)) }
+                // Scroll horizontally (axes stay pinned) only when the weeks don't fit.
+                .chartScrollableAxes(scrollable ? .horizontal : [])
+                .chartXVisibleDomain(length: Double(visible) * 7 * 86400)
+                .chartScrollPosition(x: $scrollX)
+                .onAppear { scrollX = scrollAnchor }
+                // Pin/unpin live on the plot itself (not a covering overlay) so they
+                // arbitrate with the chart's scroll: a tap removes a pin, a long-press
+                // then drag sets one, and a plain swipe falls through to scrolling.
+                .chartGesture { proxy in ExclusiveGesture(unpinTap(proxy), pinDrag(proxy)) }
+                // The tooltip is pointer-driven; hover sits on the chart itself — not a
+                // covering overlay — so it never intercepts the pin/unpin gestures below.
+                // (A hit-testable overlay above `chartGesture` swallowed every click.)
+                .onContinuousHover { phase in
+                    if case .active(let loc) = phase { hoverLoc = loc } else { hoverLoc = nil }
+                }
+                .chartOverlay { proxy in periodLabelLayer(proxy) }
+                .chartOverlay { proxy in rampWarningLayer(proxy) }
+                .chartOverlay { proxy in hoverDrawLayer(proxy) }
+            }
             .frame(height: 280)
+            // Bleed the plot to the card's right edge (cancels the card's trailing padding).
+            .padding(.trailing, -edgeBleed)
 
             HStack(spacing: Theme.Spacing.l) {
                 legend(.gray.opacity(0.6), "Planned TSS")
@@ -306,7 +382,7 @@ struct ATPSeasonChart: View {
             }
 
             if onPinWeek != nil {
-                Text("Drag a bar up or down to pin that week's TSS.")
+                Text("Press and hold a bar, then drag up or down to pin its TSS. Tap a pinned bar to remove.")
                     .font(.caption2).foregroundStyle(.tertiary)
             }
         }
@@ -314,92 +390,130 @@ struct ATPSeasonChart: View {
 
     /// Period names centred on their band blocks; scales down / drops out when a
     /// block is too narrow to read (the color still carries the period; hover has it).
+    /// Each block is clamped in *date* space to the visible window before it's placed,
+    /// so its label always maps inside the plot and never bleeds into the pinned axes
+    /// when scrolling (where the proxy reports full-content, not viewport, pixels).
     private func periodLabelLayer(_ proxy: ChartProxy) -> some View {
         GeometryReader { geo in
             if let frame = proxy.plotFrame {
                 let f = geo[frame]
-                ForEach(periodSegments, id: \.start) { seg in
-                    if let x0 = proxy.position(forX: seg.start),
-                       let x1 = proxy.position(forX: seg.end),
-                       let y = proxy.position(forY: (bandTop + bandBottom) / 2) {
-                        Text(seg.period.label)
-                            .font(.system(size: 9, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .lineLimit(1).minimumScaleFactor(0.6)
-                            .frame(width: max(x1 - x0 - 2, 0))
-                            .position(x: f.minX + (x0 + x1) / 2, y: f.minY + y)
-                            .allowsHitTesting(false)
+                let win = visibleWindow(in: geo.size.width)
+                ZStack(alignment: .topLeading) {
+                    ForEach(periodSegments, id: \.start) { seg in
+                        let cs = max(seg.start, win.start), ce = min(seg.end, win.end)
+                        if ce > cs,
+                           let x0 = proxy.position(forX: cs),
+                           let x1 = proxy.position(forX: ce),
+                           let y = proxy.position(forY: (bandTop + bandBottom) / 2) {
+                            // Centre in the on-screen slice of the block so a partly
+                            // scrolled block keeps its label visible.
+                            let gx0 = f.minX + x0, gx1 = f.minX + x1
+                            if gx1 - gx0 > 12 {
+                                Text(seg.period.label)
+                                    .font(.system(size: 9, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(1).minimumScaleFactor(0.6)
+                                    .frame(width: gx1 - gx0 - 2)
+                                    .position(x: (gx0 + gx1) / 2, y: f.minY + y)
+                            }
+                        }
                     }
                 }
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+                .clipped()
+                .allowsHitTesting(false)
             }
         }
     }
 
     // MARK: Hover
 
-    private func hoverLayer(_ proxy: ChartProxy) -> some View {
+    // Pure draw layer (never hit-tested, so it can't block the chart's gestures): the
+    // pointer tooltip + its hover rule, plus the live value readout while dragging a pin.
+    private func hoverDrawLayer(_ proxy: ChartProxy) -> some View {
         GeometryReader { geo in
-            ZStack(alignment: .topLeading) {
-                Rectangle().fill(.clear).contentShape(Rectangle())
-                    .onContinuousHover { phase in
-                        switch phase {
-                        case .active(let loc):
-                            guard let frame = proxy.plotFrame else { return }
-                            let x = loc.x - geo[frame].minX
-                            guard let date = proxy.value(atX: x, as: Date.self) else { return }
-                            let day = cal.startOfDay(for: date)
-                            if day >= seasonStart && day <= seasonEnd { hoveredDate = day; hoverX = loc.x }
-                        case .ended:
-                            hoveredDate = nil
-                        }
-                    }
-                    .gesture(pinDrag(proxy, geo))
-                if let wk = dragWeek, let frame = proxy.plotFrame {
-                    let r = barRange(wk)
-                    let mid = Date(timeIntervalSince1970: (r.0.timeIntervalSince1970 + r.1.timeIntervalSince1970) / 2)
-                    if let x = proxy.position(forX: mid), let y = proxy.position(forY: dragTSS) {
-                        let f = geo[frame]
+            if let frame = proxy.plotFrame {
+                let f = geo[frame]
+                ZStack(alignment: .topLeading) {
+                    if let wk = dragWeek,
+                       let x = proxy.position(forX: weekMid(wk)),
+                       let y = proxy.position(forY: dragTSS) {
                         Text("\(Int(dragTSS))")
                             .font(.caption2.bold()).foregroundStyle(Theme.Palette.warning)
                             .position(x: f.minX + x, y: f.minY + y - 9)
-                            .allowsHitTesting(false)
+                    }
+                    if let loc = hoverLoc, let day = hoverDay(at: loc.x - f.minX, proxy: proxy) {
+                        Rectangle().fill(.secondary.opacity(0.45))
+                            .frame(width: 1, height: f.height)
+                            .position(x: loc.x, y: f.midY)
+                        let width: CGFloat = 210, gap: CGFloat = 16
+                        // Sit to the right of the cursor while it fits, else flip left.
+                        let fitsRight = loc.x + gap + width <= geo.size.width
+                        let centerX = fitsRight ? loc.x + gap + width / 2 : loc.x - gap - width / 2
+                        tooltip(readout(on: day)).frame(width: width).position(x: centerX, y: 96)
                     }
                 }
-                if let d = hoveredDate {
-                    let width: CGFloat = 210
-                    let gap: CGFloat = 16
-                    // Sit to the right of the cursor while it fits, else flip to the left.
-                    let fitsRight = hoverX + gap + width <= geo.size.width
-                    let centerX = fitsRight ? hoverX + gap + width / 2 : hoverX - gap - width / 2
-                    tooltip(readout(on: d))
-                        .frame(width: width)
-                        .allowsHitTesting(false)   // pointer passes through → no flicker over the card
-                        .position(x: centerX, y: 96)
-                }
+                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+                .allowsHitTesting(false)
             }
         }
     }
 
-    /// Drag a week's bar up/down to pin its TSS; commits on release. No-op read-only.
-    private func pinDrag(_ proxy: ChartProxy, _ geo: GeometryProxy) -> some Gesture {
-        DragGesture(minimumDistance: 6)
+    /// The day under a plot-local x; nil off-season so the tooltip clears past the plot.
+    private func hoverDay(at plotX: CGFloat, proxy: ChartProxy) -> Date? {
+        guard let date = proxy.value(atX: plotX, as: Date.self) else { return nil }
+        let day = cal.startOfDay(for: date)
+        return (day >= seasonStart && day <= seasonEnd) ? day : nil
+    }
+
+    // Pin gesture, `chartGesture` hands plot-local points. On iOS the drag is gated
+    // behind a long press so a plain horizontal swipe scrolls instead; on macOS a
+    // mouse drag never competes with (trackpad) scroll, so a plain drag pins directly.
+    private func pinDrag(_ proxy: ChartProxy) -> some Gesture {
+        #if os(macOS)
+        return DragGesture(minimumDistance: 2)
+            .onChanged { updateDrag(startX: $0.startLocation.x, locY: $0.location.y, proxy: proxy) }
+            .onEnded { _ in commitDrag() }
+        #else
+        return LongPressGesture(minimumDuration: 0.3)
+            .sequenced(before: DragGesture(minimumDistance: 0))
             .onChanged { value in
-                guard onPinWeek != nil, let frame = proxy.plotFrame else { return }
-                let plot = geo[frame]
-                if dragWeek == nil {
-                    let x = value.startLocation.x - plot.minX
-                    guard let date = proxy.value(atX: x, as: Date.self),
-                          let wk = plan.weeks.first(where: { date >= $0.weekStart && date <= weekEnd($0.weekStart) })
-                    else { return }
-                    dragWeek = wk.weekStart
-                }
-                if let tss = proxy.value(atY: value.location.y - plot.minY, as: Double.self) {
-                    dragTSS = (min(max(tss, 0), tssMax) / 5).rounded() * 5
-                }
+                guard case .second(true, let drag?) = value else { return }
+                updateDrag(startX: drag.startLocation.x, locY: drag.location.y, proxy: proxy)
             }
-            .onEnded { _ in
-                if let wk = dragWeek { onPinWeek?(wk, dragTSS) }
-                dragWeek = nil
+            .onEnded { _ in commitDrag() }
+        #endif
+    }
+
+    /// Begin/continue a pin drag: latch the week from the start x, track TSS from y (5-step).
+    private func updateDrag(startX: CGFloat, locY: CGFloat, proxy: ChartProxy) {
+        guard onPinWeek != nil else { return }
+        if dragWeek == nil {
+            guard let date = proxy.value(atX: startX, as: Date.self),
+                  let wk = plan.weeks.first(where: { date >= $0.weekStart && date <= weekEnd($0.weekStart) })
+            else { return }
+            dragWeek = wk.weekStart
+        }
+        if let tss = proxy.value(atY: locY, as: Double.self) {
+            dragTSS = (min(max(tss, 0), tssMax) / 5).rounded() * 5
+        }
+    }
+
+    private func commitDrag() {
+        if let wk = dragWeek { onPinWeek?(wk, dragTSS) }
+        dragWeek = nil
+    }
+
+    /// Tap a pinned week's orange bar to clear its pin and hand the week back to the engine.
+    private func unpinTap(_ proxy: ChartProxy) -> some Gesture {
+        SpatialTapGesture()
+            .onEnded { value in
+                guard onUnpinWeek != nil,
+                      let date = proxy.value(atX: value.location.x, as: Date.self),
+                      let wk = plan.weeks.first(where: { date >= $0.weekStart && date <= weekEnd($0.weekStart) }),
+                      wk.pinned
+                else { return }
+                onUnpinWeek?(wk.weekStart)
             }
     }
 

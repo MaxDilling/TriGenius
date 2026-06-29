@@ -106,6 +106,11 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(proactiveNotifications, forKey: Self.proactiveNotificationsKey) }
     }
     static let proactiveNotificationsKey = "proactive_notifications"
+    /// Whether the dashboard shows the AI-generated insight card. Off by default —
+    /// the card costs an LLM call per load.
+    @Published var aiDashboardInsight: Bool {
+        didSet { UserDefaults.standard.set(aiDashboardInsight, forKey: "ai_dashboard_insight") }
+    }
 
     static let availableGeminiModels = [
         "gemini-2.5-flash",
@@ -128,6 +133,7 @@ final class AppSettings: ObservableObject {
         lmStudioModel = UserDefaults.standard.string(forKey: "lmstudio_model") ?? "local-model"
         debugMode = UserDefaults.standard.bool(forKey: "debug_mode")
         proactiveNotifications = UserDefaults.standard.bool(forKey: Self.proactiveNotificationsKey)
+        aiDashboardInsight = UserDefaults.standard.bool(forKey: "ai_dashboard_insight")
     }
 
     // MARK: - Read-source / write-target persistence
@@ -306,6 +312,17 @@ struct SettingsView: View {
                 Text("Lets the coach read your calendar's busy/free windows to plan workouts around busy days. Read-only — TriGenius never changes your events.")
             }
 
+            // Dashboard section — opt-in AI summary card.
+            Section {
+                Toggle(isOn: $settings.aiDashboardInsight) {
+                    Label("AI summary", systemImage: "sparkles")
+                }
+            } header: {
+                Text("Dashboard")
+            } footer: {
+                Text("Shows a one-line AI read on your week at the top of the dashboard. Each load runs an LLM call. Off by default.")
+            }
+
             // Notifications section — proactive background coaching.
             Section {
                 NotificationSettingsSection(settings: settings)
@@ -397,7 +414,8 @@ struct SettingsView: View {
                             context: DashboardContext(
                                 readSources: settings.readSources,
                                 weeklyStructure: memory.weeklyStructure,
-                                makeBackend: settings.makeBackend
+                                makeBackend: settings.makeBackend,
+                                aiInsightEnabled: settings.aiDashboardInsight
                             )
                         )
                     } label: {

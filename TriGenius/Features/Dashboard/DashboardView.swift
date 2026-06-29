@@ -35,7 +35,8 @@ struct DashboardView: View {
         DashboardContext(
             readSources: readSources,
             weeklyStructure: weeklyStructure,
-            makeBackend: makeBackend
+            makeBackend: makeBackend,
+            aiInsightEnabled: settings.aiDashboardInsight
         )
     }
 
@@ -77,6 +78,11 @@ struct DashboardView: View {
         // `.onChange` fires after the new value is in place, so `context` already
         // carries the fresh structure.
         .onChange(of: structureSignature) {
+            Task { await viewModel.load(context: context) }
+        }
+        // Toggling the AI summary on/off (Settings → Dashboard) — generate or clear
+        // the insight without a full sync.
+        .onChange(of: settings.aiDashboardInsight) {
             Task { await viewModel.load(context: context) }
         }
     }
@@ -245,7 +251,7 @@ struct DashboardView: View {
     // glyph and an iridescent gradient hairline around the card. A heuristic
     // fallback is surfaced instantly while the model line is generated.
     @ViewBuilder private var aiInsightCard: some View {
-        if let insight = viewModel.insight, !insight.isEmpty {
+        if settings.aiDashboardInsight, let insight = viewModel.insight, !insight.isEmpty {
             let parsed = DashboardInsight.parse(insight)
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "apple.intelligence")
