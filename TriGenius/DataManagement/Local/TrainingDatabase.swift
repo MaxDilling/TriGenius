@@ -94,10 +94,15 @@ final class WorkoutRecord {
     /// ingest against the thresholds current on the workout's own date. Nil when
     /// not yet completed / not scorable.
     var tss: Double?
+    /// How `tss` was derived (e.g. "normalized power vs FTP", "heart-rate zone
+    /// load") — surfaced so a fallback-derived score isn't over-trusted. Nil when
+    /// not scored. Set alongside `tss` at ingest.
+    var tssBasis: String?
     var aerobicTE: Double?
     var anaerobicTE: Double?
-    /// The full coach-facing record, JSON-encoded, served verbatim by
-    /// `get_activities`. "" when this row has no completed activity yet.
+    /// The full activity record, JSON-encoded — the rich blob the detail UI reads
+    /// and the coach's lean `get_workouts` projection is derived from. "" when this
+    /// row has no completed activity yet.
     var detailsJSON: String = ""
 
     init(
@@ -119,6 +124,7 @@ final class WorkoutRecord {
         durationMinutes: Double = 0,
         distanceKm: Double = 0,
         tss: Double? = nil,
+        tssBasis: String? = nil,
         aerobicTE: Double? = nil,
         anaerobicTE: Double? = nil,
         detailsJSON: String = ""
@@ -141,6 +147,7 @@ final class WorkoutRecord {
         self.durationMinutes = durationMinutes
         self.distanceKm = distanceKm
         self.tss = tss
+        self.tssBasis = tssBasis
         self.aerobicTE = aerobicTE
         self.anaerobicTE = anaerobicTE
         self.detailsJSON = detailsJSON
@@ -583,7 +590,7 @@ final class TrainingDataStore {
                 startMinute: WorkoutRecord.clockMinute(fromDetails: scored.detailsJSON),
                 isCompleted: true,
                 durationMinutes: a.durationMinutes, distanceKm: scored.distanceKm,
-                tss: scored.tss, aerobicTE: a.aerobicTE, anaerobicTE: a.anaerobicTE,
+                tss: scored.tss, tssBasis: scored.basis, aerobicTE: a.aerobicTE, anaerobicTE: a.anaerobicTE,
                 detailsJSON: scored.detailsJSON
             )
             context.insert(rec)
@@ -596,7 +603,7 @@ final class TrainingDataStore {
     /// Apply a scored completed activity onto an existing row (which may be a plan
     /// gaining its actuals, or a completed row being refreshed). Planned fields are
     /// left untouched.
-    private static func applyCompleted(_ scored: (tss: Double?, distanceKm: Double, detailsJSON: String),
+    private static func applyCompleted(_ scored: (tss: Double?, distanceKm: Double, detailsJSON: String, basis: String?),
                                        of a: IngestedActivity, to record: WorkoutRecord) {
         // Don't downgrade a plan's own date/sport/name to the activity's if it was
         // user-authored; for a plain completed row these just refresh.
@@ -610,6 +617,7 @@ final class TrainingDataStore {
         record.durationMinutes = a.durationMinutes
         record.distanceKm = scored.distanceKm
         record.tss = scored.tss
+        record.tssBasis = scored.basis
         record.aerobicTE = a.aerobicTE
         record.anaerobicTE = a.anaerobicTE
         record.detailsJSON = scored.detailsJSON
@@ -672,12 +680,12 @@ final class TrainingDataStore {
 
     /// Score one incoming activity against the thresholds current on its date.
     private static func score(_ a: IngestedActivity, history: PerformanceHistory)
-        -> (tss: Double?, distanceKm: Double, detailsJSON: String) {
+        -> (tss: Double?, distanceKm: Double, detailsJSON: String, basis: String?) {
         guard var details = jsonObject(a.detailsJSON) else {
-            return (nil, a.distanceKm, a.detailsJSON)
+            return (nil, a.distanceKm, a.detailsJSON, nil)
         }
-        let (km, tss) = TSSScoring.score(&details, snapshot: history.snapshot(asOf: a.date))
-        return (tss, km, jsonString(details) ?? a.detailsJSON)
+        let (km, tss, basis) = TSSScoring.score(&details, snapshot: history.snapshot(asOf: a.date))
+        return (tss, km, jsonString(details) ?? a.detailsJSON, basis)
     }
 
     /// Cached `(tss, detailsJSON)` for the given ids — a resync passes the ids it is
@@ -709,9 +717,10 @@ final class TrainingDataStore {
                   FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.id == activityId })))?.first,
               var details = Self.jsonObject(r.detailsJSON) else { return }
         details["manual_distance_m"] = distanceKm * 1000
-        let (km, tss) = TSSScoring.score(&details, snapshot: performanceHistory().snapshot(asOf: r.date))
+        let (km, tss, basis) = TSSScoring.score(&details, snapshot: performanceHistory().snapshot(asOf: r.date))
         r.distanceKm = km
         r.tss = tss
+        r.tssBasis = basis
         r.detailsJSON = Self.jsonString(details) ?? r.detailsJSON
         try? context.save()
         markChanged()
@@ -881,6 +890,7 @@ final class TrainingDataStore {
         plan.durationMinutes = activity.durationMinutes
         plan.distanceKm = activity.distanceKm
         plan.tss = activity.tss
+        plan.tssBasis = activity.tssBasis
         plan.aerobicTE = activity.aerobicTE
         plan.anaerobicTE = activity.anaerobicTE
         plan.detailsJSON = activity.detailsJSON
@@ -916,7 +926,7 @@ final class TrainingDataStore {
             startMinute: WorkoutRecord.clockMinute(fromDetails: plan.detailsJSON),
             isCompleted: true,
             durationMinutes: plan.durationMinutes, distanceKm: plan.distanceKm,
-            tss: plan.tss, aerobicTE: plan.aerobicTE, anaerobicTE: plan.anaerobicTE,
+            tss: plan.tss, tssBasis: plan.tssBasis, aerobicTE: plan.aerobicTE, anaerobicTE: plan.anaerobicTE,
             detailsJSON: plan.detailsJSON
         )
         context.insert(activity)
@@ -924,6 +934,7 @@ final class TrainingDataStore {
         plan.durationMinutes = 0
         plan.distanceKm = 0
         plan.tss = nil
+        plan.tssBasis = nil
         plan.aerobicTE = nil
         plan.anaerobicTE = nil
         plan.detailsJSON = ""

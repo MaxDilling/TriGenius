@@ -103,7 +103,7 @@ final class ReminderToolHandler: CoachToolHandler {
             "reminders": store.rules.map(Self.ruleDict),
             "quiet_hours": Self.quietHoursDict(store)
         ]
-        return "✓ \(store.rules.count) reminder(s) configured\n\(String(prettyJSON: data))"
+        return "✓ \(store.rules.count) reminder(s) configured\n\(String(compactJSON: data))"
     }
 
     private func setReminder(_ args: [String: Any]) async -> String {
@@ -160,7 +160,7 @@ final class ReminderToolHandler: CoachToolHandler {
         await ReminderScheduler.shared.reconcile()
 
         let verb = existing == nil ? "Created" : "Updated"
-        return "✓ \(verb) reminder\n\(String(prettyJSON: Self.ruleDict(rule)))"
+        return "✓ \(verb) reminder\n\(String(compactJSON: Self.ruleDict(rule)))"
     }
 
     private func deleteReminder(_ args: [String: Any]) async -> String {

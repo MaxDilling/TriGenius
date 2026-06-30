@@ -4,7 +4,7 @@ import Foundation
 //
 // GOAL.md step 2: actively synchronize the latest activities from the active
 // data source (Garmin / Apple Health) into the local database on launch, then
-// serve the coach's `get_activities` exclusively from that local database.
+// serve the coach's `get_workouts` exclusively from that local database.
 //
 // The coach never reads activities live anymore — it reads what the launch sync
 // (and subsequent syncs) persisted. This keeps conversations fast and offline-
@@ -303,7 +303,7 @@ final class DataSyncCoordinator {
             "daily_metrics": daily,
             "summary": summary,
         ]
-        let json = String(prettyJSON: data)
+        let json = String(compactJSON: data)
         return "✓ Retrieved health metrics for the last \(days) days (local)\n\(json)"
     }
 
@@ -477,50 +477,69 @@ final class DataSyncCoordinator {
         return max(0, cal.dateComponents([.day], from: from, to: to).day ?? 0)
     }
 
-    // MARK: - Coach read path (DB-backed)
+    // MARK: - Coach read path — unified workouts (planned + completed, local)
 
-    /// Serve `get_activities` from the local database, merged across every enabled
-    /// read source. If the database is empty (e.g. the launch sync hasn't completed
-    /// yet), sync the enabled sources once and retry.
-    func activities(sport: String?, count: Int, days: Int?) async -> String {
-        var records = filtered(sport: sport, days: days)
-        if records.isEmpty {
-            await syncAll(AppSettings.storedReadSources())
-            records = filtered(sport: sport, days: days)
+    /// Serve the unified `get_workouts` from the local store. `status` selects the
+    /// sections (`planned` open plans / `completed` finished activities / both), so
+    /// completed rows never arrive via two tools. Completed rows are projected to the
+    /// lean, TSS-focused view (`CoachActivityProjection`); `detailed` expands them to
+    /// the per-lap breakdown, capped to 5. Each planned row carries its `workout_id`
+    /// + a ready-to-reuse `workout_data` for modify/move/delete. Source-agnostic.
+    func workouts(status: String, sport: String?, from: Date?, to: Date?, limit: Int, detailed: Bool) async -> String {
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let wantPlanned = status != "completed"
+        let wantCompleted = status != "planned"
+        let start = from ?? cal.date(byAdding: .day, value: -14, to: today)!
+        let end = to ?? cal.date(byAdding: .day, value: wantPlanned ? 28 : 0, to: today)!
+        let cap = max(detailed ? min(limit, 5) : limit, 0)
+
+        var data: [String: Any] = [
+            "range": ["start": DateFormatter.ymd.string(from: start),
+                      "end": DateFormatter.ymd.string(from: max(start, end))]
+        ]
+        var counts: [String] = []
+
+        if wantCompleted {
+            var completed = bySport(store.activities(from: start, to: end), sport)
+            if completed.isEmpty, store.activities(since: nil).isEmpty {
+                // First launch: the DB can be empty before the initial sync lands.
+                await syncAll(AppSettings.storedReadSources())
+                completed = bySport(store.activities(from: start, to: end), sport)
+            }
+            let rows = completed.prefix(cap).map { completedRow($0, detailed: detailed) }
+            data["completed"] = rows
+            counts.append("\(rows.count) completed")
         }
-        let limited = Array(records.prefix(count))
-        return response(for: limited, sport: sport, days: days)
+        if wantPlanned {
+            let rows = bySport(store.openScheduledWorkouts(from: start, to: end), sport)
+                .prefix(cap).map(plannedRow)
+            data["planned"] = rows
+            counts.append("\(rows.count) planned")
+        }
+        return "✓ Retrieved \(counts.joined(separator: " + ")) workouts (local)\n\(String(compactJSON: data))"
     }
 
-    // MARK: - Coach read path — workouts (planned + completed, local)
+    private func bySport(_ records: [WorkoutRecord], _ sport: String?) -> [WorkoutRecord] {
+        guard let sport, !sport.isEmpty else { return records }
+        return records.filter { SportFamily.matches(storedSport: $0.sport, filter: sport) }
+    }
 
-    /// Serve `get_workouts` from the local store: `scheduled` (open plans, each with
-    /// its `workout_id` + a ready-to-reuse `workout_data`) and `completed` (finished
-    /// activities). Source-agnostic — the coach edits plans by their local id and the
-    /// write handler routes the change to the active target.
-    func workoutsResponse(from: Date, to: Date) -> String {
-        let scheduled = store.openScheduledWorkouts(from: from, to: to)
-        let completed = store.activities(from: from, to: to)
-        let scheduledOut: [[String: Any]] = scheduled.map { rec in
-            [
-                "workout_id": rec.id,
-                "date": DateFormatter.ymd.string(from: rec.date),
-                "sport": rec.sport,
-                "workout_data": WorkoutPayloadBuilder.workoutData(from: rec)
-            ]
-        }
-        let completedOut: [[String: Any]] = completed.compactMap { rec in
-            guard let data = rec.detailsJSON.data(using: .utf8),
-                  var obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-            for key in Self.coachHiddenActivityKeys { obj.removeValue(forKey: key) }
-            return obj
-        }
-        let data: [String: Any] = [
-            "scheduled": scheduledOut,
-            "completed": completedOut,
-            "range": ["start": DateFormatter.ymd.string(from: from), "end": DateFormatter.ymd.string(from: to)]
+    private func completedRow(_ rec: WorkoutRecord, detailed: Bool) -> [String: Any] {
+        let details = (rec.detailsJSON.data(using: .utf8)
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }) ?? [:]
+        return detailed
+            ? CoachActivityProjection.detail(details, tss: rec.tss, tssBasis: rec.tssBasis)
+            : CoachActivityProjection.summary(details, tss: rec.tss, tssBasis: rec.tssBasis)
+    }
+
+    private func plannedRow(_ rec: WorkoutRecord) -> [String: Any] {
+        [
+            "workout_id": rec.id,
+            "date": DateFormatter.ymd.string(from: rec.date),
+            "sport": rec.sport,
+            "workout_data": WorkoutPayloadBuilder.workoutData(from: rec)
         ]
-        return "✓ Retrieved \(scheduledOut.count) scheduled + \(completedOut.count) completed workouts (local)\n\(String(prettyJSON: data))"
     }
 
     // MARK: - Write-target reconciliation (no plan lost on target switch)
@@ -564,49 +583,6 @@ final class DataSyncCoordinator {
             }
         }
         store.deleteScheduledWorkout(id: id)
-    }
-
-    // MARK: - Querying / filtering
-
-    private func filtered(sport: String?, days: Int?) -> [WorkoutRecord] {
-        // Normalize the cutoff to the start of the day, otherwise `days: 1` at
-        // 15:00 would drop yesterday-morning activities (cutoff "yesterday 15:00").
-        // `days: 1` now means "today and yesterday", `days: 7` the last 7 days + today.
-        let since = days.map {
-            Calendar.current.date(byAdding: .day, value: -$0, to: Calendar.current.startOfDay(for: Date()))!
-        }
-        let all = store.activities(since: since)
-        guard let sport, !sport.isEmpty else { return all }
-        return all.filter { SportFamily.matches(storedSport: $0.sport, filter: sport) }
-    }
-
-    // MARK: - Response building
-
-    /// Garmin's proprietary load/training-effect estimates are kept in storage for
-    /// the activity-detail UI but hidden from the coach: self-computed TSS is the
-    /// load spine, and these EPOC-derived numbers only invite over-trust.
-    private static let coachHiddenActivityKeys: Set<String> = ["training_load", "aerobic_te", "anaerobic_te"]
-
-    private func response(for records: [WorkoutRecord], sport: String?, days: Int?) -> String {
-        let formatted: [[String: Any]] = records.compactMap { rec in
-            guard let data = rec.detailsJSON.data(using: .utf8),
-                  var obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
-            for key in Self.coachHiddenActivityKeys { obj.removeValue(forKey: key) }
-            return obj
-        }
-
-        var summary = GarminTransform.calculateActivitySummary(formatted)
-        summary.removeValue(forKey: "avg_training_effect")   // derived from aerobic_te (hidden above)
-
-        var data: [String: Any] = [
-            "activities": formatted,
-            "count": formatted.count,
-            "summary": summary
-        ]
-        data["filter"] = (sport != nil || days != nil) ? ["sport": sport as Any, "days": days as Any] : NSNull()
-
-        let json = String(prettyJSON: data)
-        return "✓ Retrieved \(formatted.count) \(sport ?? "all") activities (local)\n\(json)"
     }
 
 }

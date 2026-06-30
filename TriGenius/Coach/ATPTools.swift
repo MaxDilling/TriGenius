@@ -14,14 +14,19 @@ final class ATPToolHandler: CoachToolHandler {
     private var store: TrainingDataStore { .shared }
 
     var definitions: [ToolDefinition] {
-        let emptyObject: [String: Any] = ["type": "object", "properties": [:], "required": []]
         let eventIDProp: [String: Any] = ["type": "string", "description": "The event's id (from get_atp)."]
         let weekProp: [String: Any] = ["type": "string", "description": "Any date within the target week (YYYY-MM-DD); snapped to that week's Monday."]
         return [
             ToolDefinition(
                 name: "get_atp",
-                description: "Read the Annual Training Plan (ATP) as JSON: methodology, events (with ids), pinned weeks, the current period and this week's TSS target, the projected fitness (CTL) for the next A race, and the upcoming weeks. Call this before discussing or adjusting the season plan.",
-                parameters: emptyObject
+                description: "Read the Annual Training Plan (ATP) as JSON: methodology, events (with ids), pinned weeks, the current period + this week's TSS target, and the next A race's projected fitness (CTL) — enough to discuss or adjust the season plan. Pass `detail: true` only when you need the full week-by-week upcoming schedule.",
+                parameters: [
+                    "type": "object",
+                    "properties": [
+                        "detail": ["type": "boolean", "description": "Include the week-by-week upcoming schedule (default false)."]
+                    ],
+                    "required": []
+                ]
             ),
             ToolDefinition(
                 name: "set_atp",
@@ -86,7 +91,7 @@ final class ATPToolHandler: CoachToolHandler {
 
     func execute(name: String, arguments: [String: Any]) async throws -> String {
         switch name {
-        case "get_atp": return Self.reportJSON()
+        case "get_atp": return Self.reportJSON(detailed: arguments["detail"] as? Bool ?? false)
         case "set_atp": return setConfig(arguments)
         case "set_atp_event": return setEvent(arguments)
         case "delete_atp_event": return deleteEvent(arguments)
@@ -208,7 +213,7 @@ final class ATPToolHandler: CoachToolHandler {
     /// The full get_atp view as JSON, read straight from the store so events show their
     /// ids and pins are listed even before the plan periodizes. `message` carries a
     /// confirmation line back from the mutating tools.
-    private static func reportJSON(message: String? = nil) -> String {
+    private static func reportJSON(message: String? = nil, detailed: Bool = false) -> String {
         let store = TrainingDataStore.shared
         let events = store.atpEvents().sorted { $0.date < $1.date }
         let pins = store.atpOverrides().sorted { $0.weekStart < $1.weekStart }
@@ -251,10 +256,12 @@ final class ATPToolHandler: CoachToolHandler {
             }
             let warn = plan.weeks.filter(\.rampExceeded).count
             if warn > 0 { root["ramp_warnings"] = warn }
-            let upcoming = plan.weeks.filter { $0.weekStart >= (cal.date(byAdding: .weekOfYear, value: -1, to: today) ?? today) }.prefix(8)
-            root["upcoming_weeks"] = upcoming.map { w -> [String: Any] in
-                ["week": iso(w.weekStart), "period": w.period.label, "planned_tss": Int(w.plannedTSS),
-                 "delta_ctl": (w.rampRate * 10).rounded() / 10, "pinned": w.pinned, "ramp_exceeded": w.rampExceeded]
+            if detailed {
+                let upcoming = plan.weeks.filter { $0.weekStart >= (cal.date(byAdding: .weekOfYear, value: -1, to: today) ?? today) }.prefix(8)
+                root["upcoming_weeks"] = upcoming.map { w -> [String: Any] in
+                    ["week": iso(w.weekStart), "period": w.period.label, "planned_tss": Int(w.plannedTSS),
+                     "delta_ctl": (w.rampRate * 10).rounded() / 10, "pinned": w.pinned, "ramp_exceeded": w.rampExceeded]
+                }
             }
         }
         return json(root)
@@ -268,11 +275,7 @@ final class ATPToolHandler: CoachToolHandler {
         return d
     }
 
-    private static func json(_ obj: [String: Any]) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
-              let s = String(data: data, encoding: .utf8) else { return "{}" }
-        return s
-    }
+    private static func json(_ obj: [String: Any]) -> String { String(compactJSON: obj) }
 
     // MARK: Formatting (system-prompt section)
 

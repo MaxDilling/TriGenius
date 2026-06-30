@@ -15,8 +15,9 @@ import Foundation
 nonisolated enum TSSScoring {
 
     /// Mutates `details` (swimming.cleaned_distance_m / swim_time_s, distance_km)
-    /// and returns the resolved distance (km) + TSS.
-    static func score(_ details: inout [String: Any], snapshot: PerformanceSnapshot) -> (distanceKm: Double, tss: Double?) {
+    /// and returns the resolved distance (km) + TSS + how the TSS was derived (the
+    /// provenance label surfaced to the athlete/coach; nil when no TSS was produced).
+    static func score(_ details: inout [String: Any], snapshot: PerformanceSnapshot) -> (distanceKm: Double, tss: Double?, basis: String?) {
         // 1. Swim: re-clean from the stored active lengths.
         if var swimming = details["swimming"] as? [String: Any],
            let pool = Coerce.double(swimming["pool_length_m"]), pool > 0,
@@ -44,7 +45,8 @@ nonisolated enum TSSScoring {
         details["distance_km"] = distanceKm
 
         // 3. TSS from the resolved details + current thresholds.
-        return (distanceKm, TSSCalculator.tss(details: details, snapshot: snapshot))
+        let (tss, basis) = TSSCalculator.compute(details: details, snapshot: snapshot)
+        return (distanceKm, tss, basis?.label)
     }
 
     private static func round1(_ v: Double) -> Double { (v * 10).rounded() / 10 }

@@ -56,7 +56,7 @@ actor GarminService {
 
     private func resultString(success: Bool, data: Any?, message: String) -> String {
         if !success { return "✗ Error: \(message)" }
-        let json = data.map { String(prettyJSON: $0) } ?? ""
+        let json = data.map { String(compactJSON: $0) } ?? ""
         return "✓ \(message)\n\(json)"
     }
 
@@ -196,8 +196,9 @@ actor GarminService {
     }
 
     /// Build the local-DB ingest snapshot from a *formatted* coach record. Stores
-    /// the full normalized record as `detailsJSON` (so `get_activities` can serve it
-    /// verbatim); TSS + the effective distance are computed by the store at ingest
+    /// the full normalized record as `detailsJSON` (the rich blob the detail UI and
+    /// the coach's lean `get_workouts` projection both read from); TSS + the
+    /// effective distance are computed by the store at ingest
     /// (`TrainingDataStore.ingest`), scored against the activity's own date. Returns
     /// nil without an id/date.
     private func ingestDTO(from rec: [String: Any]) -> IngestedActivity? {
@@ -219,7 +220,7 @@ actor GarminService {
         )
     }
 
-    // MARK: - get_activities
+    // MARK: - Activity fetch
 
     func getActivities(sport: String?, count: Int = 10, days: Int?) async -> String {
         do {

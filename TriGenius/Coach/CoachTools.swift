@@ -33,9 +33,10 @@ final class CoachToolRegistry {
 
 // MARK: - Activity / health read handler (source-agnostic)
 //
-// Always registered. Serves `get_activities` and `get_health_metrics` from the
-// local store, which merges every enabled read source (Apple Health + Garmin), so
-// the coach sees one unified history regardless of where it came from.
+// Always registered. Serves `get_health_metrics` from the local store, which
+// merges every enabled read source (Apple Health + Garmin), so the coach sees one
+// unified history regardless of where it came from. (Completed/planned workouts
+// are served by the unified `get_workouts` in `WorkoutSchedulingToolHandler`.)
 
 @MainActor
 final class ActivityReadToolHandler: CoachToolHandler {
@@ -51,36 +52,13 @@ final class ActivityReadToolHandler: CoachToolHandler {
                     ],
                     "required": []
                 ]
-            ),
-            ToolDefinition(
-                name: "get_activities",
-                description: "Fetch recent completed workouts with sport-specific metrics for analysis (includes the athlete's feel / RPE / notes when recorded). Merged across all connected sources.",
-                parameters: [
-                    "type": "object",
-                    "properties": [
-                        "sport": ["type": "string", "enum": ["running", "cycling", "swimming", "strength", "gym", "hiking", "walking"], "description": "Optional sport filter."],
-                        "count": ["type": "integer", "description": "Maximum number of activities to return. Default 10."],
-                        "days": ["type": "integer", "description": "Only include activities from the last N days."]
-                    ],
-                    "required": []
-                ]
             )
         ]
     }
 
     func execute(name: String, arguments: [String: Any]) async throws -> String {
-        switch name {
-        case "get_health_metrics":
-            return await DataSyncCoordinator.shared.healthMetrics(days: Coerce.int(arguments["days"]) ?? 7)
-        case "get_activities":
-            return await DataSyncCoordinator.shared.activities(
-                sport: arguments["sport"] as? String,
-                count: Coerce.int(arguments["count"]) ?? 10,
-                days: Coerce.int(arguments["days"])
-            )
-        default:
-            return "Unknown read tool: \(name)"
-        }
+        guard name == "get_health_metrics" else { return "Unknown read tool: \(name)" }
+        return await DataSyncCoordinator.shared.healthMetrics(days: Coerce.int(arguments["days"]) ?? 7)
     }
 }
 
@@ -368,7 +346,7 @@ final class CalendarToolHandler: CoachToolHandler {
             "count": payload.count,
             "range": ["start": DateFormatter.ymd.string(from: start), "end": DateFormatter.ymd.string(from: max(start, end))]
         ]
-        let json = String(prettyJSON: data)
+        let json = String(compactJSON: data)
         return "✓ Calendar availability for \(payload.count) day(s)\n\(json)"
     }
 
@@ -414,7 +392,7 @@ final class TrainingLoadToolHandler: CoachToolHandler {
         guard summary.hasData else {
             return "No training-load data yet — the local activity history is empty. Sync activities first."
         }
-        return String(prettyJSON: Self.dict(from: summary))
+        return String(compactJSON: Self.dict(from: summary))
     }
 
     private static func dict(from s: TrainingLoadSummary) -> [String: Any] {
@@ -472,7 +450,7 @@ final class TrainingLoadToolHandler: CoachToolHandler {
 // Always-on and source-agnostic. Lets the coach record the athlete's subjective
 // post-session feedback (Garmin's "How did you feel?" + perceived-effort prompt)
 // against a completed activity, stored as a local override on the activity record
-// so get_activities surfaces it — independent of whether the activity came from
+// so get_workouts surfaces it — independent of whether the activity came from
 // Garmin or Apple Health. The matching read-side fields (feel / rpe / notes) are
 // populated from Garmin directly in GarminService.formatActivityRecord.
 
@@ -483,11 +461,11 @@ final class WorkoutFeedbackToolHandler: CoachToolHandler {
         [
             ToolDefinition(
                 name: "log_workout_feedback",
-                description: "Record the athlete's subjective feedback on a completed activity, mirroring Garmin's post-workout prompt. Pass the activity's `id` from get_activities. `feel` is a 1–5 scale (1 = very weak, 3 = normal, 5 = very strong), `rpe` is the session perceived effort on a 1–10 scale (Borg CR10), and `note` is an optional free-text comment. Stored locally on the activity and returned by get_activities. Provide at least one of feel / rpe / note.",
+                description: "Record the athlete's subjective feedback on a completed activity, mirroring Garmin's post-workout prompt. Pass the activity's `id` from get_workouts (status `completed`). `feel` is a 1–5 scale (1 = very weak, 3 = normal, 5 = very strong), `rpe` is the session perceived effort on a 1–10 scale (Borg CR10), and `note` is an optional free-text comment. Stored locally on the activity and surfaced by get_workouts. Provide at least one of feel / rpe / note.",
                 parameters: [
                     "type": "object",
                     "properties": [
-                        "activity_id": ["type": "string", "description": "Activity id from get_activities."],
+                        "activity_id": ["type": "string", "description": "Activity id from get_workouts (status completed)."],
                         "feel": ["type": "integer", "description": "How the session felt, 1–5 (1 very weak … 5 very strong)."],
                         "rpe": ["type": "integer", "description": "Session perceived effort, 1–10 (Borg CR10)."],
                         "note": ["type": "string", "description": "Optional free-text comment on the session."]
@@ -514,7 +492,7 @@ final class WorkoutFeedbackToolHandler: CoachToolHandler {
 
         let ok = TrainingDataStore.shared.setWorkoutFeedback(activityId: id, feel: feel, rpe: rpe, note: note)
         guard ok else {
-            return "✗ No completed activity found for id \(id). List it with get_activities first."
+            return "✗ No completed activity found for id \(id). List it with get_workouts (status completed) first."
         }
         var saved: [String] = []
         if let feel { saved.append("feel \(feel)/5") }
@@ -527,9 +505,9 @@ final class WorkoutFeedbackToolHandler: CoachToolHandler {
 // MARK: - Garmin Tool Handler (Garmin-only read extras)
 //
 // Registered only when Garmin is an active READ source. The source-agnostic reads
-// (get_activities / get_health_metrics) live in `ActivityReadToolHandler`; planned-
-// workout writes live in `WorkoutSchedulingToolHandler`. What's left here is what is
-// genuinely Garmin-specific: the power-duration curve and the settings resync.
+// (`get_health_metrics` here, `get_workouts` in `WorkoutSchedulingToolHandler`) and
+// planned-workout writes are brand-neutral. What's left here is what is genuinely
+// Garmin-specific: the power-duration curve and the settings resync.
 
 @MainActor
 final class GarminToolHandler: CoachToolHandler {
@@ -603,12 +581,12 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
     private static let workoutDataProperties: [String: Any] = [
         "name": ["type": "string", "description": "Workout name."],
         "sport": ["type": "string", "enum": ["running", "cycling", "swimming", "strength", "yoga", "cardio", "other"], "description": "Workout sport."],
-        "duration_minutes": ["type": "integer", "description": "Total duration in minutes. Provide this and/or distance_meters (or explicit steps) — a workout can be time-based, distance-based, or both."],
-        "distance_meters": ["type": "number", "description": "Total distance in meters. Use for a distance goal (e.g. a 10 km run) instead of, or alongside, duration_minutes."],
+        "duration_minutes": ["type": "integer", "description": "Total duration in minutes (time goal). Give this and/or distance_meters, or explicit steps."],
+        "distance_meters": ["type": "number", "description": "Total distance in meters (distance goal)."],
         "pool_length": ["type": "integer", "description": "Pool length in meters for swim workouts (default 50)."],
         "description": ["type": "string", "description": "Workout description."],
-        "include_warmup": ["type": "boolean", "description": "Include a warm-up block when no explicit steps are given (default true)."],
-        "include_cooldown": ["type": "boolean", "description": "Include a cool-down block when no explicit steps are given (default true)."],
+        "include_warmup": ["type": "boolean", "description": "Add a warm-up block when no explicit steps are given (default true)."],
+        "include_cooldown": ["type": "boolean", "description": "Add a cool-down block when no explicit steps are given (default true)."],
         "steps": [
             "type": "array",
             "description": "Optional structured workout steps.",
@@ -635,9 +613,9 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                         ]
                     ],
                     "skip_last_rest": ["type": "boolean", "description": "Skip the last rest in a repeat block."],
-                    "target_type": ["type": "string", "enum": ["no_target", "heart_rate", "power", "pace", "speed", "cadence"], "description": "Intensity target type. Units: pace = seconds per km (seconds per 100 m for swim), speed = km/h, heart_rate = bpm, power = watts, cadence = rpm (cycling) or spm (run/swim)."],
-                    "target_low": ["type": "number", "description": "Target value. Pass a single value here (and/or in target_high) and the app expands it into a sensible band automatically — e.g. pace 300 (5:00/km) → 4:40–5:10."],
-                    "target_high": ["type": "number", "description": "Optional explicit upper bound. Provide a distinct target_low/target_high pair only to override the automatic band."]
+                    "target_type": ["type": "string", "enum": ["no_target", "heart_rate", "power", "pace", "speed", "cadence"], "description": "Intensity target type (units/bands in read_knowledge('workouts') §3)."],
+                    "target_low": ["type": "number", "description": "Single target value; the app auto-expands it into a band."],
+                    "target_high": ["type": "number", "description": "Optional explicit upper bound (overrides the auto band)."]
                 ]
             ]
         ]
@@ -647,14 +625,18 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
         [
             ToolDefinition(
                 name: "get_workouts",
-                description: "List the athlete's workouts for a date range. Returns `scheduled` (planned, editable workouts — each carries a `workout_id` and a `workout_data` object you can pass straight to modify_workout) and `completed` (finished activities). This is the source for the `workout_id` that modify_workout, move_workout, and delete_workout need. (For the athlete's real-world busy/free time, use read_calendar_availability instead.)",
+                description: "List the athlete's workouts, lean and TSS-focused. `status` selects what comes back: \"completed\" (finished activities, each with its `tss` and how it was derived `tss_basis`), \"planned\" (open, editable sessions — each carries the `workout_id` + `workout_data` that modify_workout / move_workout / delete_workout need), or \"all\" (both). Optional `sport` filter and `from`/`to` range (defaults: completed → last 14 days, planned → next 28). `detailed: true` adds the per-lap/interval breakdown for completed workouts (capped to 5 rows). (For the athlete's real-world busy/free time, use read_calendar_availability instead.)",
                 parameters: [
                     "type": "object",
                     "properties": [
-                        "start_date": ["type": "string", "description": "Start date in YYYY-MM-DD format."],
-                        "end_date": ["type": "string", "description": "End date in YYYY-MM-DD format."]
+                        "status": ["type": "string", "enum": ["completed", "planned", "all"], "description": "Which workouts to return. Default \"all\"."],
+                        "sport": ["type": "string", "enum": ["running", "cycling", "swimming", "strength"], "description": "Optional sport filter."],
+                        "from": ["type": "string", "description": "Start date in YYYY-MM-DD format (optional)."],
+                        "to": ["type": "string", "description": "End date in YYYY-MM-DD format (optional)."],
+                        "limit": ["type": "integer", "description": "Max rows per section. Default 20; forced to 5 when detailed."],
+                        "detailed": ["type": "boolean", "description": "Include the per-lap breakdown of completed workouts (default false)."]
                     ],
-                    "required": ["start_date", "end_date"]
+                    "required": []
                 ]
             ),
             ToolDefinition(
@@ -729,10 +711,14 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
     func execute(name: String, arguments: [String: Any]) async throws -> String {
         switch name {
         case "get_workouts":
-            let cal = Calendar.current
-            let from = (arguments["start_date"] as? String).flatMap(DateFormatter.ymd.date(from:)) ?? cal.startOfDay(for: Date())
-            let to = (arguments["end_date"] as? String).flatMap(DateFormatter.ymd.date(from:)) ?? cal.date(byAdding: .day, value: 28, to: from) ?? from
-            return DataSyncCoordinator.shared.workoutsResponse(from: from, to: max(from, to))
+            return await DataSyncCoordinator.shared.workouts(
+                status: (arguments["status"] as? String) ?? "all",
+                sport: arguments["sport"] as? String,
+                from: (arguments["from"] as? String).flatMap(DateFormatter.ymd.date(from:)),
+                to: (arguments["to"] as? String).flatMap(DateFormatter.ymd.date(from:)),
+                limit: Coerce.int(arguments["limit"]) ?? 20,
+                detailed: arguments["detailed"] as? Bool ?? false
+            )
         case "add_workouts":
             guard let items = arguments["workouts"] as? [[String: Any]], !items.isEmpty else {
                 return "✗ Error: workouts is missing or empty."
