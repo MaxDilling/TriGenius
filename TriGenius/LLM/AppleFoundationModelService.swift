@@ -3,7 +3,7 @@ import FoundationModels
 
 // MARK: - Apple Foundation Model Backend
 //
-// On-device Apple Intelligence backend. Unlike the (stateless) Gemini backend,
+// On-device Apple Intelligence backend. Unlike the stateless cloud backends,
 // this one OWNS its conversation: it keeps a single `LanguageModelSession`
 // alive across turns (faster follow-ups, real multi-turn context) and lets the
 // framework run the tool-call loop internally via `CoachToolBridge` tools.

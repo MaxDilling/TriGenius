@@ -3,9 +3,12 @@ import Combine
 
 // MARK: - Coach Memory
 //
-// Persists athlete profile, preferences, training plan and feedback
-// in a JSON file inside the app's Application Support directory.
-// Mirrors the structure of the Python coach_memory.json.
+// The athlete profile, preferences, weekly structure, sport progress and feedback
+// the coach reasons over. Backed by SwiftData rows (`CoachMemoryModels.swift`) so it
+// rides the one CloudKit sync; this class is the `@MainActor` façade that assembles
+// those rows into the value structs the app consumes and writes mutations back.
+// Snake_case keys (`init(from:)` / `toDict()`) match the legacy coach_memory.json,
+// which the launch migration imports once and which import/export still round-trips.
 
 /// Errors surfaced by `CoachMemory.importJSON`.
 enum MemoryImportError: LocalizedError {
@@ -17,6 +20,7 @@ enum MemoryImportError: LocalizedError {
     }
 }
 
+@MainActor
 final class CoachMemory: ObservableObject {
 
     // MARK: - Stored data
@@ -28,40 +32,30 @@ final class CoachMemory: ObservableObject {
     @Published private(set) var feedbackHistory: [FeedbackEntry]
     @Published private(set) var onboardingComplete: Bool
 
-    private let storageURL: URL
-
     // MARK: - Init
 
-    init(filename: String = "coach_memory.json") {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        storageURL = dir.appendingPathComponent(filename)
-
-        // Start with defaults
-        userProfile = UserProfile()
-        weeklyStructure = WeeklyStructure()
-        preferences = AthletePreferences()
-        sportProgress = SportProgressMap()
-        feedbackHistory = []
-        onboardingComplete = false
-
-        load()
+    /// Assembled from the SwiftData coach-memory rows. `CoachMemory` is the sole
+    /// writer of those rows, so the in-memory copy is authoritative.
+    init() {
+        let store = TrainingDataStore.shared
+        let (profile, onboarding) = store.coachProfile()
+        userProfile = profile
+        onboardingComplete = onboarding
+        weeklyStructure = store.coachWeeklyStructure()
+        preferences = store.coachPreferences()
+        sportProgress = store.coachSportProgress()
+        feedbackHistory = store.coachFeedback()
     }
 
     // MARK: - Persistence
 
-    private func load() {
-        guard let data = try? Data(contentsOf: storageURL),
-              let raw = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
-
-        if let p = raw["user_profile"] as? [String: Any] { userProfile = UserProfile(from: p) }
-        if let w = raw["weekly_structure"] as? [String: Any] { weeklyStructure = WeeklyStructure(from: w) }
-        if let pref = raw["preferences"] as? [String: Any] { preferences = AthletePreferences(from: pref) }
-        if let sp = raw["sport_progress"] as? [String: Any] { sportProgress = SportProgressMap(from: sp) }
-        if let fb = raw["feedback_history"] as? [[String: Any]] {
-            feedbackHistory = fb.compactMap(FeedbackEntry.init(from:))
-        }
-        onboardingComplete = raw["onboarding_complete"] as? Bool ?? false
+    /// Write the whole in-memory state back to the store as a full replace — used by
+    /// `importJSON`'s restore. The per-section mutators below persist incrementally.
+    private func persistAll() {
+        TrainingDataStore.shared.replaceCoachMemory(
+            profile: userProfile, onboardingComplete: onboardingComplete,
+            weeklyStructure: weeklyStructure, preferences: preferences,
+            sportProgress: sportProgress, feedback: feedbackHistory)
     }
 
     /// Replace the entire in-memory state from a `coach_memory.json` payload — the
@@ -81,30 +75,20 @@ final class CoachMemory: ObservableObject {
         sportProgress = (raw["sport_progress"] as? [String: Any]).map { SportProgressMap(from: $0) } ?? SportProgressMap()
         feedbackHistory = (raw["feedback_history"] as? [[String: Any]] ?? []).compactMap(FeedbackEntry.init(from:))
         onboardingComplete = raw["onboarding_complete"] as? Bool ?? false
-        save()
-    }
-
-    func save() {
-        let dict: [String: Any] = [
-            "user_profile": userProfile.toDict(),
-            "weekly_structure": weeklyStructure.toDict(),
-            "preferences": preferences.toDict(),
-            "sport_progress": sportProgress.toDict(),
-            "feedback_history": feedbackHistory.map { $0.toDict() },
-            "onboarding_complete": onboardingComplete
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: dict, options: .prettyPrinted) else { return }
-        // Write off the main thread; serialization already captured the data.
-        let url = storageURL
-        DispatchQueue.global(qos: .utility).async {
-            try? data.write(to: url, options: .atomic)
-        }
+        persistAll()
     }
 
     // MARK: - Debug helpers
 
-    /// Absolute path to the JSON file on disk.
-    var storageFilePath: String { storageURL.path }
+    /// Path of the SwiftData store now backing coach memory (debug display).
+    var storageFilePath: String { TrainingDataStore.shared.storeFilePath }
+
+    /// The pre-migration coach_memory.json location, read once by the launch
+    /// migration into the store rows.
+    static var legacyFileURL: URL? {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("coach_memory.json")
+    }
 
     /// The current in-memory state serialized as pretty-printed JSON.
     /// Falls back to the on-disk file if serialization fails.
@@ -121,43 +105,43 @@ final class CoachMemory: ObservableObject {
            let str = String(data: data, encoding: .utf8) {
             return str
         }
-        return (try? String(contentsOf: storageURL, encoding: .utf8)) ?? "{}"
+        return "{}"
     }
 
     // MARK: - Mutation helpers
 
     func updateProfile(_ update: (inout UserProfile) -> Void) {
         update(&userProfile)
-        save()
+        TrainingDataStore.shared.saveCoachProfile(userProfile, onboardingComplete: onboardingComplete)
     }
 
     func updateWeeklyStructure(_ update: (inout WeeklyStructure) -> Void) {
         update(&weeklyStructure)
-        save()
+        TrainingDataStore.shared.saveCoachWeeklyStructure(weeklyStructure)
     }
 
     func updatePreferences(_ update: (inout AthletePreferences) -> Void) {
         update(&preferences)
-        save()
+        TrainingDataStore.shared.saveCoachPreferences(preferences)
     }
 
     func updateSportProgress(sport: String, _ update: (inout SportProgress) -> Void) {
         var sp = sportProgress.progress(for: sport)
         update(&sp)
         sportProgress.setProgress(sp, for: sport)
-        save()
+        TrainingDataStore.shared.saveCoachSportProgress(sp, for: sport)
     }
 
     func addFeedback(_ text: String, category: String = "general") {
         let entry = FeedbackEntry(date: Date(), category: category, feedback: text)
         feedbackHistory.append(entry)
         if feedbackHistory.count > 50 { feedbackHistory.removeFirst() }
-        save()
+        TrainingDataStore.shared.appendCoachFeedback(entry, cap: 50)
     }
 
     func markOnboardingComplete() {
         onboardingComplete = true
-        save()
+        TrainingDataStore.shared.saveCoachProfile(userProfile, onboardingComplete: true)
     }
 
     // MARK: - Context summary for LLM
@@ -437,7 +421,7 @@ struct SportProgress {
     }
 }
 
-nonisolated struct Limitation {
+nonisolated struct Limitation: Codable {
     let item: String
     let reason: String?
 
@@ -454,7 +438,7 @@ nonisolated struct Limitation {
     }
 }
 
-nonisolated struct InjuryImpact {
+nonisolated struct InjuryImpact: Codable {
     let injury: String
     let impact: String
 

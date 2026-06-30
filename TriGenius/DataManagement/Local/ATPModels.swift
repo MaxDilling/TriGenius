@@ -7,6 +7,11 @@ import SwiftData
 // singleton config, the events, and sparse per-week overrides. The weekly grid
 // (periods, weekly TSS, the daily CTL curves) is DERIVED by the pure ATP engine at
 // read time — never stored. CTL is a daily series, so it lives in none of these.
+//
+// CloudKit-readiness (NSPersistentCloudKitContainer): no `@Attribute(.unique)`
+// (CloudKit can't enforce it — `TrainingDataStore.deduplicate()` is the merge-time
+// safety net instead) and every stored attribute has a default. The enum defaults
+// only satisfy the schema; every real row is fully populated through `init`.
 
 /// Volume methodology. `weeklyTSS` distributes a weekly-average TSS across the
 /// season; `targetCTL` back-solves the weekly TSS to hit each event's target CTL.
@@ -106,20 +111,20 @@ enum ATPEventType: String, Codable, Sendable, CaseIterable {
 @Model
 final class ATPConfig {
     static let singletonID = "atp_config"
-    @Attribute(.unique) var id: String = ATPConfig.singletonID
+    var id: String = ATPConfig.singletonID
 
     /// Anchor day the plan-CTL projection starts from (start of day, local).
-    var startDate: Date
+    var startDate: Date = Date.distantPast
     /// Seed CTL at `startDate`. Nil ⇒ derive from the PMC at `startDate`; a stored
     /// value is only needed when the plan starts without enough history.
     var startingCTL: Double?
-    var methodology: ATPMethodology
+    var methodology: ATPMethodology = ATPMethodology.weeklyTSS
     /// Recovery cadence: an easier week every N (3 or 4).
-    var recoveryCycle: Int
+    var recoveryCycle: Int = 4
     /// Max sustainable weekly ΔCTL the target-CTL back-solver may schedule.
-    var maxRampRate: Double
+    var maxRampRate: Double = 7
     /// The ONLY weekly-TSS-mode input; easiest/hardest week + annual are derived.
-    var weeklyAverageTSS: Double
+    var weeklyAverageTSS: Double = 0
 
     init(startDate: Date, startingCTL: Double? = nil, methodology: ATPMethodology,
          recoveryCycle: Int = 4, maxRampRate: Double = 7, weeklyAverageTSS: Double = 0) {
@@ -136,17 +141,17 @@ final class ATPConfig {
 /// The duration bucket lives in `eventType` (drives the suggested-volume helper).
 @Model
 final class ATPEvent {
-    @Attribute(.unique) var id: String
-    var name: String
+    var id: String = ""
+    var name: String = ""
     /// Event day (start of day, local).
-    var date: Date
+    var date: Date = Date.distantPast
     /// Discipline + duration bucket; its `discipline` drives the suggested-volume helper.
-    var eventType: ATPEventType
-    var priority: ATPEventPriority
+    var eventType: ATPEventType = ATPEventType.triOlympic
+    var priority: ATPEventPriority = ATPEventPriority.c
     /// Target CTL on the event day (target-CTL methodology). Nil otherwise.
     var targetCTL: Double?
     /// Free-text description; coach context. Detailed goals (time/place/PR) deferred.
-    var notes: String
+    var notes: String = ""
 
     init(id: String = UUID().uuidString, name: String, date: Date, eventType: ATPEventType,
          priority: ATPEventPriority, targetCTL: Double? = nil, notes: String = "") {
@@ -164,11 +169,11 @@ final class ATPEvent {
 /// engine treats it as a hard constraint and solves the free neighbours around it.
 @Model
 final class ATPWeekOverride {
-    /// Monday (start of day, local) of the pinned week — the natural unique key.
-    @Attribute(.unique) var weekStart: Date
+    /// Monday (start of day, local) of the pinned week — the natural key.
+    var weekStart: Date = Date.distantPast
     /// Pinned weekly TSS; 0 = rest / vacation.
-    var pinnedTSS: Double
-    var note: String
+    var pinnedTSS: Double = 0
+    var note: String = ""
 
     init(weekStart: Date, pinnedTSS: Double, note: String = "") {
         self.weekStart = weekStart

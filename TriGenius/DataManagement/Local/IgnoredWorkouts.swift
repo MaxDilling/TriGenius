@@ -10,10 +10,14 @@ import Foundation
 // calendar, the coach) without per-read-site filtering.
 //
 // Persisted in UserDefaults — deliberately NOT in the SwiftData store: the
-// blacklist must survive a DB clear / schema reset (`deleteAllData`, the
-// in-memory fallback), the very resets that re-sync everything; a SwiftData-backed
-// list would be wiped by them and the ignored workout would return. It is an app
-// preference, alongside the other UserDefaults settings.
+// blacklist must survive a DB clear / schema reset (`deleteAllData`, the in-memory
+// fallback), the very resets that re-sync everything; a SwiftData-backed list would
+// be wiped by them and the ignored workout would return. It is an app preference,
+// alongside the other UserDefaults settings.
+//
+// Cross-device sync of this list (via `NSUbiquitousKeyValueStore`) is deferred to
+// the iCloud flip: the KV store needs the iCloud capability, which a *personal*
+// Apple developer team can't grant — so it's added with the paid-membership work.
 
 /// One blacklisted workout. Carries cached display metadata so the management UI
 /// can list it without a (now-deleted) `WorkoutRecord`.

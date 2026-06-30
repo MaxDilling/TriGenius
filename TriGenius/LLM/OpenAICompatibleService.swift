@@ -1,32 +1,51 @@
 import Foundation
 
-// MARK: - LM Studio Backend
+// MARK: - OpenAI-compatible Backend
 //
-// Talks to a local LM Studio server over its OpenAI-compatible REST API
-// (`POST {baseURL}/chat/completions`). Stateless and CoachBrain-driven, exactly
-// like `GeminiBackend`: CoachBrain owns the transcript and the tool-call loop.
+// One client for every backend that speaks the OpenAI chat-completions wire
+// protocol (`POST {baseURL}/chat/completions`): a local LM Studio server and the
+// hosted OpenRouter gateway today. Stateless and CoachBrain-driven: CoachBrain
+// owns the transcript and the tool-call loop.
 //
-// LM Studio runs the model on the user's own Mac, so there's no API key — just a
-// base URL (default `http://localhost:1234/v1`) and the loaded model's id.
+// What varies between providers is only the envelope — base URL, an optional
+// `Bearer` API key (LM Studio runs locally and needs none; OpenRouter does), a
+// few extra headers, and a sensible timeout — so those are init parameters and
+// the request/response plumbing is shared.
 //
 // Tool-call plumbing: the OpenAI schema matches tool results to calls by an
-// opaque `tool_call_id`. We stash the id LM Studio returns in
+// opaque `tool_call_id`. We stash the id the server returns in
 // `ToolCallRecord.thoughtSignature` (its purpose: a backend token echoed back on
 // the next turn) and re-pair it with the matching `ToolResultRecord` by position,
 // since CoachBrain appends results in the same order as the calls.
 
-final class LMStudioBackend: LLMBackend {
-    let displayName = "LM Studio"
+final class OpenAICompatibleBackend: LLMBackend {
+    let displayName: String
     let supportsTools = true
     let isAvailable = true
 
     private let baseURL: String
+    private let apiKey: String?
+    private let extraHeaders: [String: String]
+    private let timeout: TimeInterval
     private(set) var model: String
 
-    /// `baseURL` should include the `/v1` suffix LM Studio serves under.
-    init(baseURL: String = "http://localhost:1234/v1", model: String = "local-model") {
+    /// `baseURL` must include the API version suffix the provider serves under
+    /// (`/v1`). `apiKey` is nil for keyless local servers. `extraHeaders` carries
+    /// provider-specific niceties (e.g. OpenRouter's `X-Title`).
+    init(
+        displayName: String,
+        baseURL: String,
+        apiKey: String? = nil,
+        extraHeaders: [String: String] = [:],
+        model: String,
+        timeout: TimeInterval = 180
+    ) {
+        self.displayName = displayName
         // Trim a trailing slash so endpoint joins are predictable.
         self.baseURL = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
+        self.apiKey = apiKey
+        self.extraHeaders = extraHeaders
+        self.timeout = timeout
         self.model = model.isEmpty ? "local-model" : model
     }
 
@@ -46,7 +65,7 @@ final class LMStudioBackend: LLMBackend {
 
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
             let bodyStr = String(data: data, encoding: .utf8) ?? "no body"
-            throw LMStudioError.apiError(statusCode: http.statusCode, body: bodyStr)
+            throw OpenAICompatibleError.apiError(backend: displayName, statusCode: http.statusCode, body: bodyStr)
         }
 
         return try parseResponse(data: data)
@@ -72,7 +91,8 @@ final class LMStudioBackend: LLMBackend {
                     if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                         var bodyStr = ""
                         for try await line in bytes.lines { bodyStr += line }
-                        throw LMStudioError.apiError(
+                        throw OpenAICompatibleError.apiError(
+                            backend: displayName,
                             statusCode: http.statusCode,
                             body: bodyStr.isEmpty ? "no body" : bodyStr
                         )
@@ -130,14 +150,19 @@ final class LMStudioBackend: LLMBackend {
         tools: [ToolDefinition]
     ) throws -> URLRequest {
         guard let url = URL(string: "\(baseURL)/chat/completions") else {
-            throw LMStudioError.invalidURL
+            throw OpenAICompatibleError.invalidURL(backend: displayName)
         }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        // Local models can be slow on first load / long contexts.
-        request.timeoutInterval = 300
+        if let apiKey, !apiKey.isEmpty {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        for (field, value) in extraHeaders {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
+        request.timeoutInterval = timeout
 
         var messages: [[String: Any]] = [["role": "system", "content": systemPrompt]]
         messages.append(contentsOf: openAIMessages(from: turns))
@@ -245,7 +270,7 @@ final class LMStudioBackend: LLMBackend {
             let message = first["message"] as? [String: Any]
         else {
             let raw = String(data: data, encoding: .utf8) ?? ""
-            throw LMStudioError.invalidResponse(raw: raw)
+            throw OpenAICompatibleError.invalidResponse(backend: displayName, raw: raw)
         }
 
         let text = message["content"] as? String
@@ -342,19 +367,19 @@ private struct StreamingToolCall {
 
 // MARK: - Errors
 
-enum LMStudioError: LocalizedError {
-    case invalidURL
-    case apiError(statusCode: Int, body: String)
-    case invalidResponse(raw: String)
+enum OpenAICompatibleError: LocalizedError {
+    case invalidURL(backend: String)
+    case apiError(backend: String, statusCode: Int, body: String)
+    case invalidResponse(backend: String, raw: String)
 
     var errorDescription: String? {
         switch self {
-        case .invalidURL:
-            return "Invalid LM Studio server URL."
-        case .apiError(let code, let body):
-            return "LM Studio error \(code): \(body)"
-        case .invalidResponse(let raw):
-            return "Invalid response from LM Studio: \(raw.prefix(200))"
+        case .invalidURL(let backend):
+            return "Invalid \(backend) server URL."
+        case .apiError(let backend, let code, let body):
+            return "\(backend) error \(code): \(body)"
+        case .invalidResponse(let backend, let raw):
+            return "Invalid response from \(backend): \(raw.prefix(200))"
         }
     }
 }

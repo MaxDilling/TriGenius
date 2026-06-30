@@ -313,8 +313,8 @@ final class CoachBrain {
     ///
     /// `onPartial` receives the *cumulative* reply text as it streams in.
     /// Backends that manage their own conversation (Apple FM) stream natively;
-    /// CoachBrain-driven backends (Gemini) stream the final answer turn through
-    /// the same callback via `completeStreaming` inside the tool loop.
+    /// CoachBrain-driven backends (OpenRouter, LM Studio) stream the final answer
+    /// turn through the same callback via `completeStreaming` inside the tool loop.
     func sendMessage(_ text: String, onPartial: @escaping (String) -> Void = { _ in }) async -> String {
         isThinking = true
         errorMessage = nil
@@ -442,7 +442,7 @@ final class CoachBrain {
 
     /// Executor used by self-managing backends. Arguments arrive as a JSON
     /// string and are parsed into `[String: Any]` here on the MainActor — the
-    /// same shape the Gemini path produces — before running the handler.
+    /// same shape the CoachBrain-driven path produces — before running the handler.
     private func executeToolJSON(name: String, argumentsJSON: String) async -> String {
         var arguments: [String: Any] = [:]
         if let data = argumentsJSON.data(using: .utf8),
@@ -540,7 +540,7 @@ final class CoachBrain {
 // MARK: - Backend factory
 
 enum BackendType: String, CaseIterable, Identifiable {
-    case gemini = "Gemini"
+    case openRouter = "OpenRouter"
     case appleIntelligence = "Apple Intelligence"
     case lmStudio = "LM Studio"
 
@@ -551,12 +551,23 @@ enum BackendType: String, CaseIterable, Identifiable {
 enum BackendFactory {
     static func make(type: BackendType, apiKey: String = "") -> LLMBackend {
         switch type {
-        case .gemini:
-            return GeminiBackend(apiKey: apiKey)
+        case .openRouter:
+            return OpenAICompatibleBackend(
+                displayName: BackendType.openRouter.rawValue,
+                baseURL: "https://openrouter.ai/api/v1",
+                apiKey: apiKey,
+                extraHeaders: ["X-Title": "TriGenius"],
+                model: "deepseek/deepseek-v4-flash"
+            )
         case .appleIntelligence:
             return FoundationModelBackendFactory.make()
         case .lmStudio:
-            return LMStudioBackend()
+            return OpenAICompatibleBackend(
+                displayName: BackendType.lmStudio.rawValue,
+                baseURL: "http://localhost:1234/v1",
+                model: "local-model",
+                timeout: 300
+            )
         }
     }
 }
@@ -581,6 +592,6 @@ enum CoachBrainError: LocalizedError {
     case noBackend
 
     var errorDescription: String? {
-        "No AI backend configured. Please enter a Gemini API key in Settings."
+        "No AI backend configured. Please set one up in Settings."
     }
 }

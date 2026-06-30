@@ -29,6 +29,13 @@ extension Notification.Name {
 // queryable history.
 
 // MARK: - SwiftData model
+//
+// CloudKit-readiness (NSPersistentCloudKitContainer): every `@Model` here keeps
+// `id` (and the other natural keys) as a *plain* attribute — no
+// `@Attribute(.unique)`, which CloudKit can't enforce — and gives every stored
+// attribute a default. Single-device dedup is handled by the fetch-by-id upsert
+// in every ingest path; `TrainingDataStore.deduplicate()` is the safety net for
+// the duplicates a CloudKit merge of two offline devices can create.
 
 /// One workout slot — planned, completed, or both. Keyed by a stable id
 /// (`garmin:<id>`, `healthkit:<uuid>`, `local:<uuid>`) so repeated syncs upsert
@@ -36,14 +43,14 @@ extension Notification.Name {
 /// analytics layer (which only ever sees completed rows) reads them directly.
 @Model
 final class WorkoutRecord {
-    @Attribute(.unique) var id: String
+    var id: String = ""
     /// Origin of the record ("garmin", "healthkit", "local").
-    var source: String
+    var source: String = ""
     /// Start-of-day date the workout belongs to (local), used for daily buckets.
-    var date: Date
+    var date: Date = Date.distantPast
     /// Sport key (e.g. "running", "lap_swimming", "Cycling").
-    var sport: String
-    var name: String
+    var sport: String = ""
+    var name: String = ""
     /// Per-write-target external ids, JSON-encoded: `{"garmin":"123","appleWatch":"<uuid>"}`.
     /// Lets a write-target switch re-push a plan that the new target hasn't seen,
     /// without losing the original.
@@ -205,16 +212,16 @@ enum MetricKeys {
 /// instead of duplicating, while different days append to the series.
 @Model
 final class PerformanceMetricRecord {
-    @Attribute(.unique) var id: String
+    var id: String = ""
     /// snake_case metric key, e.g. "cycling_ftp", "swim_css_speed", "resting_hr".
-    var metricKey: String
-    var value: Double
+    var metricKey: String = ""
+    var value: Double = 0
     /// Unit token, e.g. "watts", "bpm", "ml_kg_min", "sec_per_100m".
-    var unit: String
+    var unit: String = ""
     /// Origin of the value ("garmin", "healthkit", "manual").
-    var source: String
+    var source: String = ""
     /// Start-of-day date the value belongs to (local).
-    var date: Date
+    var date: Date = Date.distantPast
 
     init(id: String, metricKey: String, value: Double, unit: String, source: String, date: Date) {
         self.id = id
@@ -396,16 +403,31 @@ final class TrainingDataStore {
     let container: ModelContainer
     private var context: ModelContext { container.mainContext }
 
+    /// On-disk path of the backing store (debug display); "in-memory store" for the
+    /// fallback configuration.
+    var storeFilePath: String {
+        container.configurations.first?.url.path ?? "in-memory store"
+    }
+
     private init() {
         do {
-            container = try ModelContainer(for: WorkoutRecord.self, PerformanceMetricRecord.self, ATPConfig.self, ATPEvent.self, ATPWeekOverride.self)
+            container = try ModelContainer(for: TrainingDataStore.schema)
         } catch {
             // An in-memory fallback keeps the app usable even if the on-disk
             // store can't be opened (e.g. an incompatible migration).
             let config = ModelConfiguration(isStoredInMemoryOnly: true)
-            container = try! ModelContainer(for: WorkoutRecord.self, PerformanceMetricRecord.self, ATPConfig.self, ATPEvent.self, ATPWeekOverride.self, configurations: config)
+            container = try! ModelContainer(for: TrainingDataStore.schema, configurations: config)
         }
     }
+
+    /// Every `@Model` the store owns: the workout/metric time series, the ATP
+    /// inputs, and the coach-memory rows (migrated out of `coach_memory.json`).
+    static let schema = Schema([
+        WorkoutRecord.self, PerformanceMetricRecord.self,
+        ATPConfig.self, ATPEvent.self, ATPWeekOverride.self,
+        ProfileRecord.self, WeeklyStructureRecord.self, PreferencesRecord.self,
+        SportProgressRecord.self, FeedbackRecord.self,
+    ])
 
     /// Coalesces change notifications: every mutating method calls this after its
     /// `context.save()`, but a burst within one runloop tick (a sync that ingests
@@ -418,6 +440,70 @@ final class TrainingDataStore {
             self?.changePending = false
             NotificationCenter.default.post(name: .trainingDataDidChange, object: nil)
         }
+    }
+
+    // MARK: - Cross-device dedup
+    //
+    // The `@Attribute(.unique)` constraints were dropped for CloudKit (which can't
+    // enforce them). On a single device the fetch-by-id upsert in every ingest path
+    // already prevents duplicates; these passes are the safety net for the duplicates
+    // a CloudKit merge of two offline devices can produce. Idempotent — a no-op on a
+    // store with none. The per-type passes don't save; the caller's `context.save()`
+    // covers them. `deduplicate()` is the standalone entry the remote-change handler
+    // will call once CloudKit is enabled.
+
+    /// Collapse duplicate rows across every model down to one per natural key, then
+    /// save. Idempotent.
+    func deduplicate() {
+        dedupeWorkouts()
+        dedupe(PerformanceMetricRecord.self) { $0.id }
+        dedupe(ATPConfig.self) { $0.id }
+        dedupe(ATPEvent.self) { $0.id }
+        dedupe(ATPWeekOverride.self) { DateFormatter.ymd.string(from: $0.weekStart) }
+        dedupe(ProfileRecord.self) { $0.id }
+        dedupe(WeeklyStructureRecord.self) { $0.id }
+        dedupe(PreferencesRecord.self) { $0.id }
+        dedupe(SportProgressRecord.self) { $0.sport }
+        dedupe(FeedbackRecord.self) { $0.id }
+        try? context.save()
+        markChanged()
+    }
+
+    /// Delete all but the first row per natural `key` for a model type. The kept row
+    /// is arbitrary among equals — fine for the value-equivalent keys (a metric/day,
+    /// an ATP input); workouts get their own ref-merging pass below. Does not save.
+    private func dedupe<T: PersistentModel>(_ type: T.Type, key: (T) -> String) {
+        let all = (try? context.fetch(FetchDescriptor<T>())) ?? []
+        guard all.count > 1 else { return }
+        var seen = Set<String>()
+        for row in all where !seen.insert(key(row)).inserted { context.delete(row) }
+    }
+
+    /// Keep the most-complete row per workout id, folding any external ref the
+    /// dropped duplicate carried onto the survivor (so a write-target id is never
+    /// lost). Does not save.
+    private func dedupeWorkouts() {
+        let all = (try? context.fetch(FetchDescriptor<WorkoutRecord>())) ?? []
+        guard all.count > 1 else { return }
+        var winners: [String: WorkoutRecord] = [:]
+        for row in all {
+            guard let current = winners[row.id] else { winners[row.id] = row; continue }
+            let winner = Self.moreComplete(current, row) ? current : row
+            let loser = winner === current ? row : current
+            for (k, v) in loser.externalRefs where winner.externalRefs[k] == nil {
+                winner.setExternalRef(target: k, externalId: v)
+            }
+            winners[row.id] = winner
+            context.delete(loser)
+        }
+    }
+
+    /// Order two same-id rows by how much they carry: a completed section beats a
+    /// plan-only row, a plan beats neither, then the richer `detailsJSON` wins.
+    private static func moreComplete(_ a: WorkoutRecord, _ b: WorkoutRecord) -> Bool {
+        if a.isCompleted != b.isCompleted { return a.isCompleted }
+        if a.isPlanned != b.isPlanned { return a.isPlanned }
+        return a.detailsJSON.count >= b.detailsJSON.count
     }
 
     /// Delete every stored record — workouts and performance metrics. The
@@ -502,6 +588,7 @@ final class TrainingDataStore {
             )
             context.insert(rec)
         }
+        dedupeWorkouts()
         try? context.save()
         markChanged()
     }
@@ -765,6 +852,7 @@ final class TrainingDataStore {
                 }
             }
         }
+        dedupeWorkouts()
         try? context.save()
         markChanged()
     }
@@ -1130,6 +1218,7 @@ final class TrainingDataStore {
                 ))
             }
         }
+        dedupe(PerformanceMetricRecord.self) { $0.id }
         try? context.save()
         markChanged()
     }
@@ -1321,5 +1410,215 @@ extension TrainingDataStore {
         for record in all { context.delete(record) }
         try? context.save()
         markChanged()
+    }
+}
+
+// MARK: - Coach-memory store API
+//
+// The athlete's prompt context, migrated out of coach_memory.json into the rows
+// in `CoachMemoryModels.swift` so it rides the same CloudKit sync. Kept here (like
+// the ATP API) so it can reach the store's private `context` / `markChanged()`.
+// `CoachMemory` is the façade that maps these rows to the value structs the app
+// consumes; `deleteAllData()` leaves them intact. The struct↔record field mapping
+// lives in the `apply`/`make` helpers, shared by the per-section savers and the
+// full-restore `replaceCoachMemory`.
+extension TrainingDataStore {
+
+    // MARK: Reads
+
+    /// The athlete profile plus the onboarding flag. Defaults when no row exists.
+    func coachProfile() -> (profile: UserProfile, onboardingComplete: Bool) {
+        guard let r = try? context.fetch(FetchDescriptor<ProfileRecord>()).first else {
+            return (UserProfile(), false)
+        }
+        var p = UserProfile()
+        p.name = r.name
+        p.goals = r.goals
+        if let lat = r.latitude, let lon = r.longitude { p.coordinates = (lat, lon) }
+        return (p, r.onboardingComplete)
+    }
+
+    func coachWeeklyStructure() -> WeeklyStructure {
+        guard let r = try? context.fetch(FetchDescriptor<WeeklyStructureRecord>()).first else {
+            return WeeklyStructure()
+        }
+        var w = WeeklyStructure()
+        w.maxHours = r.maxHours
+        w.preferredRestDay = r.preferredRestDay
+        w.longRunDay = r.longRunDay
+        w.longRideDay = r.longRideDay
+        w.sportRatio = Self.familyMap(r.sportRatio)
+        w.sportFloors = Self.familyMap(r.sportFloors)
+        return w
+    }
+
+    func coachPreferences() -> AthletePreferences {
+        guard let r = try? context.fetch(FetchDescriptor<PreferencesRecord>()).first else {
+            return AthletePreferences()
+        }
+        var p = AthletePreferences()
+        p.noSwimDays = r.noSwimDays
+        p.noBikeDays = r.noBikeDays
+        p.noRunDays = r.noRunDays
+        p.morningWorkouts = r.morningWorkouts
+        p.indoorTrainerAvailable = r.indoorTrainerAvailable
+        return p
+    }
+
+    func coachSportProgress() -> SportProgressMap {
+        let rows = (try? context.fetch(FetchDescriptor<SportProgressRecord>())) ?? []
+        var map = SportProgressMap()
+        for r in rows { map.setProgress(Self.make(from: r), for: r.sport) }
+        return map
+    }
+
+    func coachFeedback() -> [FeedbackEntry] {
+        let rows = (try? context.fetch(FetchDescriptor<FeedbackRecord>(
+            sortBy: [SortDescriptor(\.date, order: .forward)]))) ?? []
+        return rows.map { FeedbackEntry(date: $0.date, category: $0.category, feedback: $0.feedback) }
+    }
+
+    /// Whether any coach-memory row exists yet — gates the one-time JSON import.
+    var hasCoachMemory: Bool {
+        let counts = [
+            (try? context.fetchCount(FetchDescriptor<ProfileRecord>())) ?? 0,
+            (try? context.fetchCount(FetchDescriptor<WeeklyStructureRecord>())) ?? 0,
+            (try? context.fetchCount(FetchDescriptor<PreferencesRecord>())) ?? 0,
+            (try? context.fetchCount(FetchDescriptor<SportProgressRecord>())) ?? 0,
+            (try? context.fetchCount(FetchDescriptor<FeedbackRecord>())) ?? 0,
+        ]
+        return counts.contains { $0 > 0 }
+    }
+
+    // MARK: Writes (one section each, mirroring CoachMemory's mutators)
+
+    func saveCoachProfile(_ p: UserProfile, onboardingComplete: Bool) {
+        let r = (try? context.fetch(FetchDescriptor<ProfileRecord>()).first) ?? {
+            let new = ProfileRecord(); context.insert(new); return new
+        }()
+        Self.apply(p, onboardingComplete: onboardingComplete, to: r)
+        try? context.save(); markChanged()
+    }
+
+    func saveCoachWeeklyStructure(_ w: WeeklyStructure) {
+        let r = (try? context.fetch(FetchDescriptor<WeeklyStructureRecord>()).first) ?? {
+            let new = WeeklyStructureRecord(); context.insert(new); return new
+        }()
+        Self.apply(w, to: r)
+        try? context.save(); markChanged()
+    }
+
+    func saveCoachPreferences(_ p: AthletePreferences) {
+        let r = (try? context.fetch(FetchDescriptor<PreferencesRecord>()).first) ?? {
+            let new = PreferencesRecord(); context.insert(new); return new
+        }()
+        Self.apply(p, to: r)
+        try? context.save(); markChanged()
+    }
+
+    func saveCoachSportProgress(_ p: SportProgress, for sport: String) {
+        let key = sport.lowercased()
+        let r = (try? context.fetch(FetchDescriptor<SportProgressRecord>(
+            predicate: #Predicate { $0.sport == key })).first) ?? {
+            let new = SportProgressRecord(sport: key); context.insert(new); return new
+        }()
+        Self.apply(p, to: r)
+        try? context.save(); markChanged()
+    }
+
+    /// Append one feedback entry and trim to the newest `cap` rows.
+    func appendCoachFeedback(_ e: FeedbackEntry, cap: Int) {
+        context.insert(FeedbackRecord(date: e.date, category: e.category, feedback: e.feedback))
+        let rows = (try? context.fetch(FetchDescriptor<FeedbackRecord>(
+            sortBy: [SortDescriptor(\.date, order: .reverse)]))) ?? []
+        if rows.count > cap { for r in rows[cap...] { context.delete(r) } }
+        try? context.save(); markChanged()
+    }
+
+    /// Full restore from an imported coach_memory.json — wipe every coach-memory
+    /// row, then write the supplied state. Matches `importJSON`'s replace-not-merge
+    /// semantics. Leaves the time-series / ATP rows untouched.
+    func replaceCoachMemory(profile: UserProfile, onboardingComplete: Bool,
+                            weeklyStructure: WeeklyStructure, preferences: AthletePreferences,
+                            sportProgress: SportProgressMap, feedback: [FeedbackEntry]) {
+        try? context.delete(model: ProfileRecord.self)
+        try? context.delete(model: WeeklyStructureRecord.self)
+        try? context.delete(model: PreferencesRecord.self)
+        try? context.delete(model: SportProgressRecord.self)
+        try? context.delete(model: FeedbackRecord.self)
+
+        let pr = ProfileRecord(); Self.apply(profile, onboardingComplete: onboardingComplete, to: pr)
+        context.insert(pr)
+        let wr = WeeklyStructureRecord(); Self.apply(weeklyStructure, to: wr); context.insert(wr)
+        let prefR = PreferencesRecord(); Self.apply(preferences, to: prefR); context.insert(prefR)
+        for sport in sportProgress.toDict().keys {
+            let sr = SportProgressRecord(sport: sport.lowercased())
+            Self.apply(sportProgress.progress(for: sport), to: sr)
+            context.insert(sr)
+        }
+        for e in feedback {
+            context.insert(FeedbackRecord(date: e.date, category: e.category, feedback: e.feedback))
+        }
+        try? context.save(); markChanged()
+    }
+
+    // MARK: Struct ↔ record mapping
+
+    private static func apply(_ p: UserProfile, onboardingComplete: Bool, to r: ProfileRecord) {
+        r.name = p.name
+        r.goals = p.goals
+        r.latitude = p.coordinates?.lat
+        r.longitude = p.coordinates?.lon
+        r.onboardingComplete = onboardingComplete
+    }
+
+    private static func apply(_ w: WeeklyStructure, to r: WeeklyStructureRecord) {
+        r.maxHours = w.maxHours
+        r.preferredRestDay = w.preferredRestDay
+        r.longRunDay = w.longRunDay
+        r.longRideDay = w.longRideDay
+        r.sportRatio = stringKeyed(w.sportRatio)
+        r.sportFloors = stringKeyed(w.sportFloors)
+    }
+
+    private static func apply(_ p: AthletePreferences, to r: PreferencesRecord) {
+        r.noSwimDays = p.noSwimDays
+        r.noBikeDays = p.noBikeDays
+        r.noRunDays = p.noRunDays
+        r.morningWorkouts = p.morningWorkouts
+        r.indoorTrainerAvailable = p.indoorTrainerAvailable
+    }
+
+    private static func apply(_ p: SportProgress, to r: SportProgressRecord) {
+        r.currentLevel = p.currentLevel
+        r.abilities = p.abilities
+        r.limitations = p.limitations
+        r.injuriesAffecting = p.injuriesAffecting
+        r.currentFocus = p.currentFocus
+        r.maxContinuous = p.maxContinuous
+        r.equipment = p.equipment
+        r.notes = p.notes
+    }
+
+    private static func make(from r: SportProgressRecord) -> SportProgress {
+        var p = SportProgress()
+        p.currentLevel = r.currentLevel
+        p.abilities = r.abilities
+        p.limitations = r.limitations
+        p.injuriesAffecting = r.injuriesAffecting
+        p.currentFocus = r.currentFocus
+        p.maxContinuous = r.maxContinuous
+        p.equipment = r.equipment
+        p.notes = r.notes
+        return p
+    }
+
+    private static func familyMap(_ d: [String: Double]) -> [SportFamily: Double] {
+        var out: [SportFamily: Double] = [:]
+        for (k, v) in d { if let fam = SportFamily(rawValue: k.lowercased()) { out[fam] = v } }
+        return out
+    }
+    private static func stringKeyed(_ m: [SportFamily: Double]) -> [String: Double] {
+        Dictionary(uniqueKeysWithValues: m.map { ($0.key.rawValue, $0.value) })
     }
 }

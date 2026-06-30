@@ -44,7 +44,7 @@ struct Report: Identifiable {
     let timestamp: Date
     /// Optional description the athlete typed when filing the report.
     let note: String
-    /// Active LLM backend at capture time (raw token, e.g. "gemini").
+    /// Active LLM backend at capture time (raw token, e.g. "OpenRouter").
     let backend: String
     /// Active data source at capture time (raw token, e.g. "garmin").
     let dataSource: String

@@ -54,14 +54,17 @@ enum WriteTarget: String, CaseIterable, Identifiable {
 // MARK: - App Settings
 
 final class AppSettings: ObservableObject {
-    @Published var geminiAPIKey: String {
-        didSet { UserDefaults.standard.set(geminiAPIKey, forKey: "gemini_api_key") }
-    }
     @Published var selectedBackend: BackendType {
         didSet { UserDefaults.standard.set(selectedBackend.rawValue, forKey: "selected_backend") }
     }
-    @Published var geminiModel: String {
-        didSet { UserDefaults.standard.set(geminiModel, forKey: "gemini_model") }
+    /// Stored in the Keychain (synchronizable via iCloud Keychain), never in
+    /// UserDefaults — a secret shouldn't sit in plaintext or ride the CloudKit store.
+    @Published var openRouterAPIKey: String {
+        didSet { KeychainStore.set(openRouterAPIKey, for: KeychainStore.openRouterAPIKey) }
+    }
+    /// The OpenRouter model id (e.g. `deepseek/deepseek-v4-flash`).
+    @Published var openRouterModel: String {
+        didSet { UserDefaults.standard.set(openRouterModel, forKey: "openrouter_model") }
     }
     /// Active read sources (parallel). Persisted as a CSV under `read_sources`.
     @Published var readSources: Set<DataSource> {
@@ -112,19 +115,24 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(aiDashboardInsight, forKey: "ai_dashboard_insight") }
     }
 
-    static let availableGeminiModels = [
-        "gemini-2.5-flash",
-        "gemini-3.5-flash",
-        "gemini-3.1-pro-preview",
-        "gemma-3-27b-it",
-        "google/gemma-4-26b-a4b-qat"
+    /// A curated shortlist of tool-capable OpenRouter model ids. OpenRouter
+    /// exposes hundreds; these are the ones worth defaulting to for the coach.
+    static let availableOpenRouterModels = [
+        "openai/gpt-oss-120b:free",
+        "google/gemma-4-31b-it:free",
+        "deepseek/deepseek-v4-flash",
+        "deepseek/deepseek-v4-pro",
+        "z-ai/glm-5.2",
+        "google/gemini-3-flash-preview",
+        "meta-llama/llama-4-maverick",
+
     ]
 
     init() {
-        geminiAPIKey = UserDefaults.standard.string(forKey: "gemini_api_key") ?? ""
+        openRouterAPIKey = KeychainStore.string(for: KeychainStore.openRouterAPIKey) ?? ""
         let savedBackend = UserDefaults.standard.string(forKey: "selected_backend") ?? ""
-        selectedBackend = BackendType(rawValue: savedBackend) ?? .gemini
-        geminiModel = UserDefaults.standard.string(forKey: "gemini_model") ?? "gemini-2.5-flash"
+        selectedBackend = BackendType(rawValue: savedBackend) ?? .openRouter
+        openRouterModel = UserDefaults.standard.string(forKey: "openrouter_model") ?? Self.availableOpenRouterModels[0]
         readSources = Self.loadReadSources()
         metricsSource = Self.loadMetricsSource()
         writeTarget = Self.loadWriteTarget()
@@ -184,7 +192,7 @@ final class AppSettings: ObservableObject {
 
     var isConfigured: Bool {
         switch selectedBackend {
-        case .gemini: return !geminiAPIKey.isEmpty
+        case .openRouter: return !openRouterAPIKey.isEmpty
         case .appleIntelligence: return true
         case .lmStudio: return !lmStudioBaseURL.isEmpty
         }
@@ -192,12 +200,23 @@ final class AppSettings: ObservableObject {
 
     func makeBackend() -> LLMBackend {
         switch selectedBackend {
-        case .gemini:
-            return GeminiBackend(apiKey: geminiAPIKey, model: geminiModel)
+        case .openRouter:
+            return OpenAICompatibleBackend(
+                displayName: BackendType.openRouter.rawValue,
+                baseURL: "https://openrouter.ai/api/v1",
+                apiKey: openRouterAPIKey,
+                extraHeaders: ["X-Title": "TriGenius"],
+                model: openRouterModel
+            )
         case .appleIntelligence:
             return FoundationModelBackendFactory.make()
         case .lmStudio:
-            return LMStudioBackend(baseURL: lmStudioBaseURL, model: lmStudioModel)
+            return OpenAICompatibleBackend(
+                displayName: BackendType.lmStudio.rawValue,
+                baseURL: lmStudioBaseURL,
+                model: lmStudioModel,
+                timeout: 300
+            )
         }
     }
 }
@@ -228,8 +247,8 @@ struct SettingsView: View {
                 .onChange(of: settings.selectedBackend) { onBackendChanged() }
 
                 switch settings.selectedBackend {
-                case .gemini:
-                    geminiSection
+                case .openRouter:
+                    openRouterSection
                 case .appleIntelligence:
                     appleIntelligenceSection
                 case .lmStudio:
@@ -490,17 +509,21 @@ struct SettingsView: View {
         .navigationTitle("Settings")
     }
 
-    // MARK: - Gemini section
+    // MARK: - OpenRouter section
 
-    private var geminiSection: some View {
+    private var openRouterSection: some View {
         Group {
             HStack {
                 if showAPIKey {
-                    TextField("API key", text: $settings.geminiAPIKey)
-                        .onChange(of: settings.geminiAPIKey) { onBackendChanged() }
+                    TextField("API key", text: $settings.openRouterAPIKey)
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        #endif
+                        .disableAutocorrection(true)
+                        .onChange(of: settings.openRouterAPIKey) { onBackendChanged() }
                 } else {
-                    SecureField("API key", text: $settings.geminiAPIKey)
-                        .onChange(of: settings.geminiAPIKey) { onBackendChanged() }
+                    SecureField("API key", text: $settings.openRouterAPIKey)
+                        .onChange(of: settings.openRouterAPIKey) { onBackendChanged() }
                 }
                 Button {
                     showAPIKey.toggle()
@@ -510,19 +533,19 @@ struct SettingsView: View {
                 }
             }
 
-            Picker("Model", selection: $settings.geminiModel) {
-                ForEach(AppSettings.availableGeminiModels, id: \.self) { model in
+            Picker("Model", selection: $settings.openRouterModel) {
+                ForEach(AppSettings.availableOpenRouterModels, id: \.self) { model in
                     Text(model).tag(model)
                 }
             }
-            .onChange(of: settings.geminiModel) { onBackendChanged() }
+            .onChange(of: settings.openRouterModel) { onBackendChanged() }
 
-            if settings.geminiAPIKey.isEmpty {
-                Label("API key required for Gemini", systemImage: "exclamationmark.triangle.fill")
+            if settings.openRouterAPIKey.isEmpty {
+                Label("API key required for OpenRouter", systemImage: "exclamationmark.triangle.fill")
                     .foregroundStyle(.orange)
                     .font(.caption)
             } else {
-                Label("Gemini configured", systemImage: "checkmark.circle.fill")
+                Label("OpenRouter configured", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
                     .font(.caption)
             }

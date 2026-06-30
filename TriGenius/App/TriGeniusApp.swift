@@ -55,6 +55,10 @@ struct TriGeniusApp: App {
         // Live read of Debug Mode — captured once so toggling never resets the chat.
         b.isDebugEnabled = { [weak settings] in settings?.debugMode ?? false }
         applyBackend(to: b)
+        // One-time migration: import any legacy `coach_memory.json` into the SwiftData
+        // coach-memory rows. Runs BEFORE the perf seed so the legacy profile's FTP/CSS
+        // scalars are still on `memory.userProfile` in memory for it to read.
+        migrateCoachMemoryIfNeeded()
         // One-time migration: seed the performance-metric time series from any
         // legacy `coach_memory.json` scalars before the first save drops them.
         seedPerformanceMetricsIfNeeded()
@@ -69,6 +73,22 @@ struct TriGeniusApp: App {
         // reboot / app update, so reconcile on every launch.
         await ReminderScheduler.shared.reconcile()
         brain = b
+    }
+
+    /// One-time migration: import any pre-existing `coach_memory.json` into the
+    /// SwiftData coach-memory rows (now the source of truth, so it rides CloudKit).
+    /// Gated by a UserDefaults flag; a no-op when rows already exist or no legacy
+    /// file is present. The import repopulates `memory` in place — including the
+    /// legacy FTP/CSS scalars the perf seed then reads.
+    @MainActor
+    private func migrateCoachMemoryIfNeeded() {
+        let key = "trigenius.coachMemoryMigrated.v1"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        defer { UserDefaults.standard.set(true, forKey: key) }
+        guard !TrainingDataStore.shared.hasCoachMemory,
+              let url = CoachMemory.legacyFileURL,
+              let data = try? Data(contentsOf: url) else { return }
+        try? memory.importJSON(data)
     }
 
     /// Migrate performance scalars that used to live in `coach_memory.json`

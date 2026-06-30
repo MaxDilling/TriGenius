@@ -42,9 +42,9 @@ enum TurnPart {
 struct ToolCallRecord {
     let name: String
     let arguments: [String: Any]
-    /// Opaque, backend-specific token that must be echoed back with the
-    /// tool call when continuing the conversation. Gemini 3.x "thinking"
-    /// models require this (`thoughtSignature`); other backends ignore it.
+    /// Opaque, backend-specific token that must be echoed back with the tool
+    /// call when continuing the conversation. OpenAI-compatible backends stash
+    /// the `tool_call_id` here; other backends ignore it.
     var thoughtSignature: String? = nil
 }
 
@@ -132,8 +132,8 @@ protocol LLMBackend: AnyObject {
 
 // MARK: - Default implementations
 //
-// Backends that don't manage their own conversation (Gemini, stubs) get these
-// for free and keep using `complete(...)` driven by CoachBrain.
+// Backends that don't manage their own conversation (OpenAI-compatible, stubs)
+// get these for free and keep using `complete(...)` driven by CoachBrain.
 
 extension LLMBackend {
     var managesOwnConversation: Bool { false }

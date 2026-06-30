@@ -4,7 +4,8 @@ import FoundationModels
 // MARK: - JSON Schema → GenerationSchema
 //
 // The coach tools (CoachTools.swift) describe their parameters as dynamic
-// JSON-Schema dictionaries — the same shape Gemini consumes. FoundationModels
+// JSON-Schema dictionaries — the same shape the OpenAI-compatible backends
+// consume. FoundationModels
 // instead wants a `GenerationSchema`. This builder converts one to the other at
 // runtime so we don't have to hand-write a `@Generable` struct per tool.
 
@@ -75,8 +76,9 @@ nonisolated enum JSONSchemaToGenerationSchema {
 //
 // One `CoachToolBridge` per `ToolDefinition`. It exposes the dynamically built
 // schema to the model and, when the model invokes the tool, forwards the
-// arguments (as a JSON string — Sendable, identical in shape to Gemini's path)
-// to the executor closure, which runs the real handler on the MainActor.
+// arguments (as a JSON string — Sendable, identical in shape to the
+// CoachBrain-driven path) to the executor closure, which runs the real handler
+// on the MainActor.
 
 @available(iOS 27.0, macOS 27.0, *)
 nonisolated final class CoachToolBridge: Tool {
