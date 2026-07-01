@@ -1,5 +1,6 @@
 import Foundation
 import SwiftData
+import CoreData
 
 extension Notification.Name {
     /// Posted (on the main actor) whenever the local training store is mutated —
@@ -418,12 +419,41 @@ final class TrainingDataStore {
 
     private init() {
         do {
-            container = try ModelContainer(for: TrainingDataStore.schema)
+            // The on-disk store mirrors into the private CloudKit database, so the
+            // athlete's history/plan/coach-memory follow them across devices. SwiftData
+            // syncs silently when signed into iCloud and degrades to a plain local store
+            // when not — no code path change either way.
+            let config = ModelConfiguration(
+                schema: TrainingDataStore.schema,
+                cloudKitDatabase: .private("iCloud.net.Narica.TriGenius")
+            )
+            container = try ModelContainer(for: TrainingDataStore.schema, configurations: config)
         } catch {
             // An in-memory fallback keeps the app usable even if the on-disk
-            // store can't be opened (e.g. an incompatible migration).
+            // store can't be opened (e.g. an incompatible migration). No CloudKit here.
             let config = ModelConfiguration(isStoredInMemoryOnly: true)
             container = try! ModelContainer(for: TrainingDataStore.schema, configurations: config)
+        }
+        observeRemoteChanges()
+    }
+
+    /// A CloudKit merge lands in the store asynchronously; SwiftData posts
+    /// `.NSPersistentStoreRemoteChange` when it does. Collapse any cross-device
+    /// duplicate the merge created and refresh every reader. Coalesced — an import
+    /// burst fires many notifications but runs `deduplicate()` once per runloop tick.
+    private var remoteChangePending = false
+    private func observeRemoteChanges() {
+        NotificationCenter.default.addObserver(
+            forName: .NSPersistentStoreRemoteChange, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, !self.remoteChangePending else { return }
+                self.remoteChangePending = true
+                DispatchQueue.main.async {
+                    self.remoteChangePending = false
+                    self.deduplicate()   // saves + posts `trainingDataDidChange`
+                }
+            }
         }
     }
 
@@ -456,8 +486,8 @@ final class TrainingDataStore {
     // already prevents duplicates; these passes are the safety net for the duplicates
     // a CloudKit merge of two offline devices can produce. Idempotent — a no-op on a
     // store with none. The per-type passes don't save; the caller's `context.save()`
-    // covers them. `deduplicate()` is the standalone entry the remote-change handler
-    // will call once CloudKit is enabled.
+    // covers them. `deduplicate()` is the standalone entry `observeRemoteChanges()`
+    // fires after every CloudKit merge.
 
     /// Collapse duplicate rows across every model down to one per natural key, then
     /// save. Idempotent.

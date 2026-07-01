@@ -72,6 +72,20 @@ private func event(_ date: Date, _ prio: ATPEventPriority, ctl: Double? = nil) -
     for (a, b) in zip(high, both) { #expect(b.plannedTSS >= a.plannedTSS - 0.5) }
 }
 
+@Test func targetCTL_deferredRampStaysWithinCeiling() {
+    let s = monday()
+    let ev = weeks(s, 30)   // far event: plenty of room to build gently
+    let shells = ATPPeriodization.layout(params: params(s), events: [event(ev, .a)])
+    let p = params(s, ctl: 30, method: .targetCTL)
+    let weeks = ATPEngine.targetCTL(shells: shells, params: p, events: [event(ev, .a, ctl: 90)], overrides: [])
+    // With room to spare, no week may exceed the ramp ceiling…
+    #expect(weeks.allSatisfy { !$0.rampExceeded })
+    // …and the build is deferred: the first weeks just hold the starting CTL (≈ c0·7),
+    // rather than front-loading the whole climb.
+    #expect(abs(weeks[0].plannedTSS - 30 * 7) < 5)
+    #expect(weeks[1].rampRate < 1)
+}
+
 @Test func targetCTL_planCurveHitsTarget() {
     let s = monday()
     let ev = weeks(s, 12)

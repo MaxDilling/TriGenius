@@ -5,8 +5,8 @@ import Foundation
 // Native Swift port of the improved `garmin_health_data` login flow:
 //   portal/mobile JSON SSO sign-in (with optional MFA) → CAS service ticket →
 //   DI OAuth2 token exchange (diauth.garmin.com). API calls use a DI Bearer
-//   token. Tokens are persisted in UserDefaults (per the agreed design — note:
-//   not encrypted).
+//   token. Tokens are persisted in the synchronizable Keychain (`KeychainStore`),
+//   so the Garmin login rides iCloud Keychain to the athlete's other devices.
 //
 // Garmin has no public API; these endpoints are reverse-engineered and mirror
 // the `garmin_health_data` reference implementation. Two important details:
@@ -88,7 +88,7 @@ actor GarminAuth {
     private let nativeXGarminUserAgent =
         "com.garmin.android.apps.connectmobile/5.23; ; Google/sdk_gphone64_arm64/google; Android/33; Dalvik/2.1.0"
 
-    private let tokenDefaultsKey = "garmin_tokens"
+    private let tokenAccount = KeychainStore.garminTokens
 
     private let session: URLSession
     private(set) var tokens: GarminTokens?
@@ -106,7 +106,7 @@ actor GarminAuth {
         config.httpCookieAcceptPolicy = .always
         config.httpShouldSetCookies = true
         self.session = URLSession(configuration: config)
-        self.tokens = Self.loadTokens(key: tokenDefaultsKey)
+        self.tokens = Self.loadTokens(key: tokenAccount)
     }
 
     var isAuthenticated: Bool { tokens != nil }
@@ -252,7 +252,7 @@ actor GarminAuth {
         tokens = nil
         pendingConfig = nil
         pendingMFAMethod = nil
-        UserDefaults.standard.removeObject(forKey: tokenDefaultsKey)
+        KeychainStore.remove(tokenAccount)
         if let cookies = session.configuration.httpCookieStorage?.cookies {
             for c in cookies { session.configuration.httpCookieStorage?.deleteCookie(c) }
         }
@@ -419,7 +419,7 @@ actor GarminAuth {
             expiresAt: expiresAt
         )
         tokens = newTokens
-        Self.saveTokens(newTokens, key: tokenDefaultsKey)
+        Self.saveTokens(newTokens, key: tokenAccount)
     }
 
     // MARK: - HTTP helpers
@@ -544,13 +544,20 @@ actor GarminAuth {
     // MARK: - Persistence
 
     private static func loadTokens(key: String) -> GarminTokens? {
-        guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
-        return try? JSONDecoder().decode(GarminTokens.self, from: data)
+        if let json = KeychainStore.string(for: key), let data = json.data(using: .utf8),
+           let tokens = try? JSONDecoder().decode(GarminTokens.self, from: data) { return tokens }
+        // One-time migration from the pre-iCloud plaintext UserDefaults blob so an
+        // already-logged-in athlete isn't forced to re-authenticate.
+        guard let legacy = UserDefaults.standard.data(forKey: key),
+              let tokens = try? JSONDecoder().decode(GarminTokens.self, from: legacy) else { return nil }
+        saveTokens(tokens, key: key)
+        UserDefaults.standard.removeObject(forKey: key)
+        return tokens
     }
 
     private static func saveTokens(_ tokens: GarminTokens, key: String) {
-        if let data = try? JSONEncoder().encode(tokens) {
-            UserDefaults.standard.set(data, forKey: key)
-        }
+        guard let data = try? JSONEncoder().encode(tokens),
+              let json = String(data: data, encoding: .utf8) else { return }
+        KeychainStore.set(json, for: key)
     }
 }

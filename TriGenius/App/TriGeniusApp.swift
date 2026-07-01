@@ -46,6 +46,9 @@ struct TriGeniusApp: App {
         // without this, reminders fired from the Test Reminders screen are
         // silently suppressed by iOS.
         NotificationCenterService.shared.configure()
+        // Mirror the iCloud-KVS ignored-workout blacklist into the local store and
+        // keep watching for changes from the athlete's other devices.
+        IgnoredWorkouts.startSync()
         // Route a tapped notification's follow-up prompt into the chat (unsent).
         NotificationCenterService.shared.onNotificationTap = { [router] prompt in
             router.openChat(prefill: prompt)

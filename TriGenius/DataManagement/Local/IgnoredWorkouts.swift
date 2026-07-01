@@ -15,9 +15,11 @@ import Foundation
 // be wiped by them and the ignored workout would return. It is an app preference,
 // alongside the other UserDefaults settings.
 //
-// Cross-device sync of this list (via `NSUbiquitousKeyValueStore`) is deferred to
-// the iCloud flip: the KV store needs the iCloud capability, which a *personal*
-// Apple developer team can't grant — so it's added with the paid-membership work.
+// Cross-device sync rides `NSUbiquitousKeyValueStore` (iCloud KVS): UserDefaults is
+// the local, offline-authoritative mirror every read hits; each write also lands in
+// KVS, and `startSync()` pulls the cloud value back into the mirror on launch and on
+// every external change. The whole list is one KVS key, so a merge is last-writer-
+// wins — fine for a blacklist (a duplicate that reappears is simply re-hidden).
 
 /// One blacklisted workout. Carries cached display metadata so the management UI
 /// can list it without a (now-deleted) `WorkoutRecord`.
@@ -33,6 +35,7 @@ struct IgnoredWorkout: Codable, Identifiable {
 
 enum IgnoredWorkouts {
     private static let key = "ignored_workouts"
+    private static let cloud = NSUbiquitousKeyValueStore.default
 
     /// All blacklisted entries, newest first.
     static var entries: [IgnoredWorkout] {
@@ -57,6 +60,28 @@ enum IgnoredWorkouts {
     }
 
     private static func save(_ list: [IgnoredWorkout]) {
-        UserDefaults.standard.set(try? JSONEncoder().encode(list), forKey: key)
+        let data = try? JSONEncoder().encode(list)
+        UserDefaults.standard.set(data, forKey: key)
+        cloud.set(data, forKey: key)
+        cloud.synchronize()
+    }
+
+    /// Pull the iCloud value into the local mirror and keep watching for changes
+    /// pushed from other devices. Call once at launch.
+    static func startSync() {
+        NotificationCenter.default.addObserver(
+            forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+            object: cloud, queue: .main
+        ) { _ in mergeFromCloud() }
+        cloud.synchronize()
+        mergeFromCloud()
+    }
+
+    /// Overwrite the local mirror with the cloud value (last-writer-wins) and nudge
+    /// the readers — ingest re-reads `ids` on the next sync, the Settings list refreshes.
+    private static func mergeFromCloud() {
+        guard let data = cloud.data(forKey: key) else { return }
+        UserDefaults.standard.set(data, forKey: key)
+        NotificationCenter.default.post(name: .trainingDataDidChange, object: nil)
     }
 }

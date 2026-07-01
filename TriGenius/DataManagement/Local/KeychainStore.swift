@@ -3,18 +3,26 @@ import Security
 
 // MARK: - Keychain
 //
-// A tiny generic-password wrapper for the app's secrets — the OpenRouter API key.
-// Kept out of UserDefaults (which stores plaintext and, once the SwiftData
-// store syncs, would be the wrong place for a secret) and marked synchronizable, so
-// the key follows the athlete across devices via iCloud Keychain rather than the
-// CloudKit data store.
+// A tiny generic-password wrapper for the app's secrets — the OpenRouter API key
+// and the Garmin login (OAuth tokens + email). Kept out of UserDefaults (which
+// stores plaintext and, once the SwiftData store syncs, would be the wrong place
+// for a secret) and marked synchronizable, so they follow the athlete across
+// devices via iCloud Keychain rather than the CloudKit data store.
 
-enum KeychainStore {
+// Keychain access is thread-safe (Security framework), so this opts out of the
+// module's default main-actor isolation — `GarminAuth` reads/writes tokens off the
+// main actor.
+nonisolated enum KeychainStore {
     /// Service namespace for every TriGenius keychain item.
     private static let service = "net.Narica.TriGenius"
 
     /// Account key for the OpenRouter API key.
     static let openRouterAPIKey = "openrouter_api_key"
+    /// Account key for the Garmin DI OAuth tokens (JSON blob).
+    static let garminTokens = "garmin_tokens"
+    /// Account key for the Garmin login email (part of the credential set, so it
+    /// syncs with the tokens and the account shows as logged-in on every device).
+    static let garminEmail = "garmin_email"
 
     /// The stored value for `account`, or nil when absent.
     static func string(for account: String) -> String? {

@@ -57,6 +57,11 @@ final class AppSettings: ObservableObject {
     @Published var selectedBackend: BackendType {
         didSet { UserDefaults.standard.set(selectedBackend.rawValue, forKey: "selected_backend") }
     }
+    /// Route the Apple Intelligence backend through Private Cloud Compute (the
+    /// stronger server model) instead of the on-device model.
+    @Published var useAppleCloudCompute: Bool {
+        didSet { UserDefaults.standard.set(useAppleCloudCompute, forKey: "use_apple_cloud_compute") }
+    }
     /// Stored in the Keychain (synchronizable via iCloud Keychain), never in
     /// UserDefaults — a secret shouldn't sit in plaintext or ride the CloudKit store.
     @Published var openRouterAPIKey: String {
@@ -86,8 +91,10 @@ final class AppSettings: ObservableObject {
     @Published var writeTarget: WriteTarget {
         didSet { UserDefaults.standard.set(writeTarget.rawValue, forKey: "write_target") }
     }
+    /// Part of the Garmin login, so it rides the synchronizable Keychain alongside
+    /// the OAuth tokens rather than device-local UserDefaults.
     @Published var garminEmail: String {
-        didSet { UserDefaults.standard.set(garminEmail, forKey: "garmin_email") }
+        didSet { KeychainStore.set(garminEmail, for: KeychainStore.garminEmail) }
     }
     /// LM Studio server URL (OpenAI-compatible, must include the `/v1` suffix).
     @Published var lmStudioBaseURL: String {
@@ -132,11 +139,20 @@ final class AppSettings: ObservableObject {
         openRouterAPIKey = KeychainStore.string(for: KeychainStore.openRouterAPIKey) ?? ""
         let savedBackend = UserDefaults.standard.string(forKey: "selected_backend") ?? ""
         selectedBackend = BackendType(rawValue: savedBackend) ?? .openRouter
+        useAppleCloudCompute = UserDefaults.standard.bool(forKey: "use_apple_cloud_compute")
         openRouterModel = UserDefaults.standard.string(forKey: "openrouter_model") ?? Self.availableOpenRouterModels[0]
         readSources = Self.loadReadSources()
         metricsSource = Self.loadMetricsSource()
         writeTarget = Self.loadWriteTarget()
-        garminEmail = UserDefaults.standard.string(forKey: "garmin_email") ?? ""
+        let keychainEmail = KeychainStore.string(for: KeychainStore.garminEmail)
+        let legacyEmail = UserDefaults.standard.string(forKey: "garmin_email")
+        garminEmail = keychainEmail ?? legacyEmail ?? ""
+        // One-time migration of the pre-iCloud UserDefaults email into the
+        // synchronizable Keychain (didSet doesn't fire during init).
+        if keychainEmail == nil, let legacyEmail, !legacyEmail.isEmpty {
+            KeychainStore.set(legacyEmail, for: KeychainStore.garminEmail)
+            UserDefaults.standard.removeObject(forKey: "garmin_email")
+        }
         lmStudioBaseURL = UserDefaults.standard.string(forKey: "lmstudio_base_url") ?? "http://localhost:1234/v1"
         lmStudioModel = UserDefaults.standard.string(forKey: "lmstudio_model") ?? "local-model"
         debugMode = UserDefaults.standard.bool(forKey: "debug_mode")
@@ -209,7 +225,7 @@ final class AppSettings: ObservableObject {
                 model: openRouterModel
             )
         case .appleIntelligence:
-            return FoundationModelBackendFactory.make()
+            return FoundationModelBackendFactory.make(useCloud: useAppleCloudCompute)
         case .lmStudio:
             return OpenAICompatibleBackend(
                 displayName: BackendType.lmStudio.rawValue,
@@ -557,22 +573,31 @@ struct SettingsView: View {
     private var appleIntelligenceSection: some View {
         Group {
             if #available(iOS 27.0, macOS 27.0, *) {
-                let backend = AppleFoundationModelBackend()
-                if backend.isAvailable {
-                    Label("Apple Intelligence available", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.caption)
-                } else {
-                    Label("Not available on this device", systemImage: "xmark.circle.fill")
-                        .foregroundStyle(.red)
-                        .font(.caption)
-                }
+                modelStatusRow("On-device", status: AppleModelAvailability.onDeviceStatus())
+
+                let cloud = AppleModelAvailability.cloudStatus()
+                modelStatusRow("Private Cloud Compute", status: cloud)
+
+                Toggle("Use Private Cloud Compute", isOn: $settings.useAppleCloudCompute)
+                    .disabled(!cloud.isAvailable)
+                    .onChange(of: settings.useAppleCloudCompute) { onBackendChanged() }
             } else {
                 Label("Requires iOS 27 / macOS 27", systemImage: "xmark.circle.fill")
                     .foregroundStyle(.red)
                     .font(.caption)
             }
         }
+    }
+
+    @available(iOS 27.0, macOS 27.0, *)
+    private func modelStatusRow(_ name: String, status: AppleModelAvailability.Status) -> some View {
+        Label {
+            Text("\(name)\(status.detail.map { " — \($0)" } ?? "")")
+        } icon: {
+            Image(systemName: status.isAvailable ? "checkmark.circle.fill" : "xmark.circle.fill")
+                .foregroundStyle(status.isAvailable ? .green : .red)
+        }
+        .font(.caption)
     }
 
     // MARK: - LM Studio section
