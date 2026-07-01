@@ -72,18 +72,36 @@ private func event(_ date: Date, _ prio: ATPEventPriority, ctl: Double? = nil) -
     for (a, b) in zip(high, both) { #expect(b.plannedTSS >= a.plannedTSS - 0.5) }
 }
 
-@Test func targetCTL_deferredRampStaysWithinCeiling() {
+@Test func targetCTL_progressiveLoadWithRecoveryDips() {
     let s = monday()
-    let ev = weeks(s, 30)   // far event: plenty of room to build gently
+    let ev = weeks(s, 30)   // far event: room for a gentle progressive climb
     let shells = ATPPeriodization.layout(params: params(s), events: [event(ev, .a)])
     let p = params(s, ctl: 30, method: .targetCTL)
-    let weeks = ATPEngine.targetCTL(shells: shells, params: p, events: [event(ev, .a, ctl: 90)], overrides: [])
-    // With room to spare, no week may exceed the ramp ceiling…
-    #expect(weeks.allSatisfy { !$0.rampExceeded })
-    // …and the build is deferred: the first weeks just hold the starting CTL (≈ c0·7),
-    // rather than front-loading the whole climb.
-    #expect(abs(weeks[0].plannedTSS - 30 * 7) < 5)
-    #expect(weeks[1].rampRate < 1)
+    let result = ATPEngine.targetCTL(shells: shells, params: p, events: [event(ev, .a, ctl: 90)], overrides: [])
+    // Recovery week is a real dip below the load week before it in its block.
+    if let ri = result.firstIndex(where: { $0.isRecovery && $0.plannedTSS > 0 }), ri > 0 {
+        #expect(result[ri].plannedTSS < result[ri - 1].plannedTSS)
+    }
+    // Progressive overload: a late build load week outweighs the first base load week.
+    let loads = result.filter { $0.period.isBaseOrBuild && !$0.isRecovery && !$0.isTaper }
+    #expect(loads.count >= 2)
+    #expect(loads.last!.plannedTSS > loads.first!.plannedTSS)
+}
+
+@Test func targetCTL_pinnedRestWeekStillReachesTarget() {
+    let s = monday()
+    let ev = weeks(s, 16)
+    let restWeek = weeks(s, 4)
+    let plan = try! #require(ATPEngine.build(
+        params: params(s, ctl: 40, method: .targetCTL),
+        events: [event(ev, .a, ctl: 70)],
+        overrides: [ATPWeekOverrideInput(weekStart: restWeek, pinnedTSS: 0, note: "Urlaub")], history: []))
+    // Pin honoured verbatim, and the free weeks re-solve around it so the target is still
+    // hit — the P1 regression (a pin used to make the target unreachable).
+    #expect(plan.weeks.first { $0.weekStart == restWeek }!.plannedTSS == 0)
+    let weekEnd = cal.date(byAdding: .day, value: 6, to: TrainingVolume.weekStart(of: ev))!
+    let pt = try! #require(plan.planCurve.last(where: { $0.date <= weekEnd }))
+    #expect(abs(pt.ctl - 70) < 3)
 }
 
 @Test func targetCTL_planCurveHitsTarget() {

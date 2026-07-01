@@ -51,18 +51,26 @@ enum ATPPeriodization {
         // Period assignment: A events drive the ladder backward; each block is bounded
         // below by the previous A event's transition end. Default transition fills any
         // gap (pre-first-event tail handled by the first ladder reaching index 0).
+        let recoveryCycle = max(2, params.recoveryCycle)
         var period = [ATPPeriod](repeating: .transition, count: n)
         var blockStart = 0
         for ev in anchors where ev.priority == .a {
             guard let e = weekIndex(of: ev.date) else { continue }
-            assignLadder(into: &period, eventWeek: e, lowerBound: blockStart)
+            assignLadder(into: &period, eventWeek: e, lowerBound: blockStart, recoveryCycle: recoveryCycle)
             let transEnd = min(e + ATPConstants.transitionWeeks, n - 1)
             if e + 1 <= transEnd { for i in (e + 1)...transEnd { period[i] = .transition } }
             blockStart = transEnd + 1
         }
 
+        // Last index of each week's contiguous same-period run — recovery weeks land at
+        // the block end (offset 0), then every `recoveryCycle` weeks backward, so even a
+        // stretched Base 1 stays on cadence and always ends on a recovery week.
+        var blockEnd = [Int](repeating: n - 1, count: n)
+        for i in stride(from: n - 1, through: 0, by: -1) {
+            blockEnd[i] = (i == n - 1 || period[i] != period[i + 1]) ? i : blockEnd[i + 1]
+        }
+
         // Flags + per-period week index.
-        let recoveryCycle = max(2, params.recoveryCycle)
         var shells: [ATPWeekShell] = []
         var runIndex = 0
         for i in 0..<n {
@@ -74,7 +82,7 @@ enum ATPPeriodization {
                 let t = ATPConstants.taperWeeks(ev.priority)
                 return t > 0 && i <= e && i > e - t        // the t weeks ending at (incl.) the event
             }
-            let isRecovery = p != .race && p != .transition && !isTaper && (i + 1) % recoveryCycle == 0
+            let isRecovery = p.isBaseOrBuild && !isTaper && (blockEnd[i] - i) % recoveryCycle == 0
 
             let next = anchors.first { (weekIndex(of: $0.date) ?? -1) >= i }
             let weeksToNext = next.flatMap { weekIndex(of: $0.date) }.map { $0 - i }
@@ -87,13 +95,13 @@ enum ATPPeriodization {
         return shells
     }
 
-    /// Assign the ladder backward from `eventWeek`, never below `lowerBound`.
-    /// Run-in shorter than the nominal ladder drops base blocks first; a longer one
-    /// extends Base 1.
-    private static func assignLadder(into period: inout [ATPPeriod], eventWeek: Int, lowerBound lb: Int) {
+    /// Assign the ladder backward from `eventWeek`, never below `lowerBound`. Base/build
+    /// blocks span one `recoveryCycle`. Run-in shorter than the ladder drops base blocks
+    /// first; a longer one extends Base 1.
+    private static func assignLadder(into period: inout [ATPPeriod], eventWeek: Int, lowerBound lb: Int, recoveryCycle: Int) {
         var idx = eventWeek
         for p in ATPConstants.ladder {
-            let len = ATPConstants.nominalWeeks[p] ?? 1
+            let len = ATPConstants.ladderWeeks(p, recoveryCycle: recoveryCycle)
             var taken = 0
             while taken < len && idx >= lb {
                 period[idx] = p

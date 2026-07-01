@@ -3,11 +3,12 @@ import Foundation
 // MARK: - ATP engine (pure)
 //
 // Turns the period shells + methodology params + sparse overrides into the weekly
-// plan, then derives the daily CTL curves via PMCEngine. Both methodologies share
-// ONE per-week shape weight (period × recovery × taper); they differ only in how
-// that shape is scaled:
+// plan, then derives the daily CTL curves via PMCEngine. Both methodologies share ONE
+// progressive `loadShape` (base→build climbs `loadProgression` per week, recovery/taper
+// dip, pins fixed); they differ only in how its level is set:
 //   • weeklyTSS  — scaled so the season mean ≈ weeklyAverageTSS.
-//   • targetCTL  — scaled per segment so the projected CTL hits each event target.
+//   • targetCTL  — level solved (closed form; CTL is linear in it) so the forward-
+//     simulated CTL reaches each event target. Ramp is reported, not enforced.
 // CTL is daily (never on the weekly row); the table samples the curve at week-end.
 
 /// One week of the finished plan. No CTL fields — those live in `ATPPlan`'s curves.
@@ -49,12 +50,28 @@ enum ATPEngine {
         return pow(1 - alpha, 7)
     }
 
-    /// Per-week base load weight from period × recovery × taper.
-    private static func shape(_ s: ATPWeekShell) -> Double {
-        var f = ATPConstants.periodLoad[s.period] ?? 1
-        if s.isRecovery { f *= ATPConstants.recoveryLoadFactor }
-        if s.isTaper && s.period != .race && s.period != .peak { f *= ATPConstants.taperLoadFactor }
-        return f
+    /// Per-week relative load weight (coefficient on the plan level). Base/build load
+    /// rises `loadProgression^k` across a segment (k = active load week, reset per
+    /// segment, held across recovery weeks); recovery/taper dip relative to that block
+    /// level; peak/race/transition are the light `periodLoad` periods.
+    private static func loadShape(_ shells: [ATPWeekShell]) -> [Double] {
+        var out = [Double](repeating: 0, count: shells.count)
+        var k = 0
+        var inSegment = false
+        for (i, s) in shells.enumerated() {
+            guard s.period.isBaseOrBuild else {
+                out[i] = ATPConstants.periodLoad[s.period] ?? 0.20
+                inSegment = false
+                continue
+            }
+            if !inSegment { k = 0; inSegment = true }
+            else if !s.isRecovery { k += 1 }             // recovery holds the level, doesn't advance it
+            let level = pow(ATPConstants.loadProgression, Double(k))
+            out[i] = s.isRecovery ? level * ATPConstants.recoveryLoadFactor
+                   : s.isTaper ? level * ATPConstants.taperLoadFactor
+                   : level
+        }
+        return out
     }
 
     /// End-of-week CTL per week from weekly TSS (TSS spread evenly across 7 days):
@@ -80,11 +97,12 @@ enum ATPEngine {
         let easiest = avg * ATPConstants.easiestFraction
         let hardest = avg * ATPConstants.hardestFraction
         let n = shells.count
+        let shape = loadShape(shells)
 
         var pinnedSum = 0.0
         var weightSum = 0.0
-        for s in shells {
-            if let p = pins[s.weekStart] { pinnedSum += p } else { weightSum += shape(s) }
+        for (i, s) in shells.enumerated() {
+            if let p = pins[s.weekStart] { pinnedSum += p } else { weightSum += shape[i] }
         }
         let freeBudget = max(0, avg * Double(n) - pinnedSum)
 
@@ -93,7 +111,7 @@ enum ATPEngine {
             if let p = pins[s.weekStart] {
                 tss[i] = p
             } else if weightSum > 0 {
-                let raw = freeBudget * shape(s) / weightSum
+                let raw = freeBudget * shape[i] / weightSum
                 // Race/transition are deliberately light — don't lift them to the easiest floor.
                 let floor = (s.period == .race || s.period == .transition) ? 0 : easiest
                 tss[i] = min(hardest, max(floor, raw)).rounded()
@@ -104,22 +122,46 @@ enum ATPEngine {
 
     // MARK: Target-CTL mode
 
-    /// Back-solve the weekly TSS so the projected CTL **reaches** each event's
-    /// `targetCTL` — treating every target as a *lower bound*, not an exact hit.
+    /// Weekly TSS so the projected CTL **reaches** each event's `targetCTL` — every
+    /// target a *lower bound*, not an exact hit.
     ///
-    /// The plan is the pointwise max of each target's standalone ramp-then-maintain
-    /// plan (ramp from the start CTL to the target by its week, then hold it). Taking
-    /// the max guarantees the invariant the athlete expects: adding an event can only
-    /// ever *raise* a week's load, never lower it — so a lower-CTL event placed before
-    /// a higher-CTL one never forces detraining "down to" it (you train through it).
-    /// Priority is irrelevant here; an A or B target behaves the same.
+    /// The season load is the progressive `loadShape` (base→build climbs `loadProgression`
+    /// per week, recovery/taper dip) scaled by a single plan level `L`; pinned weeks are
+    /// fixed (rest **or** camp). Weekly CTL is linear in `L`, so `L` is closed-form:
+    /// simulate at `L=0` and `L=1`, read CTL at the event week, interpolate to the target.
+    /// CTL is only ever forward-simulated (never inverted), so peak/taper/transition weeks
+    /// just decay out — no CTL target needed for a falling week. Each event solves its own
+    /// plan; the pointwise max keeps the invariant that adding an event only ever *raises*
+    /// load (a lower event before a higher one never forces detraining — you train through).
+    /// The ramp is a reported consequence; a week over `maxRampRate` is flagged in assemble.
     static func targetCTL(shells: [ATPWeekShell], params: ATPParams, events: [ATPEventInput], overrides: [ATPWeekOverrideInput]) -> [ATPWeekPlan] {
         let pins = pinMap(overrides)
         let beta = weeklyDecay
-        let k = (1 - beta) / 7
         let n = shells.count
         let c0 = params.startingCTL ?? 0
-        func maintain(_ ctl: Double, _ i: Int) -> Double { ctl * 7 * (ATPConstants.periodLoad[shells[i].period] ?? 0.5) }
+        let shape = loadShape(shells)
+
+        // Split each week into level-scaled (α·L) and fixed (β, = a pin) parts. A pinned
+        // week is constant; everything else scales with the plan level.
+        var alpha = shape, konst = [Double](repeating: 0, count: n)
+        for (i, s) in shells.enumerated() where pins[s.weekStart] != nil {
+            alpha[i] = 0; konst[i] = pins[s.weekStart]!
+        }
+
+        /// Weekly CTL at `aw` for a given plan level (β + α·L spread over the days).
+        func ctlAt(_ aw: Int, level: Double) -> Double {
+            var c = c0
+            for i in 0...aw { c = c * beta + ((konst[i] + alpha[i] * level) / 7) * (1 - beta) }
+            return c
+        }
+
+        /// One event's weekly TSS: solve the level so CTL hits `target` at its week.
+        func eventTSS(anchorWeek aw: Int, target: Double) -> [Double] {
+            let base = ctlAt(aw, level: 0)                    // fixed weeks (pins) only
+            let span = ctlAt(aw, level: 1) - base             // marginal CTL per unit level (linear)
+            let level = span > 1e-9 ? max(0, (target - base) / span) : 0
+            return (0..<n).map { konst[$0] + alpha[$0] * level }
+        }
 
         let anchors: [(aw: Int, target: Double)] = events.compactMap { ev in
             guard let t = ev.targetCTL,
@@ -128,26 +170,11 @@ enum ATPEngine {
             return (wi, t)
         }
 
-        var tss = [Double](repeating: 0, count: n)
-        if anchors.isEmpty {
-            // No target set: maintain current fitness, shaped by the period.
-            for i in 0..<n { tss[i] = maintain(c0, i) }
-        }
+        // No target set: hold current fitness flat (c0·7 = steady-state TSS). Else pointwise max.
+        var tss = anchors.isEmpty ? (0..<n).map { alpha[$0] == 0 ? konst[$0] : c0 * 7 } : [Double](repeating: 0, count: n)
         for (aw, target) in anchors {
-            // Scale the free weeks in [0...aw] so CTL hits `target` ramping from c0:
-            // C_aw = c0·β^(aw+1) + Σ coeff_i·T_i ,  coeff_i = k·β^(aw−i).
-            var fixed = c0 * pow(beta, Double(aw + 1))
-            var freeContribution = 0.0
-            for i in 0...aw {
-                let coeff = k * pow(beta, Double(aw - i))
-                if let p = pins[shells[i].weekStart] { fixed += coeff * p }
-                else { freeContribution += coeff * shape(shells[i]) }
-            }
-            let scale = freeContribution > 0 ? max(0, (target - fixed) / freeContribution) : 0
-            for i in 0..<n {
-                let v = i <= aw ? scale * shape(shells[i]) : maintain(target, i)
-                if v > tss[i] { tss[i] = v }     // pointwise max → targets only raise load
-            }
+            let e = eventTSS(anchorWeek: aw, target: target)
+            for i in 0..<n where e[i] > tss[i] { tss[i] = e[i] }     // pointwise max → targets only raise load
         }
 
         // Pins are hard overrides; everything else rounds.
@@ -236,8 +263,11 @@ enum ATPEngine {
         guard let horizon = cal.date(byAdding: .day, value: 6, to: max(tailEnd, lastWeek)) else { return nil }
 
         let anchorDay = TrainingVolume.weekStart(of: resolved.startDate)
+        // Seed ATL from the actual fatigue at the anchor (else steady-state = CTL), so the
+        // plan's Form (TSB = CTL − ATL) starts realistic instead of at +startingCTL.
+        let seedATL = history.last(where: { $0.date <= anchorDay })?.atl ?? resolved.startingCTL ?? 0
         let planCurve = PMCEngine.simulate(
-            anchorDate: anchorDay, ctl0: resolved.startingCTL ?? 0,
+            anchorDate: anchorDay, ctl0: resolved.startingCTL ?? 0, atl0: seedATL,
             dailyTSS: dailyPlannedTSS(weeks: weeks, scheduled: scheduled), through: horizon)
 
         let todayDay = cal.startOfDay(for: today)

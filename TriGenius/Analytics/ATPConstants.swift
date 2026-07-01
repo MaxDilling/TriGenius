@@ -19,18 +19,34 @@ enum ATPPeriod: String, Codable, Sendable, CaseIterable {
         case .race: "Race"; case .transition: "Transition"
         }
     }
+
+    /// The blocks that carry a periodic recovery week at their end (peak/race/
+    /// transition don't — they're taper/rest already).
+    var isBaseOrBuild: Bool {
+        switch self {
+        case .base1, .base2, .base3, .build1, .build2: true
+        default: false
+        }
+    }
 }
 
 enum ATPConstants {
 
     // MARK: Periodization layout
 
-    /// Nominal length (weeks) of each block, consumed backward from an A event.
-    /// Surplus season weeks extend Base 1 (the foundation stretches); a short run-in
-    /// drops blocks from the base end first, keeping the race-proximal taper intact.
-    static let nominalWeeks: [ATPPeriod: Int] = [
-        .base1: 4, .base2: 4, .base3: 4, .build1: 3, .build2: 3, .peak: 2, .race: 1, .transition: 1,
-    ]
+    /// Fixed length (weeks) of the race-proximal blocks. Base/build blocks are NOT
+    /// here — they're `recoveryCycle` weeks long (see `ladderWeeks`) so each ends on a
+    /// recovery week and the block length follows the athlete's recovery cadence.
+    static let fixedBlockWeeks: [ATPPeriod: Int] = [.peak: 2, .race: 1]
+
+    /// Length (weeks) of a ladder block, consumed backward from an A event. Base/build
+    /// span one full recovery cycle (the last week is the recovery week); peak/race are
+    /// fixed. Surplus season weeks extend Base 1 (the foundation stretches, with a
+    /// recovery week every cycle); a short run-in drops base blocks first, keeping the
+    /// race-proximal taper intact.
+    static func ladderWeeks(_ p: ATPPeriod, recoveryCycle: Int) -> Int {
+        p.isBaseOrBuild ? max(2, recoveryCycle) : (fixedBlockWeeks[p] ?? 1)
+    }
 
     /// Ladder consumed backward from each A event (race-proximal first).
     static let ladder: [ATPPeriod] = [.race, .peak, .build2, .build1, .base3, .base2, .base1]
@@ -47,16 +63,19 @@ enum ATPConstants {
         switch p { case .a: 2; case .b: 1; case .c: 0 }
     }
 
-    // MARK: Weekly-TSS shape
+    // MARK: Weekly-load shape
 
-    /// Per-period multiplier on the weekly-average TSS (the relative load shape).
-    static let periodLoad: [ATPPeriod: Double] = [
-        .base1: 0.85, .base2: 0.95, .base3: 1.05, .build1: 1.15, .build2: 1.25,
-        .peak: 0.80, .race: 0.40, .transition: 0.20,
-    ]
-    /// Recovery week load relative to its period (an easier week every N).
+    /// Base/build load rises by this factor per active load week within a segment
+    /// (progressive overload). The plan *level* is solved on top of this shape, so a
+    /// steeper value only back-loads the segment more — it never violates the target.
+    static let loadProgression = 1.05
+
+    /// Coefficient for the naturally-light periods (peak/race/transition) — base/build
+    /// load comes from `loadProgression`, not from here.
+    static let periodLoad: [ATPPeriod: Double] = [.peak: 0.80, .race: 0.40, .transition: 0.20]
+    /// Recovery week load relative to its block level (a real down-week every cycle).
     static let recoveryLoadFactor = 0.60
-    /// Mid-block (B-event) taper week load — peak/race already carry their own dip.
+    /// Taper week load relative to its block level — peak/race already carry their own dip.
     static let taperLoadFactor = 0.70
 
     /// Hard bounds on a week's TSS, as fractions of the weekly average. The easiest
