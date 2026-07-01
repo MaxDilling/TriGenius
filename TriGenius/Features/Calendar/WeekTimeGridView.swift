@@ -44,7 +44,6 @@ struct WeekTimeGridView: View {
     @State private var allDayExpanded = false
 
     private let gutterWidth: CGFloat = 52
-    private let hours = Array(0...24)
     private let gridLine = Color.primary.opacity(0.12)
 
     // All-day band sizing. The band is only as tall as the busiest *visible* column
@@ -54,17 +53,12 @@ struct WeekTimeGridView: View {
     private let pillSpacing: CGFloat = 2
     private let maxAllDayRows = 3
 
-    private func allDayCount(_ day: Date) -> Int {
-        viewModel.planned(on: day).count + viewModel.completed(on: day).count
-            + viewModel.allDayWindows(on: day).count
-    }
-
-    /// Rows the all-day band needs for the columns currently on screen (capped).
+    /// Rows the all-day band reserves — sized to the busiest day in the *loaded* window,
+    /// not the live visible slice. Deliberately independent of the scroll position: reading
+    /// `firstVisibleDay` here would recompute `headerHeight` on every scrolled day and
+    /// re-lay-out the whole grid. Recomputes only on data load / expand.
     private var visibleAllDayRows: Int {
-        guard let start = viewModel.weekGridIndex(of: viewModel.firstVisibleDay) else { return 0 }
-        let end = min(start + visibleCount, viewModel.weekGridDays.count)
-        let busiest = viewModel.weekGridDays[start..<end].map(allDayCount).max() ?? 0
-        return min(allDayExpanded ? 12 : maxAllDayRows, busiest)
+        min(allDayExpanded ? 12 : maxAllDayRows, viewModel.loadedMaxAllDayCount)
     }
 
     private var bandHeight: CGFloat {
@@ -86,6 +80,18 @@ struct WeekTimeGridView: View {
 
             ScrollView([.horizontal, .vertical]) {
                 ZStack(alignment: .topLeading) {
+                    // Hour gridlines for the whole grid drawn in ONE Canvas (25 strokes)
+                    // instead of 25 `Rectangle`s per column — the biggest primitive-count
+                    // win on scroll. Sized to the viewport and pinned horizontally like the
+                    // gutter (lines are uniform across x, so this is visually identical while
+                    // avoiding a content-width — ~365-day — offscreen texture); scrolls
+                    // vertically with the content so hours stay aligned to the columns above.
+                    HourGridlines(hourHeight: hourHeight)
+                        .frame(width: geo.size.width, height: gridHeight, alignment: .topLeading)
+                        .padding(.top, headerHeight)
+                        .offset(x: offset.x)
+                        .allowsHitTesting(false)
+
                     // Day columns — header *and* grid for a day live in ONE lazily-realised
                     // column, so they share a single horizontal layout and can never drift
                     // apart. The header is pinned to the top within its own column via the
@@ -101,14 +107,18 @@ struct WeekTimeGridView: View {
 
                     // Hour gutter — pinned to the left edge (counters horizontal scroll),
                     // scrolls vertically with the grid.
-                    hourGutter(height: gridHeight)
+                    HourGutter(hourHeight: hourHeight, height: gridHeight)
+                        .equatable()
                         .frame(width: gutterWidth, height: gridHeight)
                         .padding(.top, headerHeight)
                         .background(Color.appBackground)
                         .offset(x: offset.x)
 
                     // Corner (week number + all-day toggle) — pinned to both edges.
-                    cornerCell
+                    CornerCell(weekNumber: viewModel.weekNumber(for: viewModel.firstVisibleDay),
+                               showBand: bandHeight > 0, expanded: allDayExpanded,
+                               onCollapse: { allDayExpanded = false })
+                        .equatable()
                         .frame(width: gutterWidth, height: headerHeight, alignment: .topLeading)
                         .background(Color.appBackground)
                         .offset(x: offset.x, y: offset.y)
@@ -191,9 +201,13 @@ struct WeekTimeGridView: View {
 
     private func dayColumn(day: Date, columnWidth: CGFloat, gridHeight: CGFloat) -> some View {
         ZStack(alignment: .top) {
-            // Timed grid, pushed below the header band.
-            DayColumnGrid(viewModel: viewModel, day: day, hourHeight: hourHeight,
-                          columnWidth: columnWidth, onOpen: onOpen)
+            // Timed grid, pushed below the header band. Fed pre-computed value inputs and
+            // marked `.equatable()` so a scroll-frame `offset` change — which re-runs this
+            // body — skips the hour-grid columns whose data hasn't changed.
+            DayColumnGrid(day: day, items: Self.timedItems(viewModel: viewModel, day: day),
+                          hourHeight: hourHeight, columnWidth: columnWidth,
+                          isToday: Calendar.current.isDateInToday(day), onOpen: onOpen)
+                .equatable()
                 .frame(width: columnWidth, height: gridHeight)
                 .padding(.top, headerHeight)
 
@@ -201,11 +215,13 @@ struct WeekTimeGridView: View {
             // grid scrolls *under* it; `zIndex` keeps it above its own column's grid.
             DayHeaderCell(
                 viewModel: viewModel, day: day,
+                entries: Self.headerEntries(viewModel: viewModel, day: day, rows: visibleAllDayRows),
                 rows: visibleAllDayRows, bandHeight: bandHeight,
                 pillHeight: pillHeight, pillSpacing: pillSpacing,
                 dateLabelHeight: dateLabelHeight, expanded: allDayExpanded,
                 onOpen: onOpen, onExpand: { allDayExpanded = true }
             )
+            .equatable()
             .frame(width: columnWidth, height: headerHeight, alignment: .top)
             .background(Color.appBackground)
             .offset(y: offset.y)
@@ -214,36 +230,86 @@ struct WeekTimeGridView: View {
         .frame(width: columnWidth, height: headerHeight + gridHeight, alignment: .top)
     }
 
-    // MARK: Corner (pinned both axes): week number + all-day collapse toggle
-
-    private var cornerCell: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("W\(viewModel.weekNumber(for: viewModel.firstVisibleDay))")
-                .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
-            Spacer(minLength: 0)
-            if bandHeight > 0 {
-                // Tappable when expanded — collapses the all-day band back.
-                Button { if allDayExpanded { allDayExpanded = false } } label: {
-                    HStack(spacing: 2) {
-                        Text("all-day").font(.system(size: 9)).foregroundStyle(.tertiary)
-                        if allDayExpanded {
-                            Image(systemName: "chevron.up").font(.system(size: 8)).foregroundStyle(.tertiary)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-                .disabled(!allDayExpanded)
-            }
+    /// Timed calendar events, completed activities, and planned workouts that carry a
+    /// start time, as value inputs for `DayColumnGrid`. HealthKit completeds have no time,
+    /// so they stay in the all-day band. The grid copy is read-only — rescheduling stays
+    /// in the all-day band.
+    fileprivate static func timedItems(viewModel: CalendarViewModel, day: Date) -> [TimedItem] {
+        let cal = Calendar.current
+        let startOfDay = cal.startOfDay(for: day)
+        var items: [TimedItem] = viewModel.busyWindows(on: day).map { window in
+            TimedItem(id: "e-\(window.id)", start: window.start, end: window.end,
+                      title: window.title, color: .secondary, detail: .event(window))
         }
-        .padding(.horizontal, 6)
-        .padding(.vertical, 4)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        for activity in viewModel.completed(on: day) {
+            guard let minute = activity.startMinute,
+                  let start = cal.date(byAdding: .minute, value: minute, to: startOfDay),
+                  let end = cal.date(byAdding: .minute, value: max(1, Int(activity.durationMinutes)), to: start)
+            else { continue }
+            items.append(TimedItem(id: "c-\(activity.id)", start: start, end: end,
+                                   title: activity.name,
+                                   color: SportFamily(sportKey: activity.sport).color,
+                                   detail: .completed(activity)))
+        }
+        for workout in viewModel.planned(on: day) {
+            guard let minute = workout.startMinute,
+                  let start = cal.date(byAdding: .minute, value: minute, to: startOfDay),
+                  let end = cal.date(byAdding: .minute, value: max(1, Int(workout.targetDurationMinutes)), to: start)
+            else { continue }
+            items.append(TimedItem(id: "p-\(workout.id)", start: start, end: end,
+                                   title: workout.name,
+                                   color: SportFamily(sportKey: workout.sport).color,
+                                   detail: .planned(workout)))
+        }
+        return items
     }
 
-    private func hourGutter(height: CGFloat) -> some View {
+    /// All-day items for a day's header, capped to `rows` with an overflow marker when
+    /// there are more — as value inputs for `DayHeaderCell`.
+    fileprivate static func headerEntries(viewModel: CalendarViewModel, day: Date, rows: Int) -> [AllDayEntry] {
+        var all: [AllDayEntry] = viewModel.completed(on: day).map { .completed($0) }
+            + viewModel.planned(on: day).map { .planned($0) }
+            + viewModel.allDayWindows(on: day).map { .event($0) }
+        guard rows > 0, all.count > rows else { return all }
+        let hidden = all.count - (rows - 1)
+        all = Array(all.prefix(rows - 1))
+        all.append(.overflow(hidden))
+        return all
+    }
+
+}
+
+/// All 25 hour gridlines for the visible grid, drawn in a single `Canvas` pass. Replaces
+/// 25 `Rectangle` views per column (~175 shape views across the visible week) with one
+/// view, cutting the per-frame layout/composite cost that drives scroll microhangs.
+private struct HourGridlines: View {
+    let hourHeight: CGFloat
+
+    var body: some View {
+        Canvas { ctx, size in
+            var path = Path()
+            for hour in 0...24 {
+                let y = CGFloat(hour) * hourHeight
+                path.move(to: CGPoint(x: 0, y: y))
+                path.addLine(to: CGPoint(x: size.width, y: y))
+            }
+            ctx.stroke(path, with: .color(.primary.opacity(0.10)), lineWidth: 0.5)
+        }
+    }
+}
+
+// MARK: - Pinned gutter / corner (offset applied outside, so scroll only re-transforms)
+
+/// Hour labels down the left edge. Value-only + `Equatable` so the per-frame `offset`
+/// that pins it horizontally re-transforms it without rebuilding its 25 labels.
+private struct HourGutter: View, Equatable {
+    let hourHeight: CGFloat
+    let height: CGFloat
+
+    var body: some View {
         ZStack(alignment: .topLeading) {
             Color.clear.frame(height: height)
-            ForEach(hours, id: \.self) { hour in
+            ForEach(0...24, id: \.self) { hour in
                 Text(String(format: "%02d:00", hour % 24))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .trailing)
@@ -252,14 +318,50 @@ struct WeekTimeGridView: View {
             }
         }
     }
+}
 
+/// Week number + all-day collapse toggle, pinned to both edges. `onCollapse` excluded
+/// from equality; the pinning `offset` re-transforms without rebuilding this.
+private struct CornerCell: View, Equatable {
+    let weekNumber: Int
+    let showBand: Bool
+    let expanded: Bool
+    let onCollapse: () -> Void
+
+    static func == (l: CornerCell, r: CornerCell) -> Bool {
+        l.weekNumber == r.weekNumber && l.showBand == r.showBand && l.expanded == r.expanded
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("W\(weekNumber)")
+                .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            Spacer(minLength: 0)
+            if showBand {
+                // Tappable when expanded — collapses the all-day band back.
+                Button { if expanded { onCollapse() } } label: {
+                    HStack(spacing: 2) {
+                        Text("all-day").font(.system(size: 9)).foregroundStyle(.tertiary)
+                        if expanded {
+                            Image(systemName: "chevron.up").font(.system(size: 8)).foregroundStyle(.tertiary)
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(!expanded)
+            }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
 }
 
 // MARK: - Day header cell (date label + all-day band)
 
 /// One item in the all-day band: a workout (completed/planned), an all-day calendar
 /// event, or an overflow marker when a day has more than the band can show.
-private enum AllDayEntry: Identifiable {
+private enum AllDayEntry: Identifiable, Equatable {
     case completed(WorkoutRecord)
     case planned(WorkoutRecord)
     case event(BusyWindow)
@@ -273,11 +375,31 @@ private enum AllDayEntry: Identifiable {
         case .overflow: return "overflow"
         }
     }
+
+    // Compare the fields the pill actually renders (id-only would miss an in-place edit —
+    // rename, re-scored TSS — since `WorkoutRecord` is a reference type).
+    static func == (l: AllDayEntry, r: AllDayEntry) -> Bool {
+        switch (l, r) {
+        case let (.completed(a), .completed(b)):
+            return a.id == b.id && a.name == b.name && a.sport == b.sport
+                && a.tss == b.tss && a.distanceKm == b.distanceKm && a.durationMinutes == b.durationMinutes
+        case let (.planned(a), .planned(b)):
+            return a.id == b.id && a.name == b.name && a.sport == b.sport
+                && a.targetTSS == b.targetTSS && a.targetDurationMinutes == b.targetDurationMinutes
+        case let (.event(a), .event(b)):
+            return a.id == b.id && a.title == b.title
+        case let (.overflow(a), .overflow(b)):
+            return a == b
+        default:
+            return false
+        }
+    }
 }
 
-private struct DayHeaderCell: View {
-    @Bindable var viewModel: CalendarViewModel
+private struct DayHeaderCell: View, Equatable {
+    let viewModel: CalendarViewModel
     let day: Date
+    let entries: [AllDayEntry]
     let rows: Int
     let bandHeight: CGFloat
     let pillHeight: CGFloat
@@ -288,6 +410,15 @@ private struct DayHeaderCell: View {
     let onExpand: () -> Void
 
     private var isToday: Bool { Calendar.current.isDateInToday(day) }
+
+    // Skip re-render on scroll (parent body re-runs per frame; `.offset(y:)` is applied
+    // outside, so only the transform updates). `viewModel`/closures excluded.
+    static func == (l: DayHeaderCell, r: DayHeaderCell) -> Bool {
+        l.day == r.day && l.rows == r.rows && l.bandHeight == r.bandHeight
+            && l.pillHeight == r.pillHeight && l.pillSpacing == r.pillSpacing
+            && l.dateLabelHeight == r.dateLabelHeight && l.expanded == r.expanded
+            && l.entries == r.entries
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -382,19 +513,6 @@ private struct DayHeaderCell: View {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
-    /// All-day items capped to `rows`, with an overflow marker when there are more.
-    private var entries: [AllDayEntry] {
-        var all: [AllDayEntry] = viewModel.completed(on: day).map { .completed($0) }
-            + viewModel.planned(on: day).map { .planned($0) }
-            + viewModel.allDayWindows(on: day).map { .event($0) }
-        guard rows > 0, all.count > rows else { return all }
-        all = Array(all.prefix(rows - 1))
-        let hidden = (viewModel.completed(on: day).count + viewModel.planned(on: day).count
-            + viewModel.allDayWindows(on: day).count) - (rows - 1)
-        all.append(.overflow(hidden))
-        return all
-    }
-
     private var dateLabel: String {
         let weekday = day.formatted(.dateTime.weekday(.abbreviated))
         let dayMonth = day.formatted(.dateTime.day().month(.abbreviated))
@@ -404,26 +522,29 @@ private struct DayHeaderCell: View {
 
 // MARK: - Day column hour grid (timed events)
 
-private struct DayColumnGrid: View {
-    @Bindable var viewModel: CalendarViewModel
+private struct DayColumnGrid: View, Equatable {
     let day: Date
+    let items: [TimedItem]
     let hourHeight: CGFloat
     let columnWidth: CGFloat
+    let isToday: Bool
     let onOpen: (CalendarDetailItem) -> Void
 
-    private var isToday: Bool { Calendar.current.isDateInToday(day) }
     private let gridLine = Color.primary.opacity(0.10)
 
+    // Skip re-render on scroll: a per-frame `offset` change re-runs the parent body but
+    // leaves these value inputs unchanged. `onOpen` is intentionally excluded (a closure
+    // isn't comparable, and it's stable for a given column).
+    static func == (l: DayColumnGrid, r: DayColumnGrid) -> Bool {
+        l.day == r.day && l.hourHeight == r.hourHeight
+            && l.columnWidth == r.columnWidth && l.isToday == r.isToday && l.items == r.items
+    }
+
     var body: some View {
-        let lanes = TimedEventLayout.lanes(for: timedItems)
+        let lanes = TimedEventLayout.lanes(for: items)
 
         ZStack(alignment: .topLeading) {
-            // Hourly gridlines + trailing day separator.
-            ForEach(0...24, id: \.self) { hour in
-                Rectangle().fill(gridLine)
-                    .frame(height: 0.5)
-                    .offset(y: CGFloat(hour) * hourHeight)
-            }
+            // Trailing day separator (hour gridlines are drawn once by `HourGridlines`).
             Rectangle().fill(gridLine).frame(width: 0.5)
                 .frame(maxWidth: .infinity, alignment: .trailing)
 
@@ -443,40 +564,6 @@ private struct DayColumnGrid: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .topLeading)
-    }
-
-    /// Timed calendar events, completed activities, and planned workouts that carry a
-    /// start time. The grid copy is read-only — rescheduling stays in the all-day band.
-    private var timedItems: [TimedItem] {
-        let cal = Calendar.current
-        let startOfDay = cal.startOfDay(for: day)
-        var items: [TimedItem] = viewModel.busyWindows(on: day).map { window in
-            TimedItem(id: "e-\(window.id)", start: window.start, end: window.end,
-                      title: window.title, color: .secondary, detail: .event(window))
-        }
-        // Completed activities sit at their actual Garmin clock time (HealthKit ones
-        // have no time, so they stay in the all-day band).
-        for activity in viewModel.completed(on: day) {
-            guard let minute = activity.startMinute,
-                  let start = cal.date(byAdding: .minute, value: minute, to: startOfDay),
-                  let end = cal.date(byAdding: .minute, value: max(1, Int(activity.durationMinutes)), to: start)
-            else { continue }
-            items.append(TimedItem(id: "c-\(activity.id)", start: start, end: end,
-                                   title: activity.name,
-                                   color: SportFamily(sportKey: activity.sport).color,
-                                   detail: .completed(activity)))
-        }
-        for workout in viewModel.planned(on: day) {
-            guard let minute = workout.startMinute,
-                  let start = cal.date(byAdding: .minute, value: minute, to: startOfDay),
-                  let end = cal.date(byAdding: .minute, value: max(1, Int(workout.targetDurationMinutes)), to: start)
-            else { continue }
-            items.append(TimedItem(id: "p-\(workout.id)", start: start, end: end,
-                                   title: workout.name,
-                                   color: SportFamily(sportKey: workout.sport).color,
-                                   detail: .planned(workout)))
-        }
-        return items
     }
 
     private var nowIndicator: some View {
@@ -505,13 +592,19 @@ private struct DayColumnGrid: View {
 
 /// A timed entry in the hour grid — a calendar event (grey) or a workout (discipline
 /// colour). Read-only; tapping opens its detail.
-private struct TimedItem: Identifiable {
+private struct TimedItem: Identifiable, Equatable {
     let id: String
     let start: Date
     let end: Date
     let title: String
     let color: Color
     let detail: CalendarDetailItem
+
+    // Everything that drives the block's geometry/appearance; `detail` is derived from the
+    // same record (used only on tap) so it's excluded.
+    static func == (l: TimedItem, r: TimedItem) -> Bool {
+        l.id == r.id && l.start == r.start && l.end == r.end && l.title == r.title && l.color == r.color
+    }
 }
 
 // MARK: - Event / workout pills

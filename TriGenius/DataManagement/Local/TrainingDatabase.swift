@@ -551,6 +551,7 @@ final class TrainingDataStore {
     /// the load is never double-counted.
     func ingest(_ activities: [IngestedActivity]) {
         guard !activities.isEmpty else { return }
+        let perf = Perf.begin("ingest", "\(activities.count)"); defer { Perf.end(perf) }
         let history = performanceHistory()
         let ignored = IgnoredWorkouts.ids
         for a in activities {

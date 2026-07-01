@@ -254,7 +254,12 @@ actor GarminService {
                    let cachedRec = (try? JSONSerialization.jsonObject(with: cachedData)) as? [String: Any] {
                     formatted.append(cachedRec)            // already stored & computed
                 } else {
+                    // New (uncached) activity: pays the extra serial detail/splits
+                    // fetch inside formatActivityRecord. One span per activity, so the
+                    // timeline shows whether these round-trips are the launch bottleneck.
+                    let dp = Perf.begin("garmin.activityDetail")
                     let rec = await formatActivityRecord(activity)
+                    Perf.end(dp)
                     formatted.append(rec)
                     if let dto = ingestDTO(from: rec) { toIngest.append(dto) }
                 }
@@ -510,7 +515,32 @@ actor GarminService {
 
     // MARK: - get_workouts
 
-    func getWorkouts(startDate: String, endDate: String) async -> String {
+    // One planned workout's fetched detail, Sendable so it crosses the task boundary:
+    // the raw `workout` payload as a JSON string (nil when both fetches failed) plus the
+    // stringified associatedActivityId. Entry building happens on the caller's actor.
+    private struct FetchedWorkout: Sendable {
+        let id: String
+        let detailsJSON: String?
+        let assoc: String?
+    }
+
+    // JSON round-trip helpers to carry `[String: Any]` payloads across concurrency
+    // task boundaries as Sendable strings. `nonisolated` so a non-main-actor task can
+    // call them without hopping / passing the dict cross-actor.
+    nonisolated private static func jsonString(_ obj: Any) -> String {
+        (try? JSONSerialization.data(withJSONObject: obj)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    }
+    nonisolated private static func jsonObject(_ s: String) -> [String: Any]? {
+        s.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
+    }
+    nonisolated private static func jsonArray(_ s: String) -> [[String: Any]] {
+        (s.data(using: .utf8).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [[String: Any]]) ?? []
+    }
+
+    /// `includeCompleted:false` skips the completed-activity fetch — the sync path
+    /// (`syncScheduledWorkouts`) mirrors only `scheduled`, and the completed history is
+    /// synced separately by `getActivities`, so fetching it here would be redundant.
+    func getWorkouts(startDate: String, endDate: String, includeCompleted: Bool = true) async -> String {
         let start = GarminTransform.formatDate(startDate)
         let end = GarminTransform.formatDate(endDate)
 
@@ -521,69 +551,51 @@ actor GarminService {
         var completed: [[String: Any]] = []
         var seen = Set<String>()
 
-        // Calendar items across every month the window spans — Garmin's calendar
-        // endpoint is per-month, so a window crossing a boundary (the default
-        // look-ahead does) needs one call per month or the other month's items are
-        // lost. A failed fetch must surface as an error, never an empty result:
-        // `syncScheduledWorkouts` mirrors this list verbatim, so a silent empty
-        // would wipe every planned workout (see BUGS.md).
-        var calendarItems: [[String: Any]] = []
+        // Calendar items across every month the window spans, fetched concurrently —
+        // Garmin's calendar endpoint is per-month, so a window crossing a boundary (the
+        // default look-ahead does) needs one call per month. A failed fetch must surface
+        // as an error, never an empty result: `syncScheduledWorkouts` mirrors this list
+        // verbatim, so a silent empty would wipe every planned workout (see BUGS.md).
+        // Tasks return each month's items as a JSON string (Sendable) to stay clean
+        // across the concurrency boundary.
+        let calendarItems: [[String: Any]]
         do {
-            for (year, month) in Self.monthsSpanned(start: start, end: end) {
-                let calData = try await client.connectapi("/calendar-service/year/\(year)/month/\(month - 1)") as? [String: Any]
-                calendarItems += calData?["calendarItems"] as? [[String: Any]] ?? []
+            let chunks = try await withThrowingTaskGroup(of: String.self) { group -> [String] in
+                for (year, month) in Self.monthsSpanned(start: start, end: end) {
+                    group.addTask {
+                        let cm = Perf.begin("garmin.calendarMonth", "\(year)-\(month)")
+                        defer { Perf.end(cm) }
+                        let calData = try await self.client.connectapi("/calendar-service/year/\(year)/month/\(month - 1)") as? [String: Any]
+                        let items = calData?["calendarItems"] as? [[String: Any]] ?? []
+                        return Self.jsonString(items)
+                    }
+                }
+                var out: [String] = []
+                for try await c in group { out.append(c) }
+                return out
             }
+            calendarItems = chunks.flatMap { Self.jsonArray($0) }
         } catch {
             return resultString(success: false, data: nil, message: "Failed to fetch calendar: \(authMessage(error))")
         }
+
+        // First pass (sequential): dedup + split by type. Planned workouts needing a
+        // detail fetch are collected as Sendable scalars; activities/GC-plans are built
+        // inline (no extra network). Output is date-sorted below, so loop order is free.
+        var pending: [(id: String, scheduleId: String?, title: String, sport: String, date: String)] = []
         for item in calendarItems {
             let itemDate = item["date"] as? String ?? ""
             guard !itemDate.isEmpty, itemDate >= start, itemDate <= end else { continue }
-            let itemType = item["itemType"] as? String
-            if itemType == "workout", let workoutId = item["workoutId"] {
+            switch item["itemType"] as? String {
+            case "workout":
+                guard let workoutId = item["workoutId"] else { continue }
                 let id = "\(workoutId)"
                 if seen.contains(id) { continue }
                 seen.insert(id)
-                var durationMinutes: Any = NSNull()
-                var steps: [[String: Any]] = []
-                var poolLengthM: Any = NSNull()
-                let sportKey = item["sportTypeKey"] as? String ?? "other"
-                // Prefer the schedule detail: it embeds the same `workout`
-                // payload AND the `associatedActivityId` Garmin sets once the
-                // session is completed (used to suppress the redundant plan).
-                // Fall back to the plain workout detail if no schedule id.
-                var associatedActivityId: Any?
-                let scheduleId = item["id"].map { "\($0)" }
-                var details: [String: Any]?
-                if let scheduleId, let schedule = try? await client.getScheduledWorkout(scheduleId: scheduleId) {
-                    details = schedule["workout"] as? [String: Any]
-                    associatedActivityId = schedule["associatedActivityId"].flatMap { $0 is NSNull ? nil : $0 }
-                }
-                if details == nil { details = try? await client.getWorkoutDetails(workoutId: id) }
-                if let details {
-                    if let est = Coerce.double(details["estimatedDurationInSecs"]) {
-                        durationMinutes = Int((est / 60).rounded())
-                    }
-                    steps = compactSteps(fromDetails: details, sport: sportKey)
-                    // Workout payloads store poolLength already in meters
-                    // (unlike activity summaries, which use cm) — expose as-is.
-                    if let pool = Coerce.double(details["poolLength"]), pool > 0 {
-                        poolLengthM = pool
-                    }
-                }
-                // workout_data mirrors the add_workouts/modify_workout shape, so
-                // an item can be passed straight back to modify_workout.
-                var entry: [String: Any] = [
-                    "workout_id": id, "date": itemDate, "editable": true,
-                    "workout_data": [
-                        "name": item["title"] as? String ?? "Scheduled Workout",
-                        "sport": sportKey, "duration_minutes": durationMinutes,
-                        "description": "", "steps": steps, "pool_length": poolLengthM
-                    ]
-                ]
-                if let associatedActivityId { entry["associated_activity_id"] = "\(associatedActivityId)" }
-                scheduled.append(entry)
-            } else if itemType == "activity" {
+                pending.append((id, item["id"].map { "\($0)" },
+                                item["title"] as? String ?? "Scheduled Workout",
+                                item["sportTypeKey"] as? String ?? "other", itemDate))
+            case "activity":
                 let id = item["id"].map { "\($0)" } ?? ""
                 if id.isEmpty || seen.contains(id) { continue }
                 seen.insert(id)
@@ -597,7 +609,7 @@ actor GarminService {
                     "date": itemDate, "sport": sport, "duration_minutes": durationMinutes,
                     "description": ""
                 ])
-            } else if itemType == "fbtAdaptiveWorkout" {
+            case "fbtAdaptiveWorkout":
                 let uuid = item["workoutUuid"] as? String ?? ""
                 if uuid.isEmpty || seen.contains(uuid) { continue }
                 seen.insert(uuid)
@@ -610,11 +622,76 @@ actor GarminService {
                         "duration_minutes": NSNull(), "description": "", "steps": []
                     ]
                 ])
+            default:
+                continue
             }
         }
 
-        // Completed activities by date
-        if let activities = try? await client.getActivitiesByDate(start: start, end: end) {
+        // Fetch each planned workout's detail concurrently (was the serial bottleneck).
+        // Tasks do *only* network and return the raw `workout` payload as a Sendable JSON
+        // string; entry building (compactSteps, actor-isolated) runs on the caller below.
+        // Prefer the schedule detail (embeds the `workout` payload AND the
+        // `associatedActivityId` Garmin sets once completed); fall back to the plain
+        // workout detail when there's no schedule id or it carries no payload.
+        let fetched = await withTaskGroup(of: FetchedWorkout.self) { group -> [FetchedWorkout] in
+            for p in pending {
+                group.addTask {
+                    var details: [String: Any]?
+                    var assoc: String?
+                    if let scheduleId = p.scheduleId {
+                        let sf = Perf.begin("garmin.schedFetch", scheduleId)
+                        let schedule = try? await self.client.getScheduledWorkout(scheduleId: scheduleId)
+                        Perf.end(sf)
+                        if let schedule {
+                            details = schedule["workout"] as? [String: Any]
+                            if let a = schedule["associatedActivityId"], !(a is NSNull) { assoc = "\(a)" }
+                        }
+                    }
+                    if details == nil {
+                        let wf = Perf.begin("garmin.wktFetch", p.id)
+                        details = try? await self.client.getWorkoutDetails(workoutId: p.id)
+                        Perf.end(wf)
+                    }
+                    return FetchedWorkout(id: p.id, detailsJSON: details.map { Self.jsonString($0) }, assoc: assoc)
+                }
+            }
+            var out: [FetchedWorkout] = []
+            for await f in group { out.append(f) }
+            return out
+        }
+        let detailById = Dictionary(fetched.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for p in pending {
+            let f = detailById[p.id]
+            let details = f?.detailsJSON.flatMap { Self.jsonObject($0) }
+            var durationMinutes: Any = NSNull()
+            var steps: [[String: Any]] = []
+            var poolLengthM: Any = NSNull()
+            if let details {
+                if let est = Coerce.double(details["estimatedDurationInSecs"]) {
+                    durationMinutes = Int((est / 60).rounded())
+                }
+                steps = compactSteps(fromDetails: details, sport: p.sport)
+                // Workout payloads store poolLength already in meters (unlike activity
+                // summaries, which use cm) — expose as-is.
+                if let pool = Coerce.double(details["poolLength"]), pool > 0 {
+                    poolLengthM = pool
+                }
+            }
+            // workout_data mirrors the add_workouts/modify_workout shape, so an item can
+            // be passed straight back to modify_workout.
+            var entry: [String: Any] = [
+                "workout_id": p.id, "date": p.date, "editable": true,
+                "workout_data": [
+                    "name": p.title, "sport": p.sport, "duration_minutes": durationMinutes,
+                    "description": "", "steps": steps, "pool_length": poolLengthM
+                ]
+            ]
+            if let assoc = f?.assoc { entry["associated_activity_id"] = assoc }
+            scheduled.append(entry)
+        }
+
+        // Completed activities by date — skipped in the sync path (see includeCompleted).
+        if includeCompleted, let activities = try? await client.getActivitiesByDate(start: start, end: end) {
             for activity in activities {
                 let id = activity["activityId"].map { "\($0)" } ?? ""
                 if id.isEmpty || seen.contains(id) { continue }
@@ -859,7 +936,11 @@ actor GarminService {
     func syncUserSettings() async -> (text: String, settings: [String: Any]?) {
         var settings: [String: Any] = [:]
 
-        if let hrZones = try? await client.connectapi("/biometric-service/heartRateZones") as? [[String: Any]], !hrZones.isEmpty {
+        // The two independent endpoints fire concurrently (they were serial).
+        async let hrZonesRaw = get("/biometric-service/heartRateZones")
+        async let ftpRaw = get("/biometric-service/biometric/latestFunctionalThresholdPower/CYCLING")
+
+        if let hrZones = await hrZonesRaw as? [[String: Any]], !hrZones.isEmpty {
             let defaultZones = hrZones.first { ($0["sport"] as? String) == "DEFAULT" } ?? hrZones[0]
             if let maxHR = (defaultZones["maxHeartRateUsed"] as? NSNumber)?.intValue { settings["max_hr"] = maxHR }
             func z(_ key: String) -> Int { (defaultZones[key] as? NSNumber)?.intValue ?? 0 }
@@ -870,8 +951,7 @@ actor GarminService {
 
         // Power zones are bucketed from the current cycling FTP. The FTP series
         // itself comes from fetchMetricHistory, so we read the latest value only.
-        if let ftp = try? await client.getCyclingFtp(),
-           let dict = ftp as? [String: Any],
+        if let dict = await ftpRaw as? [String: Any],
            let value = (dict["functionalThresholdPower"] as? NSNumber)?.intValue, value > 0 {
             let f = Double(value)
             let bounds = [0, 0.55, 0.75, 0.90, 1.05, 1.20].map { Int((f * $0).rounded()) }

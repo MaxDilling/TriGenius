@@ -425,6 +425,7 @@ final class CoachBrain {
     }
 
     private func executeToolSafe(name: String, arguments: [String: Any]) async -> String {
+        let perf = Perf.begin("tool", name); defer { Perf.end(perf) }
         let result: String
         do {
             result = try await toolRegistry.execute(name: name, arguments: arguments)
@@ -495,6 +496,7 @@ final class CoachBrain {
     }()
 
     private func buildSystemPrompt() -> String {
+        let perf = Perf.begin("buildSystemPrompt"); defer { Perf.end(perf) }
         let now = Date()
         let date = Self.dateFormatter.string(from: now)
         let time = Self.timeFormatter.string(from: now)

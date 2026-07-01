@@ -63,6 +63,10 @@ final class CalendarViewModel {
     private(set) var busyByDay: [Date: DayAvailability] = [:]
     /// Per-segment availability keyed by start-of-day.
     private(set) var segmentsByDay: [Date: [TimeOfDaySegment: SegmentState]] = [:]
+    /// Busiest all-day stack (workouts + all-day events) across the loaded window.
+    /// Drives a *stable* week-grid all-day band height: recomputed only on load, so
+    /// scrolling never resizes the header and re-lays-out the grid. See `WeekTimeGridView`.
+    private(set) var loadedMaxAllDayCount: Int = 0
     /// The day range currently loaded into the dictionaries above.
     private var loadedRange: ClosedRange<Date>?
 
@@ -227,7 +231,11 @@ final class CalendarViewModel {
     /// The header shows the month of the row's midweek day (its dominant month).
     func updateMonthScroll(topWeekStart: Date) {
         let midweek = cal.date(byAdding: .day, value: 3, to: topWeekStart) ?? topWeekStart
-        visibleMonth = Self.monthStart(of: midweek)
+        // Only write on an *actual* month change: this runs on every scroll frame, and
+        // `visibleMonth` is observed by every day cell's `isInVisibleMonth` dimming — a
+        // same-value assignment would still re-invalidate them all, per frame.
+        let month = Self.monthStart(of: midweek)
+        if month != visibleMonth { visibleMonth = month }
         ensureWeekLoaded(around: topWeekStart)
     }
 
@@ -256,6 +264,7 @@ final class CalendarViewModel {
 
     /// Fill the per-day dictionaries for `[start, end]` from the local store + EventKit.
     private func loadData(from start: Date, to end: Date) {
+        let perf = Perf.begin("Calendar.loadData"); defer { Perf.end(perf) }
         let store = TrainingDataStore.shared
 
         var completed: [Date: [WorkoutRecord]] = [:]
@@ -274,11 +283,18 @@ final class CalendarViewModel {
 
         loadCalendar(from: start, to: end)
         loadedRange = cal.startOfDay(for: start)...cal.startOfDay(for: end)
+
+        let days = Set(completedByDay.keys).union(plannedByDay.keys).union(busyByDay.keys)
+        loadedMaxAllDayCount = days.map { day in
+            (completedByDay[day]?.count ?? 0) + (plannedByDay[day]?.count ?? 0)
+                + (busyByDay[day]?.windows.filter(\.isAllDay).count ?? 0)
+        }.max() ?? 0
     }
 
     /// Load EventKit busy windows + derived segment states for the range. Skipped
     /// (and flagged) when access hasn't been granted.
     private func loadCalendar(from start: Date, to end: Date) {
+        let perf = Perf.begin("Calendar.loadCalendar"); defer { Perf.end(perf) }
         let service = CalendarService.shared
         guard service.accessState == .authorized else {
             needsCalendarAccess = true

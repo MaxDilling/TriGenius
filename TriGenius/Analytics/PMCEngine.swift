@@ -174,6 +174,7 @@ enum PMCEngine {
         historyDays: Int = 365,
         forecastDays: Int = forecastDays
     ) -> PMCResult {
+        let perf = Perf.begin("PMCEngine.current"); defer { Perf.end(perf) }
         let store = store ?? .shared
         let cal = Calendar.current
         let from = cal.date(byAdding: .day, value: -historyDays, to: today) ?? today

@@ -9,7 +9,6 @@ struct TriGeniusApp: App {
     @StateObject private var settings = AppSettings()
     @State private var router = CoachRouter()
     @State private var brain: CoachBrain?
-    @State private var launchStatus = "Initialisiere…"
     @Environment(\.scenePhase) private var scenePhase
 
     init() {
@@ -25,7 +24,7 @@ struct TriGeniusApp: App {
                     applyBackend(to: brain)
                 }
             } else {
-                ProgressView(launchStatus)
+                ProgressView("Initialisiere…")
                     .task { await setupBrain() }
             }
         }
@@ -62,17 +61,24 @@ struct TriGeniusApp: App {
         // One-time migration: seed the performance-metric time series from any
         // legacy `coach_memory.json` scalars before the first save drops them.
         seedPerformanceMetricsIfNeeded()
-        // GOAL.md step 2: sync the latest activities into the local database
-        // before revealing the UI, so the coach reads 100% fresh data.
-        launchStatus = "Synchronisiere Aktivitäten…"
-        await DataSyncCoordinator.shared.syncAll(settings.readSources)
-        // Push any upcoming plans the active write target hasn't seen yet (e.g. after
-        // a target switch), so nothing is lost.
-        await DataSyncCoordinator.shared.reconcileWriteTarget(settings.writeTarget)
-        // Re-register OS-scheduled reminders — pending requests are cleared on
-        // reboot / app update, so reconcile on every launch.
-        await ReminderScheduler.shared.reconcile()
+        // Reveal the UI immediately from the cached SwiftData store — the migrations
+        // above are local and instant; the network sync must NOT gate first paint.
         brain = b
+        // Sync in the background: its store writes post `trainingDataDidChange`, so the
+        // Dashboard/Calendar/etc. refresh in place when fresh data lands. (Trade-off:
+        // for the first ~seconds the coach reads last-sync data — acceptable, the store
+        // already holds the previous run's history and this self-heals on arrival.)
+        let readSources = settings.readSources
+        let writeTarget = settings.writeTarget
+        Task {
+            await DataSyncCoordinator.shared.syncAll(readSources)
+            // Push any upcoming plans the active write target hasn't seen yet (e.g. after
+            // a target switch), so nothing is lost.
+            await DataSyncCoordinator.shared.reconcileWriteTarget(writeTarget)
+            // Re-register OS-scheduled reminders — pending requests are cleared on
+            // reboot / app update, so reconcile on every launch.
+            await ReminderScheduler.shared.reconcile()
+        }
     }
 
     /// One-time migration: import any pre-existing `coach_memory.json` into the

@@ -69,6 +69,7 @@ final class DashboardViewModel {
     }
 
     func load(context: DashboardContext) async {
+        let perf = Perf.begin("DashboardVM.load"); defer { Perf.end(perf) }
         isLoading = true
         errorMessage = nil
 

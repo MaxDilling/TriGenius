@@ -204,6 +204,7 @@ enum ATPEngine {
         completedTSSByWeek: [Date: Double] = [:],
         today: Date = Date()
     ) -> ATPPlan? {
+        let perf = Perf.begin("ATPEngine.build"); defer { Perf.end(perf) }
         let shells = ATPPeriodization.layout(params: params, events: events, today: today)
         guard !shells.isEmpty else { return nil }
 

@@ -69,6 +69,7 @@ final class DataSyncCoordinator {
     /// Returns the number of activities now stored, or nil on failure.
     @discardableResult
     func sync(source: DataSource) async -> Int? {
+        let perf = Perf.begin("sync", source.rawValue); defer { Perf.end(perf) }
         // Number of days back to fetch. nil = full backfill (first sync).
         let days = windowDays(since: lastSync(for: source))
 
@@ -84,17 +85,23 @@ final class DataSyncCoordinator {
             if AppSettings.storedMetricsSource() == .garmin {
                 let metricsDays = days ?? 14   // seed ~2 weeks on a first/full sync
                 if let from = Calendar.current.date(byAdding: .day, value: -metricsDays, to: Calendar.current.startOfDay(for: Date())) {
+                    let m = Perf.begin("garmin.metrics")
                     await syncGarminMetrics(from: from, to: Date())
+                    Perf.end(m)
                 }
             }
             // getActivities ingests (and the store scores) into the store as a side effect.
+            let ap = Perf.begin("garmin.activities")
             let result = await GarminService.shared.getActivities(sport: nil, count: syncCount, days: days)
+            Perf.end(ap)
             // Only advance the watermark on success, else a network failure would
             // skip the failed window on the next (now smaller) incremental sync.
             guard !result.hasPrefix("✗") else { return nil }
             // Mirror planned calendar workouts into the local scheduled store so
             // the dashboard Agenda, calendar screen and weekly targets reflect them.
+            let sp = Perf.begin("garmin.scheduled")
             await syncScheduledWorkouts(source: .garmin)
+            Perf.end(sp)
             markSynced(source)
             return store.count
         case .appleHealth:
@@ -143,6 +150,7 @@ final class DataSyncCoordinator {
     /// own watermark, so they advance independently. Garmin is skipped silently when
     /// not authenticated.
     func syncAll(_ sources: Set<DataSource>) async {
+        let perf = Perf.begin("syncAll"); defer { Perf.end(perf) }
         // Sync the chosen metrics source first so the FTP/threshold series is present
         // before the *other* source's activities are scored at ingest (ingest order is
         // load-bearing — TSS is scored against the thresholds current on each date).
@@ -202,11 +210,16 @@ final class DataSyncCoordinator {
     private func syncGarminMetrics(from: Date, to: Date) async -> String {
         let start = DateFormatter.ymd.string(from: from)
         let end = DateFormatter.ymd.string(from: to)
-        let history = await GarminService.shared.fetchMetricHistory(startDate: start, endDate: end)
-        if !history.isEmpty { store.ingestMetrics(history) }
+        // The metric-history pull and the training-zones fetch are independent network
+        // work (syncUserSettings reads no store state) — run them concurrently, then
+        // write both. Order of the two ingests is irrelevant (disjoint metric keys).
+        async let historyTask = GarminService.shared.fetchMetricHistory(startDate: start, endDate: end)
+        async let settingsTask = GarminService.shared.syncUserSettings()
+        let history = await historyTask
         // Training zones + max HR are the only markers the range endpoints don't
         // cover (see GarminService.syncUserSettings).
-        let (text, settings) = await GarminService.shared.syncUserSettings()
+        let (text, settings) = await settingsTask
+        if !history.isEmpty { store.ingestMetrics(history) }
         if let settings {
             store.ingestMetrics(Self.metrics(fromGarminSettings: settings, date: Date()))
         }
@@ -324,9 +337,13 @@ final class DataSyncCoordinator {
         let today = cal.startOfDay(for: Date())
         guard let from = cal.date(byAdding: .day, value: -Self.scheduledLookbackDays, to: today),
               let to = cal.date(byAdding: .day, value: Self.scheduledLookaheadDays, to: today) else { return }
+        // includeCompleted:false — this path mirrors only planned workouts; completed
+        // activities are synced separately by getActivities, so fetching them here (a
+        // paginated getActivitiesByDate) would be pure redundant network work.
         let result = await GarminService.shared.getWorkouts(
             startDate: DateFormatter.ymd.string(from: from),
-            endDate: DateFormatter.ymd.string(from: to)
+            endDate: DateFormatter.ymd.string(from: to),
+            includeCompleted: false
         )
         // A failed fetch returns "✗ …"; feeding that to replaceScheduled would wipe
         // the local mirror to match an empty result, so bail before touching it.

@@ -57,6 +57,11 @@ actor GarminClient {
             request.httpBody = try JSONSerialization.data(withJSONObject: jsonBody, options: [])
         }
 
+        // Single funnel for every Garmin request → one span per API call in the
+        // Instruments "Points of Interest" track, labelled with method + path.
+        // `defer` ends it even when the request throws.
+        let api = Perf.begin("garmin.api", "\(method) \(path)")
+        defer { Perf.end(api) }
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw GarminAuthError.network("no response") }
         guard (200..<300).contains(http.statusCode) else {
