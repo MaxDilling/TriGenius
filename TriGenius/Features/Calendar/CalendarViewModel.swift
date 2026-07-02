@@ -73,7 +73,6 @@ final class CalendarViewModel {
     /// True when calendar access hasn't been granted, so the UI can offer to ask.
     private(set) var needsCalendarAccess: Bool = false
 
-    private let writeTarget: WriteTarget
     private static let modeKey = "calendar.mode"
     private let cal: Calendar = {
         var c = Calendar.current
@@ -81,8 +80,7 @@ final class CalendarViewModel {
         return c
     }()
 
-    init(writeTarget: WriteTarget, today: Date = Date()) {
-        self.writeTarget = writeTarget
+    init(today: Date = Date()) {
         let day = Calendar.current.startOfDay(for: today)
         var c = Calendar.current
         c.firstWeekday = 2
@@ -323,30 +321,20 @@ final class CalendarViewModel {
     // MARK: - Reschedule
 
     /// Move a planned workout to `newDay` and, when `segment` is given, anchor its
-    /// local start time to that segment. Updates the local store immediately and
-    /// pushes the day move to the active write target in the background.
+    /// local start time to that segment. The day move goes through the shared
+    /// `DataSyncCoordinator.movePlan` (local store first, then the active write
+    /// target); the start time is local-only. The store's `trainingDataDidChange`
+    /// triggers the view reload.
     func move(workoutID: String, to newDay: Date, segment: TimeOfDaySegment? = nil) {
-        let store = TrainingDataStore.shared
         let targetDay = cal.startOfDay(for: newDay)
         guard let record = scheduledRecord(id: workoutID) else { return }
-        let fromDay = cal.startOfDay(for: record.date)
-        let dayChanged = fromDay != targetDay
+        let dayChanged = cal.startOfDay(for: record.date) != targetDay
         let minuteChanged = segment != nil && record.startMinute != segment?.anchorMinute
         guard dayChanged || minuteChanged else { return }
 
-        // Resolve the active target's external id for this plan before the local move.
-        let externalId = record.externalRefs[writeTarget.refKey]
-            ?? (record.source == writeTarget.refKey ? TrainingDataStore.rawId(record.id) : nil)
-
-        if dayChanged { store.moveScheduledWorkout(id: workoutID, to: targetDay) }
-        if let segment { store.setScheduledStartMinute(id: workoutID, minute: segment.anchorMinute) }
-        load()
-
-        if dayChanged, let externalId {
-            let from = DateFormatter.ymd.string(from: fromDay)
-            let to = DateFormatter.ymd.string(from: targetDay)
-            let target = WorkoutTargetFactory.make(writeTarget)
-            Task { _ = await target.move(externalId: externalId, to: to, from: from) }
+        if let segment { TrainingDataStore.shared.setScheduledStartMinute(id: workoutID, minute: segment.anchorMinute) }
+        if dayChanged {
+            Task { _ = await DataSyncCoordinator.shared.movePlan(id: workoutID, to: targetDay) }
         }
     }
 

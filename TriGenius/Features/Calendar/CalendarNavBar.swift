@@ -4,8 +4,8 @@ import SwiftUI
 //
 // The floating glass control layer above the grid, mirroring Apple Calendar: a pill
 // with the month name (a back chevron that zooms out to the month, in week mode) and
-// a right-hand pill with search + add. Per the design reference, search and "+" are
-// mockups only for now (no action). Below the pill, in week mode, a date strip shows
+// a right-hand pill with search + add ("+" opens the workout editor; search is a
+// mockup only, per the design reference). Below the pill, in week mode, a date strip shows
 // the visible week, highlights the selected day and the columns currently on screen,
 // and tabs to a day.
 
@@ -13,6 +13,8 @@ struct CalendarNavBar: View {
     @Bindable var viewModel: CalendarViewModel
     /// Day columns visible in the week grid — used to highlight the on-screen range.
     let visibleCount: Int
+    /// Opens the workout editor to create a plan (the "+" control).
+    let onAdd: () -> Void
 
     /// All nav pills share this height + a capsule corner radius so they line up.
     private let pillHeight: CGFloat = 40
@@ -24,7 +26,7 @@ struct CalendarNavBar: View {
                     leftPill
                     Spacer(minLength: Theme.Spacing.s)
                     todayPill
-                    mockControls
+                    controls
                 }
             }
             if viewModel.mode == .week {
@@ -83,14 +85,17 @@ struct CalendarNavBar: View {
         .glassSurface(cornerRadius: pillHeight / 2)
     }
 
-    // Search + add — visual mockups only (no action yet, by design).
-    private var mockControls: some View {
+    // Search (still a visual mockup, by design) + add (creates a planned workout).
+    private var controls: some View {
         HStack(spacing: Theme.Spacing.l) {
             Image(systemName: "magnifyingglass")
-            Image(systemName: "plus")
+                .foregroundStyle(.secondary)
+            Button(action: onAdd) {
+                Image(systemName: "plus")
+            }
+            .buttonStyle(.plain)
         }
         .font(.body.weight(.medium))
-        .foregroundStyle(.secondary)
         .padding(.horizontal, Theme.Spacing.m)
         .frame(height: pillHeight)
         .glassSurface(cornerRadius: pillHeight / 2)

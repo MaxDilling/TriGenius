@@ -13,6 +13,9 @@ struct PlannedWorkoutDetailView: View {
     /// targets appear without re-opening the screen (the handed-in record can be
     /// a stale snapshot once a sync replaces it). Falls back to `initialWorkout`.
     @State private var live: WorkoutRecord?
+    @State private var editor: WorkoutEditorContext?
+    @State private var confirmDelete = false
+    @Environment(\.dismiss) private var dismiss
 
     init(workout: WorkoutRecord) {
         self.initialWorkout = workout
@@ -58,6 +61,25 @@ struct PlannedWorkoutDetailView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button("Edit") { editor = .edit(workout) }
+            }
+            ToolbarItem {
+                Button(role: .destructive) { confirmDelete = true } label: {
+                    Image(systemName: "trash")
+                }
+            }
+        }
+        .sheet(item: $editor) { WorkoutEditorSheet(context: $0) }
+        .confirmationDialog("Delete this planned workout?", isPresented: $confirmDelete, titleVisibility: .visible) {
+            Button("Delete", role: .destructive) {
+                Task {
+                    await DataSyncCoordinator.shared.deletePlan(id: workout.id)
+                    dismiss()
+                }
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
             // Keep the last known record if the workout was deleted out from under us.
             if let fresh = TrainingDataStore.shared.scheduledWorkout(id: initialWorkout.id) {

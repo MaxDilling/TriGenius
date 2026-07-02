@@ -583,23 +583,156 @@ final class DataSyncCoordinator {
         await syncTarget.prune(keeping: store.liveExternalRefIds(target: target.refKey))
     }
 
-    // MARK: - Plan deletion (local + every provider it reached)
+    // MARK: - Plan CRUD (local source of truth + active-target push)
+    //
+    // The single write path for planned workouts, shared by the coach's scheduling
+    // tools and the calendar's workout editor: every write lands in the local store
+    // first (source of truth), then pushes to the active write target. A failed push
+    // keeps the local plan; `reconcileWriteTarget` re-pushes it.
+
+    /// Create a locally-owned plan from a raw `workout_data` dict (run through
+    /// `WorkoutNormalizer` here — the one normalization path) and push it to the
+    /// active write target.
+    func addPlan(workoutData raw: [String: Any], date: Date, startMinute: Int? = nil) async -> PlanWriteOutcome {
+        let writeTarget = AppSettings.storedWriteTarget()
+        let (workoutData, notes) = WorkoutNormalizer.normalize(raw)
+        let id = "local:\(UUID().uuidString)"
+        store.ingestScheduled([makePlan(id: id, workoutData: workoutData, date: date)])
+        if let startMinute { store.setScheduledStartMinute(id: id, minute: startMinute) }
+        let payload = PlannedWorkout(workoutData: workoutData, date: DateFormatter.ymd.string(from: date))
+        let result = await WorkoutTargetFactory.make(writeTarget).schedule(payload)
+        if result.success, let ext = result.externalId {
+            store.setExternalRef(id: id, target: writeTarget.refKey, externalId: ext)
+        }
+        return PlanWriteOutcome(planId: id, name: workoutData["name"] as? String ?? "Workout",
+                                notes: notes, targetName: writeTarget.displayName,
+                                pushed: result.success, pushMessage: result.success ? "" : result.message)
+    }
+
+    /// Merge-update a plan's content from a (possibly partial) `workout_data` dict:
+    /// steps are re-normalized and the target TSS recomputed only when the dict
+    /// carries `steps`; other fields update only when present. Returns nil when no
+    /// plan with `id` exists.
+    func updatePlan(id: String, workoutData raw: [String: Any]) async -> PlanWriteOutcome? {
+        let writeTarget = AppSettings.storedWriteTarget()
+        guard store.scheduledWorkout(id: id) != nil else { return nil }
+        let editsSteps = raw["steps"] != nil
+        let (workoutData, notes) = editsSteps ? WorkoutNormalizer.normalize(raw) : (raw, [])
+        let steps = workoutData["steps"] as? [[String: Any]] ?? []
+        let targetTSS: Double?? = editsSteps
+            ? .some(PlannedTSS.estimate(compactSteps: steps,
+                                        family: SportFamily(sportKey: workoutData["sport"] as? String ?? "other"),
+                                        thresholds: store.latestSnapshot()))
+            : nil
+        store.updateScheduledContent(
+            id: id,
+            sport: workoutData["sport"] as? String,
+            name: workoutData["name"] as? String,
+            targetDurationMinutes: (workoutData["duration_minutes"] as? NSNumber)?.doubleValue,
+            targetDistanceMeters: (workoutData["distance_meters"] as? NSNumber)?.doubleValue,
+            targetTSS: targetTSS,
+            notes: workoutData["description"] as? String,
+            stepsJSON: editsSteps ? WorkoutPayloadBuilder.stepsJSON(steps) : nil
+        )
+        guard let updated = store.scheduledWorkout(id: id) else { return nil }
+        let payload = PlannedWorkout(workoutData: WorkoutPayloadBuilder.workoutData(from: updated),
+                                     date: DateFormatter.ymd.string(from: updated.date))
+        let target = WorkoutTargetFactory.make(writeTarget)
+        let result: WorkoutWriteResult
+        if let ext = updated.externalId(for: writeTarget) {
+            result = await target.update(externalId: ext, payload)
+        } else {
+            result = await target.schedule(payload)
+            if result.success, let ext = result.externalId {
+                store.setExternalRef(id: id, target: writeTarget.refKey, externalId: ext)
+            }
+        }
+        return PlanWriteOutcome(planId: id, name: updated.name, notes: notes,
+                                targetName: writeTarget.displayName,
+                                pushed: result.success, pushMessage: result.success ? "" : result.message)
+    }
+
+    /// Move a plan to a new day locally, then on the active write target (content
+    /// unchanged). Returns nil when no plan with `id` exists.
+    func movePlan(id: String, to date: Date) async -> PlanWriteOutcome? {
+        let writeTarget = AppSettings.storedWriteTarget()
+        guard let rec = store.scheduledWorkout(id: id) else { return nil }
+        let fromDate = DateFormatter.ymd.string(from: rec.date)
+        let toDate = DateFormatter.ymd.string(from: date)
+        store.moveScheduledWorkout(id: id, to: date)
+        let target = WorkoutTargetFactory.make(writeTarget)
+        let result: WorkoutWriteResult
+        if let ext = rec.externalId(for: writeTarget) {
+            result = await target.move(externalId: ext, to: toDate, from: fromDate)
+        } else {
+            let payload = PlannedWorkout(workoutData: WorkoutPayloadBuilder.workoutData(from: rec), date: toDate)
+            result = await target.schedule(payload)
+            if result.success, let ext = result.externalId {
+                store.setExternalRef(id: id, target: writeTarget.refKey, externalId: ext)
+            }
+        }
+        return PlanWriteOutcome(planId: id, name: rec.name, notes: [],
+                                targetName: writeTarget.displayName,
+                                pushed: result.success, pushMessage: result.success ? "" : result.message)
+    }
 
     /// Delete a planned workout locally and from *every* write target it was pushed
     /// to — not just the active one. A plan pushed to Garmin while the write target
-    /// is now the Apple Watch would otherwise be orphaned on Garmin. Resolves each
-    /// target's external id the same way the scheduling handler does (an explicit
-    /// `externalRefs` entry, or the raw provider id when the plan originated there).
+    /// is now the Apple Watch would otherwise be orphaned on Garmin.
     func deletePlan(id: String) async {
         if let rec = store.scheduledWorkout(id: id) {
             for wt in WriteTarget.allCases {
-                let ext = rec.externalRefs[wt.refKey]
-                    ?? (rec.source == wt.refKey ? TrainingDataStore.rawId(rec.id) : nil)
-                guard let ext else { continue }
+                guard let ext = rec.externalId(for: wt) else { continue }
                 _ = await WorkoutTargetFactory.make(wt).delete(externalId: ext)
             }
         }
         store.deleteScheduledWorkout(id: id)
     }
 
+    /// Build a local plan DTO from normalized `workout_data`.
+    private func makePlan(id: String, workoutData: [String: Any], date: Date) -> IngestedScheduledWorkout {
+        let sport = Coerce.token(workoutData["sport"] as? String, default: "other")
+        let minutes = (workoutData["duration_minutes"] as? NSNumber)?.doubleValue ?? 0
+        let meters = (workoutData["distance_meters"] as? NSNumber)?.doubleValue ?? 0
+        let steps = workoutData["steps"] as? [[String: Any]] ?? []
+        let targetTSS = PlannedTSS.estimate(
+            compactSteps: steps,
+            family: SportFamily(sportKey: sport),
+            thresholds: store.latestSnapshot()
+        )
+        let pool = (workoutData["pool_length"] as? NSNumber)?.doubleValue
+        return IngestedScheduledWorkout(
+            id: id, source: "local", date: date, sport: sport,
+            name: workoutData["name"] as? String ?? "Scheduled Workout",
+            targetDurationMinutes: minutes,
+            targetDistanceMeters: meters > 0 ? meters : 0,
+            targetTSS: targetTSS,
+            notes: workoutData["description"] as? String ?? "",
+            stepsJSON: WorkoutPayloadBuilder.stepsJSON(steps),
+            poolLengthMeters: (pool ?? 0) > 0 ? pool : nil
+        )
+    }
+
+}
+
+/// Result of a plan write. The local write is unconditional (the store is the
+/// source of truth); `pushed` reports whether the active write target took it,
+/// with the target's failure detail in `pushMessage` when it didn't.
+struct PlanWriteOutcome {
+    let planId: String
+    let name: String
+    /// `WorkoutNormalizer` adjustments (defaults applied, targets banded).
+    let notes: [String]
+    let targetName: String
+    let pushed: Bool
+    let pushMessage: String
+}
+
+extension WorkoutRecord {
+    /// The provider id a write target knows this plan by: an explicit `externalRefs`
+    /// entry, or — when the plan originated on that target — its raw provider id.
+    @MainActor
+    func externalId(for target: WriteTarget) -> String? {
+        externalRefs[target.refKey] ?? (source == target.refKey ? TrainingDataStore.rawId(id) : nil)
+    }
 }

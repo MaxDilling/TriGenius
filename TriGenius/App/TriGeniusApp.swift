@@ -168,7 +168,7 @@ struct RootTabView: View {
             }
 
             NavigationStack {
-                CalendarView(writeTarget: settings.writeTarget)
+                CalendarView()
             }
             .tag(CoachRouter.RootTab.calendar)
             .tabItem {

@@ -560,22 +560,14 @@ final class GarminToolHandler: CoachToolHandler {
 
 // MARK: - Workout Scheduling Tool Handler (one coach API → active write target)
 //
-// The single, source-agnostic set of planning tools. Planned workouts are owned
-// locally (the `WorkoutRecord` store is the source of truth); each write also pushes
-// to the active `WorkoutSyncTarget` (Garmin / Apple Watch / …) and records the
-// returned external id. Switching the write target re-pushes via
-// `DataSyncCoordinator.reconcileWriteTarget`, so nothing is lost.
+// The single, source-agnostic set of planning tools: schema + argument parsing +
+// reply formatting only. The actual writes go through `DataSyncCoordinator`'s plan
+// CRUD (`addPlan`/`updatePlan`/`movePlan`/`deletePlan`) — the same path the
+// calendar's workout editor uses — which owns the local store (source of truth)
+// and the push to the active `WorkoutSyncTarget`.
 
 @MainActor
 final class WorkoutSchedulingToolHandler: CoachToolHandler {
-    private let writeTarget: WriteTarget
-    private let store = TrainingDataStore.shared
-    private var target: WorkoutSyncTarget { WorkoutTargetFactory.make(writeTarget) }
-
-    init(writeTarget: WriteTarget) {
-        self.writeTarget = writeTarget
-    }
-
     /// The `workout_data` object properties, shared by `add_workouts` and
     /// `modify_workout` (they differ only in which fields are required).
     private static let workoutDataProperties: [String: Any] = [
@@ -735,20 +727,8 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
         }
     }
 
-    // MARK: - External-id resolution
-
-    /// The active target's external id for a record: an explicit ref, or — for a
-    /// record that originated on the active target — its raw provider id.
-    private func externalId(for rec: WorkoutRecord) -> String? {
-        if let ref = rec.externalRefs[writeTarget.refKey] { return ref }
-        if rec.source == writeTarget.refKey { return TrainingDataStore.rawId(rec.id) }
-        return nil
-    }
-
     // MARK: - add_workouts
 
-    /// Save each plan locally (source of truth), then push to the active target.
-    /// A failed push keeps the local plan, which `reconcileWriteTarget` re-pushes.
     private func addWorkoutsBatch(_ items: [[String: Any]]) async -> String {
         var lines: [String] = []
         var ok = 0
@@ -762,47 +742,18 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                 lines.append("- \(dateStr) — ✗ invalid date (use YYYY-MM-DD)")
                 continue
             }
-            let (workoutData, notes) = WorkoutNormalizer.normalize(raw)
-            let name = workoutData["name"] as? String ?? "Workout"
-            let id = "local:\(UUID().uuidString)"
-            store.ingestScheduled([makePlan(id: id, workoutData: workoutData, date: date)])
-            let result = await target.schedule(PlannedWorkout(workoutData: workoutData, date: dateStr))
-            if result.success {
+            let outcome = await DataSyncCoordinator.shared.addPlan(workoutData: raw, date: date)
+            if outcome.pushed {
                 ok += 1
-                if let ext = result.externalId { store.setExternalRef(id: id, target: writeTarget.refKey, externalId: ext) }
-                let suffix = notes.isEmpty ? "" : " (\(notes.joined(separator: "; ")))"
-                lines.append("- \(dateStr) \(name) → \(writeTarget.displayName)\(suffix)")
+                let suffix = outcome.notes.isEmpty ? "" : " (\(outcome.notes.joined(separator: "; ")))"
+                lines.append("- \(dateStr) \(outcome.name) → \(outcome.targetName)\(suffix)")
             } else {
-                lines.append("- \(dateStr) \(name) — saved locally, \(writeTarget.displayName) push failed: \(result.message)")
+                lines.append("- \(dateStr) \(outcome.name) — saved locally, \(outcome.targetName) push failed: \(outcome.pushMessage)")
             }
         }
         let mark = ok == items.count ? "✓ " : ""
-        return (["\(mark)Scheduled \(ok)/\(items.count) workouts to \(writeTarget.displayName)."] + lines)
+        return (["\(mark)Scheduled \(ok)/\(items.count) workouts to \(AppSettings.storedWriteTarget().displayName)."] + lines)
             .joined(separator: "\n")
-    }
-
-    /// Build a local plan DTO from normalized `workout_data`.
-    private func makePlan(id: String, workoutData: [String: Any], date: Date) -> IngestedScheduledWorkout {
-        let sport = Coerce.token(workoutData["sport"] as? String, default: "other")
-        let minutes = (workoutData["duration_minutes"] as? NSNumber)?.doubleValue ?? 0
-        let meters = (workoutData["distance_meters"] as? NSNumber)?.doubleValue ?? 0
-        let steps = workoutData["steps"] as? [[String: Any]] ?? []
-        let targetTSS = PlannedTSS.estimate(
-            compactSteps: steps,
-            family: SportFamily(sportKey: sport),
-            thresholds: store.latestSnapshot()
-        )
-        let pool = (workoutData["pool_length"] as? NSNumber)?.doubleValue
-        return IngestedScheduledWorkout(
-            id: id, source: "local", date: date, sport: sport,
-            name: workoutData["name"] as? String ?? "Scheduled Workout",
-            targetDurationMinutes: minutes,
-            targetDistanceMeters: meters > 0 ? meters : 0,
-            targetTSS: targetTSS,
-            notes: workoutData["description"] as? String ?? "",
-            stepsJSON: WorkoutPayloadBuilder.stepsJSON(steps),
-            poolLengthMeters: (pool ?? 0) > 0 ? pool : nil
-        )
     }
 
     // MARK: - modify_workout
@@ -812,42 +763,13 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
               let rawWorkout = arguments["workout_data"] as? [String: Any] else {
             return "✗ Error: workout_id and workout_data are required."
         }
-        guard store.scheduledWorkout(id: workoutId) != nil else {
+        guard let outcome = await DataSyncCoordinator.shared.updatePlan(id: workoutId, workoutData: rawWorkout) else {
             return "✗ No planned workout found for id \(workoutId). List it with get_workouts first."
         }
-        let editsSteps = rawWorkout["steps"] != nil
-        let (workoutData, notes) = editsSteps ? WorkoutNormalizer.normalize(rawWorkout) : (rawWorkout, [])
-        let steps = workoutData["steps"] as? [[String: Any]] ?? []
-        let stepsJSON = editsSteps ? WorkoutPayloadBuilder.stepsJSON(steps) : nil
-        let targetTSS: Double?? = editsSteps
-            ? .some(PlannedTSS.estimate(compactSteps: steps,
-                                        family: SportFamily(sportKey: workoutData["sport"] as? String ?? "other"),
-                                        thresholds: store.latestSnapshot()))
-            : nil
-        store.updateScheduledContent(
-            id: workoutId,
-            sport: workoutData["sport"] as? String,
-            name: workoutData["name"] as? String,
-            targetDurationMinutes: (workoutData["duration_minutes"] as? NSNumber)?.doubleValue,
-            targetDistanceMeters: (workoutData["distance_meters"] as? NSNumber)?.doubleValue,
-            targetTSS: targetTSS,
-            notes: workoutData["description"] as? String,
-            stepsJSON: stepsJSON
-        )
-        guard let updated = store.scheduledWorkout(id: workoutId) else { return "✓ Updated locally." }
-        let payload = PlannedWorkout(workoutData: WorkoutPayloadBuilder.workoutData(from: updated),
-                                     date: DateFormatter.ymd.string(from: updated.date))
-        let result: WorkoutWriteResult
-        if let ext = externalId(for: updated) {
-            result = await target.update(externalId: ext, payload)
-        } else {
-            result = await target.schedule(payload)
-            if result.success, let ext = result.externalId { store.setExternalRef(id: workoutId, target: writeTarget.refKey, externalId: ext) }
-        }
-        var msg = result.success
-            ? "✓ Updated '\(updated.name)' on \(writeTarget.displayName)."
-            : "✓ Updated locally; \(writeTarget.displayName) push failed: \(result.message)"
-        if !notes.isEmpty { msg += "\nℹ️ Applied defaults & adjustments:\n" + notes.map { "- \($0)" }.joined(separator: "\n") }
+        var msg = outcome.pushed
+            ? "✓ Updated '\(outcome.name)' on \(outcome.targetName)."
+            : "✓ Updated locally; \(outcome.targetName) push failed: \(outcome.pushMessage)"
+        if !outcome.notes.isEmpty { msg += "\nℹ️ Applied defaults & adjustments:\n" + outcome.notes.map { "- \($0)" }.joined(separator: "\n") }
         return msg
     }
 
@@ -858,22 +780,12 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
               let toDate = arguments["to_date"] as? String, let date = DateFormatter.ymd.date(from: toDate) else {
             return "✗ Error: workout_id and a valid to_date (YYYY-MM-DD) are required."
         }
-        guard let rec = store.scheduledWorkout(id: workoutId) else {
+        guard let outcome = await DataSyncCoordinator.shared.movePlan(id: workoutId, to: date) else {
             return "✗ No planned workout found for id \(workoutId)."
         }
-        let fromDate = DateFormatter.ymd.string(from: rec.date)
-        store.moveScheduledWorkout(id: workoutId, to: date)
-        let result: WorkoutWriteResult
-        if let ext = externalId(for: rec) {
-            result = await target.move(externalId: ext, to: toDate, from: fromDate)
-        } else {
-            let payload = PlannedWorkout(workoutData: WorkoutPayloadBuilder.workoutData(from: rec), date: toDate)
-            result = await target.schedule(payload)
-            if result.success, let ext = result.externalId { store.setExternalRef(id: workoutId, target: writeTarget.refKey, externalId: ext) }
-        }
-        return result.success
-            ? "✓ Moved '\(rec.name)' to \(toDate) on \(writeTarget.displayName)."
-            : "✓ Moved locally; \(writeTarget.displayName) push failed: \(result.message)"
+        return outcome.pushed
+            ? "✓ Moved '\(outcome.name)' to \(toDate) on \(outcome.targetName)."
+            : "✓ Moved locally; \(outcome.targetName) push failed: \(outcome.pushMessage)"
     }
 
     // MARK: - delete_workout

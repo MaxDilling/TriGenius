@@ -247,7 +247,7 @@ final class CoachBrain {
             registry.register(GarminToolHandler())
         }
         // One planning API, routed to the active write target.
-        registry.register(WorkoutSchedulingToolHandler(writeTarget: writeTarget))
+        registry.register(WorkoutSchedulingToolHandler())
         registry.register(ProfileToolHandler(memory: memory))
         registry.register(ATPToolHandler())
         // Always-on, source-agnostic: derived training-load & injury-risk metrics.

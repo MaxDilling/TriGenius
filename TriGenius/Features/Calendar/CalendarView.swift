@@ -36,15 +36,9 @@ enum CalendarDetailItem: Identifiable, Hashable {
 }
 
 struct CalendarView: View {
-    let writeTarget: WriteTarget
-
-    @State private var viewModel: CalendarViewModel
+    @State private var viewModel = CalendarViewModel()
     @State private var detail: CalendarDetailItem?
-
-    init(writeTarget: WriteTarget) {
-        self.writeTarget = writeTarget
-        _viewModel = State(initialValue: CalendarViewModel(writeTarget: writeTarget))
-    }
+    @State private var editor: WorkoutEditorContext?
 
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var hSize
@@ -57,7 +51,8 @@ struct CalendarView: View {
 
     var body: some View {
         VStack(spacing: Theme.Spacing.s) {
-            CalendarNavBar(viewModel: viewModel, visibleCount: visibleCount)
+            CalendarNavBar(viewModel: viewModel, visibleCount: visibleCount,
+                           onAdd: { editor = .create(date: viewModel.firstVisibleDay) })
                 .padding(.horizontal)
                 .padding(.top, Theme.Spacing.s)
 
@@ -78,6 +73,7 @@ struct CalendarView: View {
             case .event(let window): BusyEventDetailView(window: window)
             }
         }
+        .sheet(item: $editor) { WorkoutEditorSheet(context: $0) }
         .onAppear { viewModel.load() }
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
             viewModel.load()
