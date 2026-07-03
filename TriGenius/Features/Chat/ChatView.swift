@@ -22,10 +22,16 @@ struct ChatMessage: Identifiable {
 final class ChatViewModel {
     var messages: [ChatMessage] = []
     var inputText = ""
+    /// Dots visible: the coach is working and no text is currently streaming
+    /// into a bubble. Cleared on each text chunk, raised again on every tool
+    /// execution, so the long tool phases between text segments stay covered.
     var isThinking = false
+    /// A send is in flight end-to-end — drives the stop button and input lock.
+    var isResponding = false
     var showGreeting = true
 
     private let brain: CoachBrain
+    private var respondTask: Task<Void, Never>?
 
     /// The coach bubble currently being streamed into, if any. Reset to `nil`
     /// whenever a tool call is rendered, so text arriving *after* a tool call
@@ -64,6 +70,12 @@ final class ChatViewModel {
             // after this tool call belongs in a new bubble *below* it.
             self.currentCoachID = nil
         }
+        // Fires on every tool execution (not debug-gated): bring the thinking
+        // indicator back while tools run between streamed text segments.
+        brain.toolActivityHandler = { [weak self] in
+            guard let self, self.isResponding else { return }
+            self.isThinking = true
+        }
     }
 
     /// Warm up the backend (Apple FM) so the first reply comes back faster.
@@ -78,17 +90,44 @@ final class ChatViewModel {
         showGreeting = false
     }
 
-    func sendMessage() async {
+    func sendMessage() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-
+        guard !text.isEmpty, !isResponding else { return }
         inputText = ""
+        send(text)
+    }
+
+    /// Re-send an earlier user message: rewind the conversation (UI + brain
+    /// history) to just before it and send it again — e.g. after switching the
+    /// model in Settings when the answer disappointed.
+    func retry(_ message: ChatMessage) {
+        guard message.isUser, !isResponding,
+              let idx = messages.firstIndex(where: { $0.id == message.id }) else { return }
+        // Ordinal among user messages — user chat messages map 1:1, in order,
+        // onto the brain's user text turns.
+        let ordinal = messages[...idx].count { $0.isUser }
+        brain.rewind(toUserTurn: ordinal)
+        messages.removeSubrange(idx...)
+        send(message.text)
+    }
+
+    /// Cancel the in-flight response. Text already streamed stays in place.
+    func stop() {
+        respondTask?.cancel()
+    }
+
+    private func send(_ text: String) {
         showGreeting = false
-
         messages.append(ChatMessage(author: .user, text: text, timestamp: Date()))
-
+        isResponding = true
         isThinking = true
         currentCoachID = nil
+        respondTask = Task { [weak self] in
+            await self?.deliver(text)
+        }
+    }
+
+    private func deliver(_ text: String) async {
         var produced = false
 
         // `onPartial` delivers cumulative text for the current segment. The
@@ -111,15 +150,19 @@ final class ChatViewModel {
         }
 
         // Fallback: if no partial ever arrived, show the final text.
-        if !produced {
-            isThinking = false
-            if !final.isEmpty {
-                messages.append(ChatMessage(author: .coach, text: final, timestamp: Date()))
-            }
+        if !produced && !final.isEmpty {
+            messages.append(ChatMessage(author: .coach, text: final, timestamp: Date()))
         }
+        isThinking = false
+        isResponding = false
+        respondTask = nil
     }
 
     func reset() {
+        respondTask?.cancel()
+        respondTask = nil
+        isThinking = false
+        isResponding = false
         brain.reset()
         messages = []
         showGreeting = true
@@ -188,7 +231,10 @@ struct CoachChatView: View {
                                 if message.author == .tool {
                                     ToolCallBubble(message: message)
                                 } else {
-                                    MessageBubble(message: message)
+                                    MessageBubble(
+                                        message: message,
+                                        onRetry: message.isUser ? { viewModel.retry(message) } : nil
+                                    )
                                 }
                             }
                             .id(message.id)
@@ -225,10 +271,10 @@ struct CoachChatView: View {
             InputBar(
                 text: $viewModel.inputText,
                 isFocused: $inputFocused,
-                isDisabled: viewModel.isThinking
-            ) {
-                Task { await viewModel.sendMessage() }
-            }
+                isResponding: viewModel.isResponding,
+                onSend: { viewModel.sendMessage() },
+                onStop: { viewModel.stop() }
+            )
         }
         .navigationTitle("Coach")
         .onAppear {
@@ -331,6 +377,9 @@ private struct GreetingView: View {
 
 private struct MessageBubble: View {
     let message: ChatMessage
+    /// Set only for user messages: long-press → "Retry" re-sends this message
+    /// against the conversation rewound to just before it.
+    var onRetry: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
@@ -350,6 +399,25 @@ private struct MessageBubble: View {
                 .padding(.vertical, Theme.Spacing.s)
                 .foregroundStyle(message.isUser ? .white : .primary)
                 .chatBubbleSurface(isUser: message.isUser)
+                .contextMenu {
+                    Button {
+                        #if os(iOS)
+                        UIPasteboard.general.string = message.text
+                        #else
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(message.text, forType: .string)
+                        #endif
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                    if let onRetry {
+                        Button {
+                            onRetry()
+                        } label: {
+                            Label("Retry", systemImage: "arrow.clockwise")
+                        }
+                    }
+                }
 
                 Text(message.timestamp, style: .time)
                     .font(.caption2)
@@ -447,8 +515,9 @@ private struct ThinkingIndicator: View {
 private struct InputBar: View {
     @Binding var text: String
     var isFocused: FocusState<Bool>.Binding
-    let isDisabled: Bool
+    let isResponding: Bool
     let onSend: () -> Void
+    let onStop: () -> Void
 
     var body: some View {
         HStack(spacing: 10) {
@@ -459,17 +528,26 @@ private struct InputBar: View {
                 .background(Color.appTertiaryBackground)
                 .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
                 .focused(isFocused)
-                .disabled(isDisabled)
+                .disabled(isResponding)
                 .onSubmit {
-                    if !isDisabled { onSend() }
+                    if !isResponding { onSend() }
                 }
 
-            Button(action: onSend) {
-                Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 32))
-                    .foregroundStyle(canSend ? Color.blue : Color.appTertiaryLabel)
+            if isResponding {
+                Button(action: onStop) {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.system(size: 32))
+                        .foregroundStyle(Color.red)
+                }
+                .help("Stop generating")
+            } else {
+                Button(action: onSend) {
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.system(size: 32))
+                        .foregroundStyle(canSend ? Color.blue : Color.appTertiaryLabel)
+                }
+                .disabled(!canSend)
             }
-            .disabled(!canSend)
         }
         .padding(.horizontal)
         .padding(.vertical, 10)
@@ -477,7 +555,7 @@ private struct InputBar: View {
     }
 
     private var canSend: Bool {
-        !isDisabled && !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 

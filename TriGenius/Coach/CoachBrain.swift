@@ -210,6 +210,11 @@ final class CoachBrain {
     /// all tool execution funnels through `executeToolSafe`.
     var toolEventHandler: ((CoachToolEvent) -> Void)?
 
+    /// Called at the start of every tool execution, regardless of Debug Mode, so
+    /// the chat UI can bring back its thinking indicator during the (potentially
+    /// long) tool phases between streamed text segments.
+    var toolActivityHandler: (() -> Void)?
+
     private(set) var conversationHistory: [ConversationTurn] = []
     private let memory: CoachMemory
     private var toolRegistry: CoachToolRegistry
@@ -341,32 +346,69 @@ final class CoachBrain {
             """)
         }
 
+        // Track the latest streamed text so a cancelled turn can keep what
+        // already arrived instead of surfacing an error.
+        var latestPartial = ""
+        let track: (String) -> Void = { partial in
+            latestPartial = partial
+            onPartial(partial)
+        }
+
         do {
             let response: String
             if backend.managesOwnConversation {
-                var latest = ""
                 let stream = backend.respondStreaming(
                     userMessage: text,
                     systemPrompt: buildSystemPrompt(),
                     tools: availableTools
                 )
-                for try await partial in stream {
-                    latest = partial
-                    onPartial(partial)
-                }
-                response = latest
+                for try await partial in stream { track(partial) }
+                // A cancelled AsyncThrowingStream ends iteration without
+                // throwing — surface the cancellation explicitly.
+                try Task.checkCancellation()
+                response = latestPartial
             } else {
-                response = try await runLoop(onPartial: onPartial)
+                response = try await runLoop(onPartial: track)
             }
             conversationHistory.append(.assistantText(response))
             return response
         } catch {
+            if error is CancellationError || (error as? URLError)?.code == .cancelled {
+                // Stopped by the athlete: keep whatever streamed, no error bubble.
+                if !latestPartial.isEmpty {
+                    conversationHistory.append(.assistantText(latestPartial))
+                }
+                return latestPartial
+            }
             let errMsg = "Error: \(error.localizedDescription)"
             errorMessage = errMsg
             conversationHistory.append(.assistantText(errMsg))
             onPartial(errMsg)
             return errMsg
         }
+    }
+
+    /// Rewind the conversation to just before the n-th user message (1-based,
+    /// counting only real user text turns — tool-result turns share the user
+    /// role but don't count), so that message can be re-sent (retry). A no-op
+    /// on the history when the turn no longer exists (e.g. after a backend
+    /// switch already reset it). Self-managing backends can't drop turns from
+    /// their internal transcript, so their session is reset instead — the
+    /// retried message starts fresh from the current system prompt.
+    func rewind(toUserTurn n: Int) {
+        var seen = 0
+        for (index, turn) in conversationHistory.enumerated() where turn.role == .user {
+            let hasText = turn.parts.contains {
+                if case .text = $0 { return true } else { return false }
+            }
+            guard hasText else { continue }
+            seen += 1
+            if seen == n {
+                conversationHistory.removeSubrange(index...)
+                break
+            }
+        }
+        if backend.managesOwnConversation { backend.resetConversation() }
     }
 
     // MARK: - Core tool-call loop
@@ -395,6 +437,10 @@ final class CoachBrain {
                     completion = result
                 }
             }
+
+            // A cancelled stream ends iteration without `.completed` and
+            // without throwing — surface the cancellation explicitly.
+            try Task.checkCancellation()
 
             guard let completion else {
                 return "Sorry, I couldn't generate a response."
@@ -426,6 +472,7 @@ final class CoachBrain {
 
     private func executeToolSafe(name: String, arguments: [String: Any]) async -> String {
         let perf = Perf.begin("tool", name); defer { Perf.end(perf) }
+        toolActivityHandler?()
         let result: String
         do {
             result = try await toolRegistry.execute(name: name, arguments: arguments)
