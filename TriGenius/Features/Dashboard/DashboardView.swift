@@ -5,8 +5,12 @@ import Combine
 //
 // The athlete's home screen. Card-based layout (see the design mockups):
 //   • Header: greeting + calendar shortcut.
-//   • Performance Insights: CTL / ATL / TSB stat cards — each tile taps through
-//     to the full PMC chart (PerformanceInsightsView).
+//   • Plan banner: current ATP period + countdown to the next A event; taps
+//     through to the Plan tab.
+//   • Performance Insights: CTL / ATL / TSB stat tiles — display-only (the full
+//     PMC chart is reached via the Statistics card).
+//   • Statistics: this week's CTL gain + actual-vs-planned CTL trend + mini
+//     sport share — the whole card taps through to StatisticsView.
 //   • Weekly Target (Volume): per-discipline rings, actual vs. target.
 //   • AI insight: the coach's one-line read on the week, in the Apple
 //     Intelligence look (its own tile).
@@ -50,8 +54,10 @@ struct DashboardView: View {
                         ProgressView("Loading…").padding(.top, 60)
                     } else {
                         header
+                        planBanner
                         performanceInsights
                         weeklyTarget
+                        statistics
                         aiInsightCard
                         upNext
                     }
@@ -153,31 +159,38 @@ struct DashboardView: View {
         return String(letters).uppercased()
     }
 
+    // MARK: Plan banner
+
+    /// Current ATP period + countdown to the next A event; taps through to the
+    /// Plan tab (the full season overview). Hidden until a plan exists.
+    @ViewBuilder private var planBanner: some View {
+        if let plan = viewModel.atpPlan, !plan.weeks.isEmpty {
+            TrainingPlanBanner(plan: plan)
+                .contentShape(Rectangle())
+                .onTapGesture { router.selectedTab = .plan }
+        }
+    }
+
     // MARK: Performance Insights
 
+    /// The CTL / ATL / TSB read of the moment, as three non-interactive stat
+    /// tiles at the top of the dashboard — the full PMC chart lives behind the
+    /// Statistics card, so these are display-only.
     private var performanceInsights: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Performance Insights").font(.headline)
 
-            // The whole stat-card row navigates to the full PMC chart — no
-            // separate "Details" affordance; each card is the tap target.
             if let result = viewModel.pmc, let s = result.snapshot {
                 HStack(spacing: 10) {
-                    pmcLink(result) {
-                        PMCStatCard(title: "Fitness", caption: "CTL", dot: .blue,
-                                    value: Int(s.ctl.rounded()), delta: viewModel.ctlDelta,
-                                    status: fitnessStatus(delta: viewModel.ctlDelta))
-                    }
-                    pmcLink(result) {
-                        PMCStatCard(title: "Fatigue", caption: "ATL", dot: .pink,
-                                    value: Int(s.atl.rounded()), delta: viewModel.atlDelta,
-                                    status: fatigueStatus(atl: s.atl, ctl: s.ctl))
-                    }
-                    pmcLink(result) {
-                        PMCStatCard(title: "Form", caption: "TSB", dot: .orange,
-                                    value: Int(s.tsb.rounded()), delta: viewModel.tsbDelta,
-                                    status: formStatus(tsb: s.tsb))
-                    }
+                    PMCStatCard(title: "Fitness", caption: "CTL", dot: .blue,
+                                value: Int(s.ctl.rounded()), delta: viewModel.ctlDelta,
+                                status: fitnessStatus(delta: viewModel.ctlDelta))
+                    PMCStatCard(title: "Fatigue", caption: "ATL", dot: .pink,
+                                value: Int(s.atl.rounded()), delta: viewModel.atlDelta,
+                                status: fatigueStatus(atl: s.atl, ctl: s.ctl))
+                    PMCStatCard(title: "Form", caption: "TSB", dot: .orange,
+                                value: Int(s.tsb.rounded()), delta: viewModel.tsbDelta,
+                                status: formStatus(tsb: s.tsb))
                 }
             } else {
                 Text("No training-load data yet. Sync your activities to see CTL / ATL / TSB.")
@@ -185,16 +198,6 @@ struct DashboardView: View {
                     .dashCard()
             }
         }
-    }
-
-    /// Wraps a stat card so the entire tile is the tap target for the PMC chart.
-    private func pmcLink<Label: View>(_ result: PMCResult, @ViewBuilder label: () -> Label) -> some View {
-        NavigationLink {
-            PerformanceInsightsView(result: result)
-        } label: {
-            label()
-        }
-        .buttonStyle(.plain)
     }
 
     private func fitnessStatus(delta: Int) -> String {
@@ -242,6 +245,56 @@ struct DashboardView: View {
             }
         }
         .dashCard()
+    }
+
+    // MARK: Statistics
+
+    /// Entry card to the statistics screen: this week's fitness gain, the
+    /// actual-vs-planned CTL trend, and a mini sport-share bar of the current
+    /// week. The whole card — background included — is the tap target, so the
+    /// glass surface lives *inside* the link label.
+    private var statistics: some View {
+        NavigationLink {
+            StatisticsView()
+        } label: {
+            VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+                HStack {
+                    Text("Statistics").font(.headline)
+                    Spacer()
+                    if let delta = RampRate.weeklySeries(points: viewModel.pmc?.points ?? [], weeks: 2).last?.delta {
+                        Text(delta, format: .number.precision(.fractionLength(1)).sign(strategy: .always()))
+                            .font(.subheadline.bold().monospacedDigit())
+                            .foregroundStyle(RampRate.safeBand.contains(delta) ? Theme.Palette.success
+                                             : delta > RampRate.safeBand.upperBound ? Theme.Palette.warning : .secondary)
+                        Text("CTL/wk").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.tertiary)
+                }
+                if !viewModel.ctlTrend.actual.isEmpty {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                        Text("Fitness vs plan, ±15 days").font(.caption).foregroundStyle(.secondary)
+                        CTLTrendChart(model: viewModel.ctlTrend)
+                    }
+                }
+                if let week = viewModel.currentWeek {
+                    ProportionBar(
+                        segments: SportFamily.allCases.map { family in
+                            let tss = week.totals(for: family).tss
+                            return ProportionBar.Segment(label: family.displayName,
+                                                         color: family.color,
+                                                         value: tss,
+                                                         display: "\(Int(tss.rounded()))")
+                        },
+                        showLegend: false
+                    )
+                }
+            }
+            .dashCard()
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: AI insight
@@ -640,28 +693,4 @@ private struct DashCard: ViewModifier {
 
 extension View {
     func dashCard(padding: CGFloat = 16) -> some View { modifier(DashCard(padding: padding)) }
-}
-
-// MARK: - SportFamily presentation
-
-extension SportFamily {
-    var icon: String {
-        switch self {
-        case .swim: return "figure.pool.swim"
-        case .bike: return "figure.outdoor.cycle"
-        case .run: return "figure.run"
-        case .strength: return "dumbbell"
-        case .other: return "figure.mixed.cardio"
-        }
-    }
-
-    var color: Color {
-        switch self {
-        case .swim: return .cyan
-        case .bike: return .purple
-        case .run: return .orange
-        case .strength: return .gray
-        case .other: return .green
-        }
-    }
 }

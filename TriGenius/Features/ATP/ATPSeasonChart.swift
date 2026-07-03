@@ -360,9 +360,9 @@ struct ATPSeasonChart: View {
 
             HStack(spacing: Theme.Spacing.l) {
                 legend(.gray.opacity(0.6), "Planned TSS")
-                legend(Theme.Palette.info, "Completed")
-                legend(.blue, "Fitness ATP")
-                legend(Theme.Palette.success, "Actual")
+                legend(Theme.Palette.info, "Completed TSS")
+                legend(.blue, "ATP Fitness")
+                legend(Theme.Palette.success, "Actual Fitness")
                 Button { showForm.toggle() } label: {
                     HStack(spacing: Theme.Spacing.xs) {
                         Circle().fill(showForm ? formColor : .secondary.opacity(0.3)).frame(width: 7, height: 7)
@@ -370,7 +370,6 @@ struct ATPSeasonChart: View {
                     }
                 }
                 .buttonStyle(.plain)
-                if onPinWeek != nil { legend(Theme.Palette.warning, "Pinned") }
             }
             .font(.caption2)
             .foregroundStyle(.secondary)

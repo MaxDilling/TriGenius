@@ -18,6 +18,7 @@ struct TrainingDetailView: View {
 
     @State private var heartRateSamples: [HeartRateSample] = []
     @State private var isLoadingHR = false
+    @State private var hrScrubDate: Date?
     @State private var exportFile: ExportFile?
     @State private var isExporting = false
     @State private var exportError: String?
@@ -475,67 +476,23 @@ struct TrainingDetailView: View {
 
     // MARK: Zones — time-in-zone distribution (HR and, for cycling, power)
 
-    private let zonePalette: [Color] = [
-        Theme.Palette.info, Theme.Palette.success, .yellow,
-        Theme.Palette.warning, Theme.Palette.danger,
-    ]
-
-    /// `z1…z5` seconds from a zone dict, or `[]` when absent / all-zero.
-    private func zoneSeconds(_ dict: [String: Any]?) -> [Double] {
-        guard let dict else { return [] }
-        let zones = (1...5).map { Coerce.double(dict["z\($0)"]) ?? 0 }
-        return zones.reduce(0, +) > 0 ? zones : []
-    }
-
     @ViewBuilder
     private var zonesCard: some View {
-        let hr = zoneSeconds(details["hr_zones_seconds"] as? [String: Any])
-        let power = zoneSeconds((details["cycling"] as? [String: Any])?["power_zones_seconds"] as? [String: Any])
-        if !hr.isEmpty || !power.isEmpty {
+        let hr = ZoneDistribution.zoneSeconds(details: details, source: .heartRate)
+        let power = ZoneDistribution.zoneSeconds(details: details, source: .power)
+        if hr != nil || power != nil {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
                 Text("Time in zone").font(.headline)
-                if !hr.isEmpty { zoneBar("Heart rate", zones: hr) }
-                if !power.isEmpty { zoneBar("Power", zones: power) }
+                if let hr {
+                    ZoneDistributionBar(model: ZoneDistributionModel(title: "Heart rate", seconds: hr))
+                }
+                if let power {
+                    ZoneDistributionBar(model: ZoneDistributionModel(title: "Power", seconds: power))
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .cardSurface()
         }
-    }
-
-    private func zoneBar(_ title: String, zones: [Double]) -> some View {
-        let total = max(1, zones.reduce(0, +))
-        return VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            GeometryReader { geo in
-                HStack(spacing: 1) {
-                    ForEach(Array(zones.enumerated()), id: \.offset) { index, seconds in
-                        if seconds > 0 {
-                            zonePalette[min(index, zonePalette.count - 1)]
-                                .frame(width: max(2, geo.size.width * seconds / total))
-                        }
-                    }
-                }
-            }
-            .frame(height: 10)
-            .clipShape(Capsule())
-            HStack(spacing: Theme.Spacing.m) {
-                ForEach(Array(zones.enumerated()), id: \.offset) { index, seconds in
-                    if seconds > 0 {
-                        HStack(spacing: 3) {
-                            Circle().fill(zonePalette[min(index, zonePalette.count - 1)])
-                                .frame(width: 7, height: 7)
-                            Text("Z\(index + 1)").font(.caption2).foregroundStyle(.secondary)
-                            Text(zoneTime(seconds)).font(.caption2).monospacedDigit()
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func zoneTime(_ seconds: Double) -> String {
-        let total = Int(seconds.rounded())
-        return total >= 60 ? "\(total / 60)m" : "\(total)s"
     }
 
     // MARK: Feel & RPE — the athlete's subjective read on the session
@@ -643,11 +600,15 @@ struct TrainingDetailView: View {
                 Text("No heart-rate samples available.")
                     .font(.caption).foregroundStyle(.secondary)
             } else {
-                Chart(heartRateSamples) { sample in
-                    LineMark(x: .value("Time", sample.date), y: .value("BPM", sample.bpm))
-                        .foregroundStyle(Color.red.gradient)
-                        .interpolationMethod(.linear)
+                Chart {
+                    ForEach(heartRateSamples) { sample in
+                        LineMark(x: .value("Time", sample.date), y: .value("BPM", sample.bpm))
+                            .foregroundStyle(Color.red.gradient)
+                            .interpolationMethod(.linear)
+                    }
+                    hrScrubMarks
                 }
+                .chartDateScrubbing($hrScrubDate)
                 .chartYScale(domain: .automatic(includesZero: false))
                 .chartYAxisLabel("BPM")
                 .frame(height: 180)
@@ -664,6 +625,22 @@ struct TrainingDetailView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
+    }
+
+    @ChartContentBuilder private var hrScrubMarks: some ChartContent {
+        if let date = hrScrubDate,
+           let sample = heartRateSamples.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }) {
+            RuleMark(x: .value("Scrub", sample.date))
+                .foregroundStyle(.secondary.opacity(0.6))
+                .lineStyle(StrokeStyle(lineWidth: 1))
+                .annotation(position: .top, spacing: 0,
+                            overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                    ChartTooltip(
+                        title: sample.date.formatted(.dateTime.hour().minute().second()),
+                        rows: [.init(color: .red, label: "HR", value: "\(Int(sample.bpm.rounded())) bpm")]
+                    )
+                }
+        }
     }
 
     // The HealthKit workout UUID, stripped of the source prefix.

@@ -29,6 +29,11 @@ struct AgendaDay: Identifiable {
 @Observable
 final class DashboardViewModel {
     var pmc: PMCResult?
+    /// The derived season plan — feeds the training-plan banner (current period +
+    /// countdown to the next A event) and the CTL trend below.
+    var atpPlan: ATPPlan?
+    /// Actual vs ATP-planned CTL around today — the dashboard Statistics card's chart.
+    var ctlTrend = CTLTrendModel(actual: [], planned: [])
     var weeklyBuckets: [TrainingVolume.WeekBucket] = []
     var targets: [SportFamily: WeeklyTarget] = [:]
     /// Per-discipline expected week close (completed + still-planned) — the faded
@@ -78,6 +83,8 @@ final class DashboardViewModel {
         pmc = PMCEngine.current()
         weeklyBuckets = TrainingVolume.weeklyBuckets(records: records)
         let atpPlan = ATPEngine.current()
+        self.atpPlan = atpPlan
+        ctlTrend = CTLTrendModel.around(points: pmc?.points ?? [], planCurve: atpPlan?.planCurve ?? [])
 
         // This week's planned workouts drive the per-discipline targets.
         let cal = Calendar.current

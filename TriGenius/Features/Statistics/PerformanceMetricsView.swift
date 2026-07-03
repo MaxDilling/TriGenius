@@ -182,6 +182,7 @@ private struct MetricCard: View {
     let points: [MetricPoint]
 
     @State private var showDetail = false
+    @State private var scrubDate: Date?
 
     /// The card sparkline summarises only the recent past — the last three
     /// months — so day-to-day progression reads clearly without the whole
@@ -194,6 +195,14 @@ private struct MetricCard: View {
 
     private var trend: MetricTrend { MetricTrend(metric: metric, points: recentPoints) }
 
+    /// The sparkline point under the pointer/finger — while scrubbing, the card's
+    /// own value line becomes the readout (a floating tooltip has no room on the
+    /// 36 pt footer).
+    private var scrubbed: MetricPoint? {
+        guard let date = scrubDate else { return nil }
+        return recentPoints.min { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             // Header + value carry the normal card padding…
@@ -204,11 +213,14 @@ private struct MetricCard: View {
                 }
 
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text(points.last.map { metric.format($0.value) } ?? "—")
+                    Text((scrubbed ?? points.last).map { metric.format($0.value) } ?? "—")
                         .font(.title2.bold())
                     Text(metric.unit).font(.caption2).foregroundStyle(.secondary)
                     Spacer()
-                    if let deltaText = trend.deltaText(metric) {
+                    if let scrubbed {
+                        Text(scrubbed.date.formatted(.dateTime.day().month(.abbreviated)))
+                            .font(.caption2).foregroundStyle(.secondary)
+                    } else if let deltaText = trend.deltaText(metric) {
                         HStack(spacing: 1) {
                             Image(systemName: trend.rawDelta > 0 ? "arrow.up" : "arrow.down")
                             Text(deltaText)
@@ -245,13 +257,20 @@ private struct MetricCard: View {
     @ViewBuilder
     private var sparkline: some View {
         if recentPoints.count >= 2 {
-            Chart(recentPoints) { p in
-                LineMark(x: .value("Date", p.date), y: .value("Value", p.value))
-                    .interpolationMethod(.linear)
-                    .foregroundStyle(metric.accent)
-                AreaMark(x: .value("Date", p.date), y: .value("Value", p.value))
-                    .interpolationMethod(.linear)
-                    .foregroundStyle(metric.accent.opacity(0.12))
+            Chart {
+                ForEach(recentPoints) { p in
+                    LineMark(x: .value("Date", p.date), y: .value("Value", p.value))
+                        .interpolationMethod(.linear)
+                        .foregroundStyle(metric.accent)
+                    AreaMark(x: .value("Date", p.date), y: .value("Value", p.value))
+                        .interpolationMethod(.linear)
+                        .foregroundStyle(metric.accent.opacity(0.12))
+                }
+                if let scrubbed {
+                    RuleMark(x: .value("Scrub", scrubbed.date))
+                        .foregroundStyle(.secondary.opacity(0.6))
+                        .lineStyle(StrokeStyle(lineWidth: 1))
+                }
             }
             .chartXAxis(.hidden)
             .chartYAxis(.hidden)
@@ -262,6 +281,7 @@ private struct MetricCard: View {
             // its plot to the frame by default — without this the area bleeds
             // far outside the small sparkline rect.
             .clipped()
+            .chartDateScrubbing($scrubDate)
         } else {
             // A single data point has no trend to draw — keep the card height
             // stable with a quiet baseline rather than an empty chart.
@@ -284,6 +304,7 @@ private struct MetricDetailView: View {
 
     @Environment(\.dismiss) private var dismiss
     @State private var range: TimeRange = .threeMonths
+    @State private var scrubDate: Date?
 
     /// The selectable windows over which the progression can be viewed.
     private enum TimeRange: String, CaseIterable, Identifiable {
@@ -366,19 +387,23 @@ private struct MetricDetailView: View {
     @ViewBuilder
 private var chart: some View {
         if visiblePoints.count >= 2 {
-            Chart(visiblePoints) { p in
-                LineMark(x: .value("Date", p.date), y: .value("Value", p.value))
-                    .interpolationMethod(.linear)
-                    .foregroundStyle(metric.accent)
-                AreaMark(x: .value("Date", p.date), y: .value("Value", p.value))
-                    .interpolationMethod(.linear)
-                    .foregroundStyle(
-                        .linearGradient(
-                            colors: [metric.accent.opacity(0.25), metric.accent.opacity(0.02)],
-                            startPoint: .top, endPoint: .bottom
+            Chart {
+                ForEach(visiblePoints) { p in
+                    LineMark(x: .value("Date", p.date), y: .value("Value", p.value))
+                        .interpolationMethod(.linear)
+                        .foregroundStyle(metric.accent)
+                    AreaMark(x: .value("Date", p.date), y: .value("Value", p.value))
+                        .interpolationMethod(.linear)
+                        .foregroundStyle(
+                            .linearGradient(
+                                colors: [metric.accent.opacity(0.25), metric.accent.opacity(0.02)],
+                                startPoint: .top, endPoint: .bottom
+                            )
                         )
-                    )
+                }
+                scrubMarks
             }
+            .chartDateScrubbing($scrubDate)
             .chartYScale(domain: tightDomain(visiblePoints))
             .chartYAxis {
                 AxisMarks { value in
@@ -400,6 +425,23 @@ private var chart: some View {
             Text("Not enough data in this period to chart a trend.")
                 .font(.subheadline).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, minHeight: 240)
+        }
+    }
+
+    @ChartContentBuilder private var scrubMarks: some ChartContent {
+        if let date = scrubDate,
+           let p = visiblePoints.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }) {
+            RuleMark(x: .value("Scrub", p.date))
+                .foregroundStyle(.secondary.opacity(0.6))
+                .lineStyle(StrokeStyle(lineWidth: 1))
+                .annotation(position: .top, spacing: 0,
+                            overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                    ChartTooltip(
+                        title: p.date.formatted(.dateTime.day().month(.abbreviated).year()),
+                        rows: [.init(color: metric.accent, label: metric.title,
+                                     value: "\(metric.format(p.value)) \(metric.unit)")]
+                    )
+                }
         }
     }
 

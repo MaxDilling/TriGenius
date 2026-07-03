@@ -43,17 +43,21 @@ private func event(_ date: Date, _ prio: ATPEventPriority, ctl: Double? = nil) -
     #expect(shells[10].isTaper)
     #expect(!shells[8].isTaper)
 
-    // Recovery cadence every 4th week, never on race/transition/taper weeks.
+    // Recovery week at each base/build block end (4-week blocks): build1 ends at 3,
+    // build2 at 7. Never on race/transition/taper weeks.
     #expect(shells[3].isRecovery)
     #expect(shells[7].isRecovery)
     #expect(!shells[10].isRecovery)
 }
 
-@Test func layout_recoveryCadenceFollowsCycle() {
+@Test func layout_recoveryCycleDrivesBlockLengthAndLandsAtBlockEnd() {
     let s = monday()
     let shells = ATPPeriodization.layout(params: params(s, recovery: 3), events: [event(weeks(s, 10), .a)])
-    // Every 3rd week now (i+1)%3==0 → indices 2, 5 (8 is peak-taper, excluded).
-    #expect(shells[2].isRecovery)
-    #expect(shells[5].isRecovery)
-    #expect(!shells[3].isRecovery)
+    // 3-week base/build blocks: base3 ends at 1, build1 at 4, build2 at 7 — recovery
+    // lands on each block's last week, not its start.
+    #expect(shells[1].isRecovery)
+    #expect(shells[4].isRecovery)
+    #expect(shells[7].isRecovery)
+    #expect(!shells[2].isRecovery)   // build1 start
+    #expect(!shells[5].isRecovery)   // build2 start
 }

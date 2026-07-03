@@ -35,5 +35,35 @@ enum Theme {
         static let success = Color.green
         static let info = Color.blue
         static let danger = Color.red
+
+        /// Discipline accent colors — single source for every sport-tinted UI element.
+        static func sport(_ family: SportFamily) -> Color {
+            switch family {
+            case .swim: return .cyan
+            case .bike: return .purple
+            case .run: return .orange
+            case .strength: return .gray
+            case .other: return .green
+            }
+        }
+
+        /// Training-zone palette, z1…z5 (low → high intensity).
+        static let zones: [Color] = [info, success, .yellow, warning, danger]
     }
+}
+
+// MARK: - SportFamily presentation
+
+extension SportFamily {
+    var icon: String {
+        switch self {
+        case .swim: return "figure.pool.swim"
+        case .bike: return "figure.outdoor.cycle"
+        case .run: return "figure.run"
+        case .strength: return "dumbbell"
+        case .other: return "figure.mixed.cardio"
+        }
+    }
+
+    var color: Color { Theme.Palette.sport(self) }
 }

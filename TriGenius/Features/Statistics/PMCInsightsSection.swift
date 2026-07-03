@@ -1,17 +1,18 @@
 import SwiftUI
 import Charts
 
-// MARK: - Performance Insights (PMC detail)
+// MARK: - PMC insights section
 //
-// The screen behind the dashboard's "Details" link. Shows the CTL / ATL / TSB
-// summary plus the full Performance Management Chart over a selectable range:
-// CTL (Fitness) and ATL (Fatigue) as lines, TSB (Form) as signed bars
-// (green = positive/fresh, orange = negative/fatigued).
+// The CTL / ATL / TSB stat cards plus the full Performance Management Chart over
+// a selectable range, embedded at the top of the Statistics screen: CTL (Fitness)
+// and ATL (Fatigue) as lines, TSB (Form) as signed bars (green = positive/fresh,
+// orange = negative/fatigued).
 
-struct PerformanceInsightsView: View {
+struct PMCInsightsSection: View {
     let result: PMCResult
 
     @State private var range: PMCRange = .thirty
+    @State private var scrubDate: Date?
 
     private var points: [PMCPoint] {
         guard let last = result.points.last else { return [] }
@@ -73,33 +74,20 @@ struct PerformanceInsightsView: View {
     }
 
     var body: some View {
-        ScrollView {
-            // One GlassEffectContainer so the stat cards and chart pane blend as a
-            // single glass system instead of stacking independent glass layers.
-            GlassEffectContainer(spacing: Theme.Spacing.l) {
-                VStack(spacing: 20) {
-                    if let s = result.snapshot {
-                        HStack(spacing: 10) {
-                            statCard("Fitness", dot: .blue, value: Int(s.ctl.rounded()),
-                                     delta: delta { $0.ctl })
-                            statCard("Fatigue", dot: .pink, value: Int(s.atl.rounded()),
-                                     delta: delta { $0.atl })
-                            statCard("Form", dot: .orange, value: Int(s.tsb.rounded()),
-                                     delta: delta { $0.tsb })
-                        }
-                    }
-
-                    chartCard
-
-                    PerformanceMetricsSection()
+        VStack(spacing: 20) {
+            if let s = result.snapshot {
+                HStack(spacing: 10) {
+                    statCard("Fitness", dot: .blue, value: Int(s.ctl.rounded()),
+                             delta: delta { $0.ctl })
+                    statCard("Fatigue", dot: .pink, value: Int(s.atl.rounded()),
+                             delta: delta { $0.atl })
+                    statCard("Form", dot: .orange, value: Int(s.tsb.rounded()),
+                             delta: delta { $0.tsb })
                 }
             }
-            .padding()
+
+            chartCard
         }
-        .navigationTitle("Performance Insights")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
     }
 
     // MARK: Chart marks
@@ -168,6 +156,31 @@ struct PerformanceInsightsView: View {
         }
     }
 
+    /// Scrub readout: the rule + tooltip at the selected day, values from the
+    /// historic or forecast point on that day.
+    @ChartContentBuilder private var scrubMarks: some ChartContent {
+        if let date = scrubDate, let p = nearestPoint(to: date) {
+            RuleMark(x: .value("Scrub", p.date))
+                .foregroundStyle(.secondary.opacity(0.6))
+                .lineStyle(StrokeStyle(lineWidth: 1))
+                .annotation(position: .top, spacing: 0,
+                            overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                    ChartTooltip(
+                        title: p.date.formatted(.dateTime.day().month(.abbreviated)),
+                        rows: [
+                            .init(color: .blue, label: "Fitness", value: "\(Int(p.ctl.rounded()))"),
+                            .init(color: .pink, label: "Fatigue", value: "\(Int(p.atl.rounded()))"),
+                            .init(color: .orange, label: "Form", value: "\(Int(p.tsb.rounded()))"),
+                        ]
+                    )
+                }
+        }
+    }
+
+    private func nearestPoint(to date: Date) -> PMCPoint? {
+        allPoints.min { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }
+    }
+
     // MARK: Chart
 
     private var chartCard: some View {
@@ -185,7 +198,9 @@ struct PerformanceInsightsView: View {
             Chart {
                 historicMarks
                 forecastMarks
+                scrubMarks
             }
+            .chartDateScrubbing($scrubDate)
             .chartYScale(domain: 0...lineMax)
             .chartYAxis {
                 // Left axis: CTL / ATL.

@@ -63,7 +63,9 @@ struct PlannedWorkoutDetailView: View {
         #endif
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Button("Edit") { editor = .edit(workout) }
+                Button() { editor = .edit(workout) } label: {
+                    Image(systemName: "pencil")
+                }
             }
             ToolbarItem {
                 Button(role: .destructive) { confirmDelete = true } label: {

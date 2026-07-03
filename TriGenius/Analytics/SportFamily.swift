@@ -8,7 +8,7 @@ import Foundation
 // dashboard and analytics care about. Single source of truth for sport matching
 // — both `DataSyncCoordinator` (filtering) and the analytics layer use it.
 
-nonisolated enum SportFamily: String, CaseIterable, Identifiable, Sendable {
+nonisolated enum SportFamily: String, CaseIterable, Identifiable, Sendable, Codable {
     case swim
     case bike
     case run
