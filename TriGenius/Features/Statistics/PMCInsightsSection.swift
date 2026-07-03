@@ -200,7 +200,7 @@ struct PMCInsightsSection: View {
                 forecastMarks
                 scrubMarks
             }
-            .chartDateScrubbing($scrubDate)
+            .chartDateScrubbing($scrubDate) { nearestPoint(to: $0)?.date }
             .chartYScale(domain: 0...lineMax)
             .chartYAxis {
                 // Left axis: CTL / ATL.

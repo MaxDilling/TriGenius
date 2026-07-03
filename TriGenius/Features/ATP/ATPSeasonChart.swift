@@ -33,6 +33,17 @@ extension ATPPeriod {
     }
 }
 
+/// Pointer location in an observable box so per-pixel hover moves invalidate only
+/// `HoverReadoutLayer` — never the Chart body, whose content re-collection costs
+/// ~28 ms across the season's per-day marks (a guaranteed stutter at pointer rates).
+@Observable private final class HoverState {
+    var loc: CGPoint?
+}
+
+private func weekEnd(_ weekStart: Date) -> Date {
+    Calendar.current.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
+}
+
 /// Everything the hover tooltip shows for one day.
 private struct DayReadout: Equatable {
     let date: Date
@@ -57,7 +68,7 @@ struct ATPSeasonChart: View {
     var edgeBleed: CGFloat = 0
 
     // Pointer location (chart-frame coords) driving the hover tooltip; pointer-only.
-    @State private var hoverLoc: CGPoint?
+    @State private var hover = HoverState()
     // Live leading-edge date of the visible (scrolled) window — lets overlays clamp to
     // the on-screen domain in date space, the only way to keep them inside the plot when
     // scrolling (the proxy reports full-content pixel coords, not the visible viewport).
@@ -136,10 +147,6 @@ struct ATPSeasonChart: View {
             }
         }
         return segs.map { (period: $0.0, start: $0.1, end: $0.2) }
-    }
-
-    private func weekEnd(_ weekStart: Date) -> Date {
-        cal.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
     }
 
     // MARK: Marks
@@ -348,11 +355,12 @@ struct ATPSeasonChart: View {
                 // covering overlay — so it never intercepts the pin/unpin gestures below.
                 // (A hit-testable overlay above `chartGesture` swallowed every click.)
                 .onContinuousHover { phase in
-                    if case .active(let loc) = phase { hoverLoc = loc } else { hoverLoc = nil }
+                    if case .active(let loc) = phase { hover.loc = loc } else { hover.loc = nil }
                 }
                 .chartOverlay { proxy in periodLabelLayer(proxy) }
                 .chartOverlay { proxy in rampWarningLayer(proxy) }
-                .chartOverlay { proxy in hoverDrawLayer(proxy) }
+                .chartOverlay { proxy in dragLabelLayer(proxy) }
+                .chartOverlay { proxy in HoverReadoutLayer(hover: hover, plan: plan, proxy: proxy) }
             }
             .frame(height: 280)
             // Bleed the plot to the card's right edge (cancels the card's trailing padding).
@@ -425,44 +433,20 @@ struct ATPSeasonChart: View {
         }
     }
 
-    // MARK: Hover
-
-    // Pure draw layer (never hit-tested, so it can't block the chart's gestures): the
-    // pointer tooltip + its hover rule, plus the live value readout while dragging a pin.
-    private func hoverDrawLayer(_ proxy: ChartProxy) -> some View {
+    // Live value readout while dragging a pin (never hit-tested, so it can't block
+    // the chart's gestures).
+    private func dragLabelLayer(_ proxy: ChartProxy) -> some View {
         GeometryReader { geo in
-            if let frame = proxy.plotFrame {
+            if let frame = proxy.plotFrame, let wk = dragWeek,
+               let x = proxy.position(forX: weekMid(wk)),
+               let y = proxy.position(forY: dragTSS) {
                 let f = geo[frame]
-                ZStack(alignment: .topLeading) {
-                    if let wk = dragWeek,
-                       let x = proxy.position(forX: weekMid(wk)),
-                       let y = proxy.position(forY: dragTSS) {
-                        Text("\(Int(dragTSS))")
-                            .font(.caption2.bold()).foregroundStyle(Theme.Palette.warning)
-                            .position(x: f.minX + x, y: f.minY + y - 9)
-                    }
-                    if let loc = hoverLoc, let day = hoverDay(at: loc.x - f.minX, proxy: proxy) {
-                        Rectangle().fill(.secondary.opacity(0.45))
-                            .frame(width: 1, height: f.height)
-                            .position(x: loc.x, y: f.midY)
-                        let width: CGFloat = 210, gap: CGFloat = 16
-                        // Sit to the right of the cursor while it fits, else flip left.
-                        let fitsRight = loc.x + gap + width <= geo.size.width
-                        let centerX = fitsRight ? loc.x + gap + width / 2 : loc.x - gap - width / 2
-                        tooltip(readout(on: day)).frame(width: width).position(x: centerX, y: 96)
-                    }
-                }
-                .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
-                .allowsHitTesting(false)
+                Text("\(Int(dragTSS))")
+                    .font(.caption2.bold()).foregroundStyle(Theme.Palette.warning)
+                    .position(x: f.minX + x, y: f.minY + y - 9)
             }
         }
-    }
-
-    /// The day under a plot-local x; nil off-season so the tooltip clears past the plot.
-    private func hoverDay(at plotX: CGFloat, proxy: ChartProxy) -> Date? {
-        guard let date = proxy.value(atX: plotX, as: Date.self) else { return nil }
-        let day = cal.startOfDay(for: date)
-        return (day >= seasonStart && day <= seasonEnd) ? day : nil
+        .allowsHitTesting(false)
     }
 
     // Pin gesture, `chartGesture` hands plot-local points. On iOS the drag is gated
@@ -516,6 +500,55 @@ struct ATPSeasonChart: View {
             }
     }
 
+    private func legend(_ color: Color, _ label: String) -> some View {
+        HStack(spacing: Theme.Spacing.xs) {
+            Circle().fill(color).frame(width: 7, height: 7)
+            Text(label)
+        }
+    }
+}
+
+// Pure draw layer for the pointer tooltip + its hover rule (never hit-tested, so it
+// can't block the chart's gestures). A separate view so only it re-evaluates when
+// `hover.loc` moves.
+private struct HoverReadoutLayer: View {
+    let hover: HoverState
+    let plan: ATPPlan
+    let proxy: ChartProxy
+
+    private let cal = Calendar.current
+    private var seasonStart: Date { plan.weeks.first?.weekStart ?? Date() }
+    private var seasonEnd: Date { plan.planCurve.last?.date ?? seasonStart }
+
+    var body: some View {
+        GeometryReader { geo in
+            if let frame = proxy.plotFrame, let loc = hover.loc {
+                let f = geo[frame]
+                if let day = hoverDay(at: loc.x - f.minX) {
+                    ZStack(alignment: .topLeading) {
+                        Rectangle().fill(.secondary.opacity(0.45))
+                            .frame(width: 1, height: f.height)
+                            .position(x: loc.x, y: f.midY)
+                        let width: CGFloat = 210, gap: CGFloat = 16
+                        // Sit to the right of the cursor while it fits, else flip left.
+                        let fitsRight = loc.x + gap + width <= geo.size.width
+                        let centerX = fitsRight ? loc.x + gap + width / 2 : loc.x - gap - width / 2
+                        tooltip(readout(on: day)).frame(width: width).position(x: centerX, y: 96)
+                    }
+                    .frame(width: geo.size.width, height: geo.size.height, alignment: .topLeading)
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    /// The day under a plot-local x; nil off-season so the tooltip clears past the plot.
+    private func hoverDay(at plotX: CGFloat) -> Date? {
+        guard let date = proxy.value(atX: plotX, as: Date.self) else { return nil }
+        let day = cal.startOfDay(for: date)
+        return (day >= seasonStart && day <= seasonEnd) ? day : nil
+    }
+
     private func readout(on day: Date) -> DayReadout {
         let week = plan.weeks.first { day >= $0.weekStart && day <= weekEnd($0.weekStart) }
         let planPt = plan.planCurve.last { $0.date <= day }
@@ -560,11 +593,4 @@ struct ATPSeasonChart: View {
     }
 
     private func fmt(_ v: Double?) -> String { v.map { String(Int($0.rounded())) } ?? "—" }
-
-    private func legend(_ color: Color, _ label: String) -> some View {
-        HStack(spacing: Theme.Spacing.xs) {
-            Circle().fill(color).frame(width: 7, height: 7)
-            Text(label)
-        }
-    }
 }

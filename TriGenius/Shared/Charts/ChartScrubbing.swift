@@ -10,21 +10,33 @@ import Charts
 
 extension View {
     /// Bind the date under the finger (iOS) or pointer (macOS) — nil when idle.
-    func chartDateScrubbing(_ selection: Binding<Date?>) -> some View {
+    /// `snap` quantizes the raw location to the chart's own data grid (nearest
+    /// point / containing week); the binding is only written when the snapped
+    /// value changes. The scrub rule + tooltip are chart *content*, so every
+    /// write re-collects all marks — snapping turns per-pixel pointer events
+    /// into one update per data point crossed.
+    func chartDateScrubbing(_ selection: Binding<Date?>, snap: @escaping (Date) -> Date?) -> some View {
+        let snapped = Binding<Date?>(
+            get: { selection.wrappedValue },
+            set: { raw in
+                let value = raw.flatMap(snap)
+                if value != selection.wrappedValue { selection.wrappedValue = value }
+            }
+        )
         #if os(macOS)
-        chartOverlay { proxy in
+        return chartOverlay { proxy in
             Rectangle().fill(.clear).contentShape(Rectangle())
                 .onContinuousHover { phase in
                     switch phase {
                     case .active(let location):
-                        selection.wrappedValue = proxy.value(atX: location.x, as: Date.self)
+                        snapped.wrappedValue = proxy.value(atX: location.x, as: Date.self)
                     case .ended:
-                        selection.wrappedValue = nil
+                        snapped.wrappedValue = nil
                     }
                 }
         }
         #else
-        chartXSelection(value: selection)
+        return chartXSelection(value: snapped)
         #endif
     }
 }

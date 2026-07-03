@@ -281,7 +281,9 @@ private struct MetricCard: View {
             // its plot to the frame by default — without this the area bleeds
             // far outside the small sparkline rect.
             .clipped()
-            .chartDateScrubbing($scrubDate)
+            .chartDateScrubbing($scrubDate) { date in
+                recentPoints.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) })?.date
+            }
         } else {
             // A single data point has no trend to draw — keep the card height
             // stable with a quiet baseline rather than an empty chart.
@@ -403,7 +405,9 @@ private var chart: some View {
                 }
                 scrubMarks
             }
-            .chartDateScrubbing($scrubDate)
+            .chartDateScrubbing($scrubDate) { date in
+                visiblePoints.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) })?.date
+            }
             .chartYScale(domain: tightDomain(visiblePoints))
             .chartYAxis {
                 AxisMarks { value in
@@ -434,8 +438,11 @@ private var chart: some View {
             RuleMark(x: .value("Scrub", p.date))
                 .foregroundStyle(.secondary.opacity(0.6))
                 .lineStyle(StrokeStyle(lineWidth: 1))
+                // y must fit *inside* the plot: `chartPlotStyle { $0.clipped() }`
+                // clips the plot content, and an annotation overflowing above the
+                // plot top (as the other, unclipped charts allow) is clipped away.
                 .annotation(position: .top, spacing: 0,
-                            overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                            overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .plot))) {
                     ChartTooltip(
                         title: p.date.formatted(.dateTime.day().month(.abbreviated).year()),
                         rows: [.init(color: metric.accent, label: metric.title,

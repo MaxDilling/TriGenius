@@ -43,7 +43,7 @@ struct RampRateChart: View {
             }
         }
         .frame(height: 160)
-        .chartDateScrubbing($scrubDate)
+        .chartDateScrubbing($scrubDate) { week(containing: $0)?.weekStart }
     }
 
     @ChartContentBuilder private var scrubMarks: some ChartContent {
