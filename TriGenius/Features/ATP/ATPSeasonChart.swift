@@ -367,7 +367,7 @@ struct ATPSeasonChart: View {
             .padding(.trailing, -edgeBleed)
 
             HStack(spacing: Theme.Spacing.l) {
-                legend(.gray.opacity(0.6), "Planned TSS")
+                legend(.gray.opacity(0.6), "ATP TSS")
                 legend(Theme.Palette.info, "Completed TSS")
                 legend(.blue, "ATP Fitness")
                 legend(Theme.Palette.success, "Actual Fitness")
@@ -571,11 +571,11 @@ private struct HoverReadoutLayer: View {
             row("Period", r.period)
             if let w = r.weeksToEvent { row("Weeks to event", "\(w)") }
             row("ATP TSS", "\(Int(r.plannedTSS))")
-            row("Completed", "\(Int(r.completedTSS))")
-            row("Fitness ATP", fmt(r.planCTL), color: .blue)
-            row("Fitness actual", fmt(r.actualCTL), color: Theme.Palette.success)
-            row("Form ATP", fmt(r.planTSB))
-            row("Form actual", fmt(r.actualTSB))
+            row("Completed TSS", "\(Int(r.completedTSS))")
+            row("ATP Fitness", fmt(r.planCTL), color: .blue)
+            row("Actual Fitness", fmt(r.actualCTL), color: Theme.Palette.success)
+            row("ATP Form", fmt(r.planTSB))
+            row("Actual Form", fmt(r.actualTSB))
         }
         .padding(Theme.Spacing.s)
         .frame(maxWidth: .infinity, alignment: .leading)
