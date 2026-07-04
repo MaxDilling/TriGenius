@@ -57,13 +57,6 @@ struct TriGeniusApp: App {
         // Live read of Debug Mode — captured once so toggling never resets the chat.
         b.isDebugEnabled = { [weak settings] in settings?.debugMode ?? false }
         applyBackend(to: b)
-        // One-time migration: import any legacy `coach_memory.json` into the SwiftData
-        // coach-memory rows. Runs BEFORE the perf seed so the legacy profile's FTP/CSS
-        // scalars are still on `memory.userProfile` in memory for it to read.
-        migrateCoachMemoryIfNeeded()
-        // One-time migration: seed the performance-metric time series from any
-        // legacy `coach_memory.json` scalars before the first save drops them.
-        seedPerformanceMetricsIfNeeded()
         // Reveal the UI immediately from the cached SwiftData store — the migrations
         // above are local and instant; the network sync must NOT gate first paint.
         brain = b
@@ -82,37 +75,6 @@ struct TriGeniusApp: App {
             // reboot / app update, so reconcile on every launch.
             await ReminderScheduler.shared.reconcile()
         }
-    }
-
-    /// One-time migration: import any pre-existing `coach_memory.json` into the
-    /// SwiftData coach-memory rows (now the source of truth, so it rides CloudKit).
-    /// Gated by a UserDefaults flag; a no-op when rows already exist or no legacy
-    /// file is present. The import repopulates `memory` in place — including the
-    /// legacy FTP/CSS scalars the perf seed then reads.
-    @MainActor
-    private func migrateCoachMemoryIfNeeded() {
-        let key = "trigenius.coachMemoryMigrated.v1"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-        defer { UserDefaults.standard.set(true, forKey: key) }
-        guard !TrainingDataStore.shared.hasCoachMemory,
-              let url = CoachMemory.legacyFileURL,
-              let data = try? Data(contentsOf: url) else { return }
-        try? memory.importJSON(data)
-    }
-
-    /// Migrate performance scalars that used to live in `coach_memory.json`
-    /// (FTP, CSS, VO2max, lactate-threshold HR) into the SwiftData time series.
-    /// Runs once, gated by a UserDefaults flag; reads the legacy fields parsed by
-    /// `CoachMemory.init` before `UserProfile.toDict()` stops emitting them.
-    @MainActor
-    private func seedPerformanceMetricsIfNeeded() {
-        // v2: also migrates weight and HR/power zones (added after v1 shipped).
-        // v3: also migrates max HR (was the last performance value still in the profile).
-        let key = "trigenius.perfMetricsSeeded.v3"
-        guard !UserDefaults.standard.bool(forKey: key) else { return }
-        let metrics = DataSyncCoordinator.metrics(fromProfile: memory.userProfile, date: Date())
-        TrainingDataStore.shared.ingestMetrics(metrics)
-        UserDefaults.standard.set(true, forKey: key)
     }
 
     private func applyBackend(to brain: CoachBrain) {
