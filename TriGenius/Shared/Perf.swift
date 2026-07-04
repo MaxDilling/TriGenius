@@ -26,4 +26,10 @@ nonisolated enum Perf {
     static func end(_ span: Span) {
         signposter.endInterval(span.name, span.state)
     }
+
+    /// A single instant (no duration) — for counting occurrences in a trace,
+    /// e.g. notification receipts/posts.
+    static func event(_ name: StaticString, _ label: String = "") {
+        signposter.emitEvent(name, "\(label, privacy: .public)")
+    }
 }

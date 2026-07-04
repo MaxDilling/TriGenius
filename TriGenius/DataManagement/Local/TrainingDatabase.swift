@@ -438,20 +438,23 @@ final class TrainingDataStore {
     }
 
     /// A CloudKit merge lands in the store asynchronously; SwiftData posts
-    /// `.NSPersistentStoreRemoteChange` when it does. Collapse any cross-device
-    /// duplicate the merge created and refresh every reader. Coalesced — an import
-    /// burst fires many notifications but runs `deduplicate()` once per runloop tick.
-    private var remoteChangePending = false
+    /// `.NSPersistentStoreRemoteChange` when it does — but also for this process's
+    /// *own* writes (mirroring/export activity), so launch + sync produce long
+    /// notification bursts. Debounced to quiescence: one `deduplicate()` per burst,
+    /// 1.5 s after the last notification, instead of one per runloop tick.
+    private var dedupDebounce: Task<Void, Never>?
     private func observeRemoteChanges() {
         NotificationCenter.default.addObserver(
             forName: .NSPersistentStoreRemoteChange, object: nil, queue: .main
         ) { [weak self] _ in
             MainActor.assumeIsolated {
-                guard let self, !self.remoteChangePending else { return }
-                self.remoteChangePending = true
-                DispatchQueue.main.async {
-                    self.remoteChangePending = false
-                    self.deduplicate()   // saves + posts `trainingDataDidChange`
+                Perf.event("remoteChange")
+                guard let self else { return }
+                self.dedupDebounce?.cancel()
+                self.dedupDebounce = Task { @MainActor in
+                    try? await Task.sleep(for: .seconds(1.5))
+                    guard !Task.isCancelled else { return }
+                    self.deduplicate()
                 }
             }
         }
@@ -476,6 +479,7 @@ final class TrainingDataStore {
         changePending = true
         DispatchQueue.main.async { [weak self] in
             self?.changePending = false
+            Perf.event("trainingDataDidChange")
             NotificationCenter.default.post(name: .trainingDataDidChange, object: nil)
         }
     }
@@ -490,9 +494,11 @@ final class TrainingDataStore {
     // covers them. `deduplicate()` is the standalone entry `observeRemoteChanges()`
     // fires after every CloudKit merge.
 
-    /// Collapse duplicate rows across every model down to one per natural key, then
-    /// save. Idempotent.
+    /// Collapse duplicate rows across every model down to one per natural key.
+    /// Idempotent; saves + notifies only when a duplicate was actually removed —
+    /// a no-op pass must not claim "data changed" (that fed the launch reload storm).
     func deduplicate() {
+        let perf = Perf.begin("deduplicate"); defer { Perf.end(perf) }
         dedupeWorkouts()
         dedupe(PerformanceMetricRecord.self) { $0.id }
         dedupe(ATPConfig.self) { $0.id }
@@ -503,6 +509,7 @@ final class TrainingDataStore {
         dedupe(PreferencesRecord.self) { $0.id }
         dedupe(SportProgressRecord.self) { $0.sport }
         dedupe(FeedbackRecord.self) { $0.id }
+        guard context.hasChanges else { return }
         try? context.save()
         markChanged()
     }
