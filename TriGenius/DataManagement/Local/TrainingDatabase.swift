@@ -471,6 +471,7 @@ final class TrainingDataStore {
     /// activities + scheduled + metrics in sequence) collapses into a single post.
     private var changePending = false
     private func markChanged() {
+        cachedLatestSnapshot = nil
         guard !changePending else { return }
         changePending = true
         DispatchQueue.main.async { [weak self] in
@@ -1286,10 +1287,15 @@ final class TrainingDataStore {
         return PerformanceHistory(byKey: byKey)
     }
 
-    /// Latest value per metric key — the source for the coach's prompt context
-    /// and the Settings display. Newest date wins; ties break by source rank.
+    /// Latest value per metric key — the source for the coach's prompt context,
+    /// the Settings display, and the planned-workout estimators. Cached because the
+    /// estimators read it per list row; `markChanged()` invalidates on any mutation.
+    private var cachedLatestSnapshot: PerformanceSnapshot?
     func latestSnapshot() -> PerformanceSnapshot {
-        performanceHistory().snapshot(asOf: .distantFuture)
+        if let cached = cachedLatestSnapshot { return cached }
+        let snap = performanceHistory().snapshot(asOf: .distantFuture)
+        cachedLatestSnapshot = snap
+        return snap
     }
 
     /// Ascending day-by-day history for one metric key — the progression the

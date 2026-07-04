@@ -47,10 +47,10 @@ enum WeeklyTargets {
     /// Rough TSS accrued per hour for a discipline, used to fill in a TSS target
     /// when a planned workout only specifies a duration (no structured steps for an
     /// intensity-based estimate — see `PlannedTSS`), or for the heuristic fallback.
-    /// Derived from the same default intensity model so the flat fallback and the
+    /// Derived from the same assumed intensity model so the flat fallback and the
     /// structured estimate stay consistent: 1 h at IF ⇒ IF² × 100 TSS.
     static func tssPerHour(_ family: SportFamily) -> Double {
-        let f = PlannedTSS.defaultIF(family)
+        let f = PlannedTSS.assumedIF(family)
         return f * f * 100
     }
 
@@ -155,10 +155,9 @@ enum WeeklyTargets {
         var planned: [SportFamily: WeeklyTarget] = [:]
         for w in scheduled {
             let family = SportFamily(sportKey: w.sport)
-            let tss = w.targetTSS ?? estimatedTSS(family: family, minutes: w.targetDurationMinutes)
             var t = planned[family] ?? WeeklyTarget(durationMinutes: 0, tss: 0)
-            t.durationMinutes += w.targetDurationMinutes
-            t.tss += tss
+            t.durationMinutes += w.plannedDurationMinutes
+            t.tss += w.resolvedTargetTSS
             t.distanceKm += (w.plannedDistance?.meters ?? 0) / 1000
             planned[family] = t
         }
@@ -227,7 +226,7 @@ enum WeeklyTargets {
             let family = SportFamily(sportKey: w.sport)
             if day < todayStart { continue }                                   // past: can't still be done
             var p = out[family] ?? WeeklyProjection()
-            p.projectedTSS += w.targetTSS ?? estimatedTSS(family: family, minutes: w.targetDurationMinutes)
+            p.projectedTSS += w.resolvedTargetTSS
             if let d = w.plannedDistance { p.projectedKm += d.meters / 1000 }
             out[family] = p
         }

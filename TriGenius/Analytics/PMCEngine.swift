@@ -149,17 +149,14 @@ enum PMCEngine {
         return forecast
     }
 
-    /// Total planned TSS per future day, derived from scheduled workouts. TSS is
-    /// taken verbatim when the source set it, else estimated from the planned
-    /// duration (same rule the weekly targets use).
+    /// Total planned TSS per future day, derived from scheduled workouts
+    /// (`resolvedTargetTSS` — the same rule every planned-TSS reader uses).
     @MainActor
     static func plannedTSSByDay(_ scheduled: [WorkoutRecord]) -> [Date: Double] {
         let cal = Calendar.current
         var byDay: [Date: Double] = [:]
         for w in scheduled {
-            let family = SportFamily(sportKey: w.sport)
-            let tss = w.targetTSS ?? WeeklyTargets.estimatedTSS(family: family, minutes: w.targetDurationMinutes)
-            byDay[cal.startOfDay(for: w.date), default: 0] += tss
+            byDay[cal.startOfDay(for: w.date), default: 0] += w.resolvedTargetTSS
         }
         return byDay
     }

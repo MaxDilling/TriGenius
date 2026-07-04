@@ -16,27 +16,22 @@ nonisolated enum TSSConstants {
     /// Plausible IF bounds — guards bad targets / thresholds from absurd load.
     static let ifRange = 0.30 ... 1.30
 
-    /// Typical IF for an otherwise-unknown session of a discipline. Squared ×100
-    /// this is also the per-hour TSS of the duration-only fallback. Recalibrated
-    /// from realized whole-session IF (`ref/tss_lab/tss_planned.py`).
-    static func defaultIF(_ family: SportFamily) -> Double {
+    /// Assumed IF for an untargeted planned step (and, squared ×100, the per-hour
+    /// TSS of the duration-only fallback). For the pace disciplines (swim/run) the
+    /// IF model is a linear speed ratio, so this is simultaneously the assumed
+    /// speed as a fraction of threshold speed — the SAME constant converts a
+    /// step's time↔distance and scores its TSS, so a planned workout's estimated
+    /// duration, distance and TSS can never contradict each other. Run/bike/
+    /// strength/other calibrated from realized whole-session IF
+    /// (`ref/tss_lab/tss_planned.py`); swim set to 90% of CSS speed (pool
+    /// sessions are swum close to CSS, rests included in the step time).
+    static func assumedIF(_ family: SportFamily) -> Double {
         switch family {
-        case .swim:     return 0.63   // was 0.80
-        case .bike:     return 0.71   // was 0.80
+        case .swim:     return 0.90
+        case .bike:     return 0.71
         case .run:      return 0.84
-        case .strength: return 0.69   // was 0.60
-        case .other:    return 0.52   // was 0.72
-        }
-    }
-
-    /// IF for a step with no resolvable target, by step type (PlannedTSS).
-    static func typeDefaultIF(_ typeKey: String, family: SportFamily) -> Double {
-        switch typeKey {
-        case "warmup", "warm-up", "warm_up",
-             "cooldown", "cool-down", "cool_down": return 0.55
-        case "rest":     return 0.40
-        case "recovery": return 0.50
-        default:         return defaultIF(family)
+        case .strength: return 0.69
+        case .other:    return 0.52
         }
     }
 

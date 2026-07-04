@@ -265,10 +265,8 @@ enum DashboardInsightInput {
     private static func plannedSessionsDescription(_ workouts: [WorkoutRecord]) -> String {
         guard !workouts.isEmpty else { return "none scheduled" }
         let sorted = workouts.sorted { $0.date < $1.date }
-        let shown = sorted.prefix(4).map { w -> String in
-            let tss = w.targetTSS ?? WeeklyTargets.estimatedTSS(
-                family: SportFamily(sportKey: w.sport), minutes: w.targetDurationMinutes)
-            return "\"\(w.name)\" \(Int(tss.rounded())) TSS"
+        let shown = sorted.prefix(4).map { w in
+            "\"\(w.name)\" \(Int(w.resolvedTargetTSS.rounded())) TSS"
         }
         let suffix = sorted.count > 4 ? ", …" : ""
         return "\(sorted.count) session\(sorted.count == 1 ? "" : "s") (\(shown.joined(separator: ", "))\(suffix))"

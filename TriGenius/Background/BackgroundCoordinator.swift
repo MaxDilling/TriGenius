@@ -180,7 +180,7 @@ final class BackgroundCoordinator {
             guard !todays.isEmpty else { return "No workout planned today — enjoy the rest day." }
             let parts = todays.map { w -> String in
                 let family = SportFamily(sportKey: w.sport).displayName
-                let mins = Int(w.targetDurationMinutes.rounded())
+                let mins = Int(w.plannedDurationMinutes.rounded())
                 var s = family
                 if mins > 0 { s += " · \(mins)min" }
                 if let start = w.startMinute { s += " @ \(Self.clockString(start))" }

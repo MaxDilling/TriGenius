@@ -60,22 +60,35 @@ struct PlannedWorkoutStructure {
     /// converted via their pace target). Used as a duration fallback when the
     /// record carries no explicit `targetDurationMinutes`.
     let estimatedDurationMinutes: Double?
+    /// Structure-shaped TSS estimate (`PlannedTSS.estimate`), the display fallback
+    /// for records whose stored `targetTSS` predates the estimator.
+    let estimatedTSS: Double?
+
+    /// True when any step carries a real intensity target (power/pace/speed/HR —
+    /// cadence isn't one). Distinguishes an intensity-based TSS estimate from one
+    /// built purely from assumed IFs, which the UI labels "~".
+    var hasIntensityTargets: Bool {
+        steps.contains { $0.steps.contains { $0.targetType != nil && $0.targetType != "cadence" } }
+    }
 
     /// Build from a record's persisted `stepsJSON`. Nil when there is no usable
     /// structure (empty steps, Garmin-Coach workouts, locally-created plans).
-    static func make(stepsJSON: String, family: SportFamily) -> PlannedWorkoutStructure? {
+    /// `thresholds` feeds the estimators: untargeted steps convert between time
+    /// and distance at the athlete's threshold speed (CSS / threshold pace).
+    static func make(stepsJSON: String, family: SportFamily, thresholds: PerformanceSnapshot) -> PlannedWorkoutStructure? {
         guard let data = stepsJSON.data(using: .utf8),
               let compact = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
               !compact.isEmpty else { return nil }
         let steps = parse(compact)
         guard !steps.isEmpty else { return nil }
-        let distance = PlannedTSS.totalDistance(compactSteps: compact, family: family)
+        let distance = PlannedTSS.totalDistance(compactSteps: compact, family: family, thresholds: thresholds)
         return PlannedWorkoutStructure(
             family: family,
             steps: steps,
             totalDistanceMeters: distance?.meters,
             distanceSource: distance?.source,
-            estimatedDurationMinutes: PlannedTSS.totalDurationSeconds(compactSteps: compact, family: family).map { $0 / 60 }
+            estimatedDurationMinutes: PlannedTSS.totalDurationSeconds(compactSteps: compact, family: family, thresholds: thresholds).map { $0 / 60 },
+            estimatedTSS: PlannedTSS.estimate(compactSteps: compact, family: family, thresholds: thresholds)
         )
     }
 
@@ -345,9 +358,12 @@ struct PlannedDistance {
 extension WorkoutRecord {
     var family: SportFamily { SportFamily(sportKey: sport) }
 
-    /// Parsed structured steps, when the workout carries any.
-    var structure: PlannedWorkoutStructure? {
-        PlannedWorkoutStructure.make(stepsJSON: stepsJSON, family: family)
+    /// Parsed structured steps, when the workout carries any. Estimators inside
+    /// read the athlete's latest thresholds (cached on the store), so the derived
+    /// duration/distance/TSS are @MainActor like every other store read.
+    @MainActor var structure: PlannedWorkoutStructure? {
+        PlannedWorkoutStructure.make(stepsJSON: stepsJSON, family: family,
+                                     thresholds: TrainingDataStore.shared.latestSnapshot())
     }
 
     /// Best planned duration in minutes. Prefers the structure-derived estimate,
@@ -355,47 +371,54 @@ extension WorkoutRecord {
     /// into time — something the stored `targetDurationMinutes` can't capture, so
     /// for mixed time+distance sessions it would otherwise undercount. Falls back
     /// to the explicit target when there is no structure.
-    var plannedDurationMinutes: Double {
+    @MainActor var plannedDurationMinutes: Double {
         if let estimated = structure?.estimatedDurationMinutes, estimated > 0 { return estimated }
         return targetDurationMinutes
     }
 
-    /// True when the planned TSS is estimated from duration (no explicit target).
-    var isEstimatedTSS: Bool { targetTSS == nil }
+    /// True when the planned TSS was built from default IFs (flat duration
+    /// heuristic, or a structure whose steps carry no intensity target) rather
+    /// than resolved power/pace/HR targets — the UI prefixes those with "~".
+    @MainActor var isEstimatedTSS: Bool { structure?.hasIntensityTargets != true }
 
-    /// Planned TSS — the explicit target, else estimated from duration.
-    var resolvedTargetTSS: Double {
-        targetTSS ?? WeeklyTargets.estimatedTSS(family: family, minutes: targetDurationMinutes)
+    /// Planned TSS — the stored target, else the structure-shaped estimate, else
+    /// the flat duration heuristic.
+    @MainActor var resolvedTargetTSS: Double {
+        targetTSS ?? structure?.estimatedTSS
+            ?? WeeklyTargets.estimatedTSS(family: family, minutes: targetDurationMinutes)
     }
 
     /// Planned distance for the workout, with how it was derived: the structured
     /// steps when present (exact for distance-prescribed steps, pace-derived
-    /// otherwise), else duration × the discipline's default speed. Nil for
-    /// sessions with no meaningful distance (strength, or no steps and no
-    /// duration) — `estimatedDistanceKm` returns 0 for those.
-    var plannedDistance: PlannedDistance? {
+    /// otherwise), else duration × the discipline's assumed speed — the same
+    /// assumption the TSS fallback uses. Nil for sessions with no meaningful
+    /// distance (strength/other, or no steps and no duration).
+    @MainActor var plannedDistance: PlannedDistance? {
         if let s = structure, let m = s.totalDistanceMeters, m > 0, let src = s.distanceSource {
             return PlannedDistance(meters: m, source: src)
         }
-        let km = WeeklyTargets.estimatedDistanceKm(family: family, minutes: targetDurationMinutes)
-        return km > 0 ? PlannedDistance(meters: km * 1000, source: .estimatedFromDuration) : nil
+        guard family == .swim || family == .bike || family == .run else { return nil }
+        let speed = PlannedTSS.assumedSpeedMPS(family, thresholds: TrainingDataStore.shared.latestSnapshot())
+        let meters = targetDurationMinutes * 60 * speed
+        return meters > 0 ? PlannedDistance(meters: meters, source: .estimatedFromDuration) : nil
     }
 
     /// Session character, derived from the planned TSS + duration.
-    var intensity: IntensityCategory? {
-        IntensityCategory.from(tss: resolvedTargetTSS, durationMinutes: targetDurationMinutes)
+    @MainActor var intensity: IntensityCategory? {
+        IntensityCategory.from(tss: resolvedTargetTSS, durationMinutes: plannedDurationMinutes)
     }
 
     /// The shared "[segment •] duration • TSS [• interval hint]" line every
     /// compact planned-workout row shows. `uppercased` matches the Agenda styling;
     /// `tssSuffix` is "TSS" or "TSS target" depending on the surface.
+    @MainActor
     func plannedSummaryLine(segment: TimeOfDaySegment? = nil,
                             uppercased: Bool = false,
                             tssSuffix: String = "TSS") -> String {
         var parts: [String] = []
         if let segment { parts.append(segment.label) }
-        if targetDurationMinutes > 0 {
-            let d = durationHM(targetDurationMinutes)
+        if plannedDurationMinutes > 0 {
+            let d = durationHM(plannedDurationMinutes)
             parts.append(uppercased ? d.uppercased() : d)
         }
         let tss = resolvedTargetTSS

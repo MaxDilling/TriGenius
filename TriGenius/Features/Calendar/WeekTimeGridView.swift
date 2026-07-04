@@ -254,7 +254,7 @@ struct WeekTimeGridView: View {
         for workout in viewModel.planned(on: day) {
             guard let minute = workout.startMinute,
                   let start = cal.date(byAdding: .minute, value: minute, to: startOfDay),
-                  let end = cal.date(byAdding: .minute, value: max(1, Int(workout.targetDurationMinutes)), to: start)
+                  let end = cal.date(byAdding: .minute, value: max(1, Int(workout.plannedDurationMinutes)), to: start)
             else { continue }
             items.append(TimedItem(id: "p-\(workout.id)", start: start, end: end,
                                    title: workout.name,
@@ -505,11 +505,10 @@ private struct DayHeaderCell: View, Equatable {
     /// Compact "TSS target + duration" line for a planned workout.
     private static func plannedMetadata(for workout: WorkoutRecord) -> String? {
         var parts: [String] = []
-        let family = SportFamily(sportKey: workout.sport)
-        let tss = workout.targetTSS
-            ?? WeeklyTargets.estimatedTSS(family: family, minutes: workout.targetDurationMinutes)
-        if tss > 0 { parts.append("\(Int(tss.rounded())) TSS") }
-        if workout.targetDurationMinutes > 0 { parts.append(durationHM(workout.targetDurationMinutes)) }
+        let tss = workout.resolvedTargetTSS
+        if tss > 0 { parts.append("\(workout.isEstimatedTSS ? "~" : "")\(Int(tss.rounded())) TSS") }
+        let minutes = workout.plannedDurationMinutes
+        if minutes > 0 { parts.append(durationHM(minutes)) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
