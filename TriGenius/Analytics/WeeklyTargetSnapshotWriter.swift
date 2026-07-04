@@ -17,13 +17,17 @@ import WidgetKit
 enum WeeklyTargetSnapshotWriter {
 
     /// Build a snapshot from the current targets/projections and persist it into
-    /// the App Group, then ask WidgetKit to reload the timeline.
+    /// the App Group, then ask WidgetKit to reload the timeline. `families` is the
+    /// visible set (disciplines with a current goal, `WeeklyTargets.visibleFamilies`)
+    /// — the widget only draws a ring per entry, so filtering here gates both widget
+    /// sizes. `projections` must already carry any cross-training credit.
     static func write(
         targets: [SportFamily: WeeklyTarget],
         projections: [SportFamily: WeeklyProjection],
+        families: [SportFamily],
         weekStart: Date
     ) {
-        let entries: [WeeklyTargetSnapshot.Entry] = SportFamily.triathlon.map { family in
+        let entries: [WeeklyTargetSnapshot.Entry] = families.map { family in
             let target = targets[family] ?? WeeklyTarget(durationMinutes: 0, tss: 0)
             let projection = projections[family] ?? WeeklyProjection()
             return WeeklyTargetSnapshot.Entry(
@@ -35,7 +39,9 @@ enum WeeklyTargetSnapshotWriter {
                 actualKm: projection.actualKm,
                 targetKm: target.distanceKm,
                 projectedTSS: projection.projectedTSS,
-                projectedKm: projection.projectedKm
+                projectedKm: projection.projectedKm,
+                creditedTSS: projection.creditedTSS,
+                projectedCreditTSS: projection.projectedCreditTSS
             )
         }
 

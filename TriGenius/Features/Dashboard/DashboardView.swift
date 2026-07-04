@@ -220,31 +220,36 @@ struct DashboardView: View {
 
     // MARK: Weekly Target (Volume)
 
-    private var weeklyTarget: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Weekly Target").font(.headline)
-                Spacer()
-                VolumeMetricToggle(metric: $volumeMetric)
-            }
+    @ViewBuilder private var weeklyTarget: some View {
+        if !viewModel.visibleFamilies.isEmpty {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack {
+                    Text("Weekly Target").font(.headline)
+                    Spacer()
+                    VolumeMetricToggle(metric: $volumeMetric)
+                }
 
-            HStack(alignment: .top, spacing: 8) {
-                ForEach(SportFamily.triathlon) { family in
-                    let totals = viewModel.currentWeek?.totals(for: family) ?? VolumeTotals()
-                    let target = viewModel.target(for: family)
-                    let projection = viewModel.projection(for: family)
-                    VolumeRing(family: family,
-                               metric: volumeMetric,
-                               actualTSS: totals.tss,
-                               targetTSS: target.tss,
-                               actualKm: totals.distanceKm,
-                               targetKm: target.distanceKm,
-                               projectedTSS: projection.projectedTSS,
-                               projectedKm: projection.projectedKm)
+                HStack(alignment: .top, spacing: 8) {
+                    ForEach(viewModel.visibleFamilies) { family in
+                        // Actual comes from the projection (its own weekly sum) so the
+                        // solid arc and the projection arc share one number.
+                        let target = viewModel.target(for: family)
+                        let projection = viewModel.projection(for: family)
+                        VolumeRing(family: family,
+                                   metric: volumeMetric,
+                                   actualTSS: projection.actualTSS,
+                                   targetTSS: target.tss,
+                                   actualKm: projection.actualKm,
+                                   targetKm: target.distanceKm,
+                                   projectedTSS: projection.projectedTSS,
+                                   projectedKm: projection.projectedKm,
+                                   creditedTSS: projection.creditedTSS,
+                                   projectedCreditTSS: projection.projectedCreditTSS)
+                    }
                 }
             }
+            .dashCard()
         }
-        .dashCard()
     }
 
     // MARK: Statistics
@@ -587,24 +592,30 @@ private struct VolumeRing: View {
     /// rendered as a faded arc continuing past the solid "actual" fill.
     let projectedTSS: Double
     let projectedKm: Double
+    /// Cross-training credit (TSS only) borrowed from other disciplines' surplus,
+    /// drawn as a distinct mid-opacity segment between the solid fill and the
+    /// projection arc.
+    let creditedTSS: Double
+    let projectedCreditTSS: Double
 
     private var actual: Double { metric == .tss ? actualTSS : actualKm }
     private var target: Double { metric == .tss ? targetTSS : targetKm }
     private var projected: Double { max(metric == .tss ? projectedTSS : projectedKm, actual) }
+    // Credit is TSS-only — distance doesn't transfer across sports.
+    private var credited: Double { metric == .tss ? creditedTSS : 0 }
+    private var projectedCredit: Double { metric == .tss ? projectedCreditTSS : 0 }
 
-    // The ring fills against the active metric's weekly target.
-    private var fraction: Double {
-        target > 0 ? min(actual / target, 1) : 0
-    }
+    private func fraction(_ value: Double) -> Double { target > 0 ? min(value / target, 1) : 0 }
+    /// Solid fill: what the athlete actually did in this discipline.
+    private var realTop: Double { fraction(actual) }
+    /// End of the borrowed-credit segment (real + credit).
+    private var creditTop: Double { fraction(actual + credited) }
+    /// End of the projection arc (projected close + its credit).
+    private var projTop: Double { fraction(projected + projectedCredit) }
 
-    /// Where the projected close lands on the ring (always ≥ the actual fill).
-    private var projectedFraction: Double {
-        target > 0 ? min(projected / target, 1) : 0
-    }
-
-    /// True once the projected close still falls short of the target — the visible
-    /// gap that signals an at-risk week.
-    private var fallsShort: Bool { target > 0 && projectedFraction < 0.99 }
+    /// True once even the credited projected close falls short of the target — the
+    /// visible gap that signals an at-risk week.
+    private var fallsShort: Bool { target > 0 && projTop < 0.99 }
 
     var body: some View {
         VStack(spacing: 8) {
@@ -614,15 +625,24 @@ private struct VolumeRing: View {
                 // (solid) arc, up to the weekly target. Same 7pt radius as the
                 // solid arc but dashed + lighter so it reads as "planned, not yet
                 // done" rather than "done".
-                if projectedFraction > fraction {
+                if projTop > creditTop {
                     Circle()
-                        .trim(from: fraction, to: projectedFraction)
+                        .trim(from: creditTop, to: projTop)
                         .stroke(family.color.opacity(0.40),
                                 style: StrokeStyle(lineWidth: 7, lineCap: .butt, dash: [2, 2]))
                         .rotationEffect(.degrees(-90))
                 }
+                // Cross-training credit: mid-opacity solid segment past the real
+                // fill, so borrowed load reads as borrowed rather than done.
+                if creditTop > realTop {
+                    Circle()
+                        .trim(from: realTop, to: creditTop)
+                        .stroke(family.color.opacity(0.45),
+                                style: StrokeStyle(lineWidth: 7, lineCap: .butt))
+                        .rotationEffect(.degrees(-90))
+                }
                 Circle()
-                    .trim(from: 0, to: fraction)
+                    .trim(from: 0, to: realTop)
                     .stroke(family.color, style: StrokeStyle(lineWidth: 7, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                 Image(systemName: family.icon).font(.title3).foregroundStyle(family.color)

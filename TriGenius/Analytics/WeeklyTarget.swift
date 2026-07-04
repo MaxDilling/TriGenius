@@ -38,6 +38,13 @@ struct WeeklyProjection: Sendable {
     /// tomorrow). Equals `actual` when nothing remains planned.
     var projectedTSS: Double = 0
     var projectedKm: Double = 0
+    /// Cross-training credit (TSS only) borrowed from other disciplines' surplus,
+    /// filling this discipline's ring past its own completed load. Rendered as a
+    /// distinct arc segment so it reads as borrowed, not done. See
+    /// `WeeklyTargets.applyCrossTrainingCredit`.
+    var creditedTSS: Double = 0
+    /// The same credit computed against the projected close (projected surpluses).
+    var projectedCreditTSS: Double = 0
 }
 
 enum WeeklyTargets {
@@ -238,5 +245,65 @@ enum WeeklyTargets {
             out[family] = p
         }
         return out
+    }
+
+    // MARK: Ring visibility
+
+    /// The triathlon disciplines that currently have a training goal — those the
+    /// athlete's weekly `sport_ratio` gives positive weight. A discipline the plan
+    /// doesn't program (ratio 0 / absent) gets no ring, even if a one-off session
+    /// touched it. Gates the dashboard rings and the widget snapshot.
+    static func visibleFamilies(sportRatio: [SportFamily: Double]) -> [SportFamily] {
+        SportFamily.triathlon.filter { (sportRatio[$0] ?? 0) > 0 }
+    }
+
+    // MARK: Cross-training credit
+
+    /// Cross-training credit ("verbesserte Ringlogik"): training load is partly
+    /// fungible, so surplus in one discipline should help fill another's ring
+    /// instead of leaving it stubbornly empty. Above each discipline's target the
+    /// surplus forms a pool = `factor × Σ surplus`, handed to the disciplines still
+    /// short of target in proportion to their deficit (capped at each deficit; a
+    /// discipline in surplus has no deficit, so it never credits itself). `factor`
+    /// is athlete-configurable (0 = strict per-discipline, 1 = fully fungible).
+    /// Computed once on the completed actuals and once on the projected close so the
+    /// solid credited arc and its projected continuation stay consistent. TSS only —
+    /// distance can't transfer across sports (3 km swim ≠ 3 km run). Single pass: any
+    /// pool a capped discipline leaves unused is not redistributed (fine for three).
+    static func applyCrossTrainingCredit(
+        targets: [SportFamily: WeeklyTarget],
+        into projections: inout [SportFamily: WeeklyProjection],
+        factor: Double
+    ) {
+        guard factor > 0 else { return }
+        let families = SportFamily.triathlon
+
+        func credits(_ value: (WeeklyProjection) -> Double) -> [SportFamily: Double] {
+            var surplus = 0.0, totalDeficit = 0.0
+            var deficits: [SportFamily: Double] = [:]
+            for f in families {
+                let target = targets[f]?.tss ?? 0
+                let v = projections[f].map(value) ?? 0
+                surplus += max(0, v - target)
+                let d = max(0, target - v)
+                deficits[f] = d
+                totalDeficit += d
+            }
+            let pool = factor * surplus
+            guard pool > 0, totalDeficit > 0 else { return [:] }
+            return deficits.mapValues { min($0, pool * $0 / totalDeficit) }
+        }
+
+        let actualCredits = credits { $0.actualTSS }
+        let projectedCredits = credits { $0.projectedTSS }
+        for f in families {
+            let ac = actualCredits[f] ?? 0
+            let pc = projectedCredits[f] ?? 0
+            guard ac > 0 || pc > 0 || projections[f] != nil else { continue }
+            var p = projections[f] ?? WeeklyProjection()
+            p.creditedTSS = ac
+            p.projectedCreditTSS = pc
+            projections[f] = p
+        }
     }
 }

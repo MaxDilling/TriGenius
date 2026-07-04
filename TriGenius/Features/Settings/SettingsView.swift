@@ -121,6 +121,14 @@ final class AppSettings: ObservableObject {
     @Published var aiDashboardInsight: Bool {
         didSet { UserDefaults.standard.set(aiDashboardInsight, forKey: "ai_dashboard_insight") }
     }
+    /// How much of an over-delivered discipline's surplus TSS credits the other
+    /// weekly rings (0 = strict per-discipline, 1 = fully fungible). Read by
+    /// `BackgroundCoordinator` (outside SwiftUI) via `storedCreditFactor()`.
+    @Published var crossTrainingCreditFactor: Double {
+        didSet { UserDefaults.standard.set(crossTrainingCreditFactor, forKey: Self.crossTrainingCreditKey) }
+    }
+    static let crossTrainingCreditKey = "cross_training_credit"
+    static let defaultCrossTrainingCredit = 0.5
 
     /// A curated shortlist of tool-capable OpenRouter model ids. OpenRouter
     /// exposes hundreds; these are the ones worth defaulting to for the coach.
@@ -158,7 +166,16 @@ final class AppSettings: ObservableObject {
         debugMode = UserDefaults.standard.bool(forKey: "debug_mode")
         proactiveNotifications = UserDefaults.standard.bool(forKey: Self.proactiveNotificationsKey)
         aiDashboardInsight = UserDefaults.standard.bool(forKey: "ai_dashboard_insight")
+        crossTrainingCreditFactor = Self.loadCreditFactor()
     }
+
+    /// The cross-training credit factor, defaulting to 0.5 when never set (a bare
+    /// `double(forKey:)` returns 0, which would silently disable the feature).
+    private static func loadCreditFactor() -> Double {
+        UserDefaults.standard.object(forKey: crossTrainingCreditKey) as? Double ?? defaultCrossTrainingCredit
+    }
+    /// Credit factor as seen by non-SwiftUI callers (the background widget refresh).
+    static func storedCreditFactor() -> Double { loadCreditFactor() }
 
     // MARK: - Read-source / write-target persistence
 
@@ -347,15 +364,24 @@ struct SettingsView: View {
                 Text("Lets the coach read your calendar's busy/free windows to plan workouts around busy days. Read-only — TriGenius never changes your events.")
             }
 
-            // Dashboard section — opt-in AI summary card.
+            // Dashboard section — opt-in AI summary card + weekly-ring tuning.
             Section {
                 Toggle(isOn: $settings.aiDashboardInsight) {
                     Label("AI summary", systemImage: "sparkles")
                 }
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Label("Cross-training credit", systemImage: "arrow.triangle.2.circlepath")
+                        Spacer()
+                        Text(settings.crossTrainingCreditFactor, format: .percent.precision(.fractionLength(0)))
+                            .foregroundStyle(.secondary).monospacedDigit()
+                    }
+                    Slider(value: $settings.crossTrainingCreditFactor, in: 0...1, step: 0.05)
+                }
             } header: {
                 Text("Dashboard")
             } footer: {
-                Text("Shows a one-line AI read on your week at the top of the dashboard. Each load runs an LLM call. Off by default.")
+                Text("AI summary shows a one-line read on your week (an LLM call per load, off by default). Cross-training credit lets surplus in one discipline partly fill the other weekly rings — 0 % keeps each discipline strict, 100 % treats load as fully interchangeable.")
             }
 
             // Notifications section — proactive background coaching.

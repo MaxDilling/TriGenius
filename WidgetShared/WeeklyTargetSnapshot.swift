@@ -31,6 +31,11 @@ struct WeeklyTargetSnapshot: Codable {
         var targetKm: Double
         var projectedTSS: Double
         var projectedKm: Double
+        /// Cross-training credit (TSS) borrowed from other disciplines' surplus —
+        /// drawn as a distinct arc past the real fill. Defaulted so an older
+        /// snapshot (pre-credit) still decodes.
+        var creditedTSS: Double = 0
+        var projectedCreditTSS: Double = 0
     }
 
     var generatedAt: Date
@@ -81,7 +86,8 @@ struct WeeklyTargetSnapshot: Codable {
             disciplines: [
                 Entry(sport: "swim", displayName: "Swim", iconSystemName: "figure.pool.swim",
                       actualTSS: 60, targetTSS: 120, actualKm: 4, targetKm: 8,
-                      projectedTSS: 110, projectedKm: 7),
+                      projectedTSS: 110, projectedKm: 7,
+                      creditedTSS: 30, projectedCreditTSS: 10),
                 Entry(sport: "bike", displayName: "Bike", iconSystemName: "figure.outdoor.cycle",
                       actualTSS: 180, targetTSS: 300, actualKm: 70, targetKm: 120,
                       projectedTSS: 300, projectedKm: 120),

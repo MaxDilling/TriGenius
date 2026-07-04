@@ -39,6 +39,9 @@ final class DashboardViewModel {
     /// Per-discipline expected week close (completed + still-planned) — the faded
     /// projection arc on the weekly rings.
     var projections: [SportFamily: WeeklyProjection] = [:]
+    /// The disciplines that currently have a goal (positive `sport_ratio`) — the
+    /// only ones that get a weekly ring.
+    var visibleFamilies: [SportFamily] = SportFamily.triathlon
     var agendaDays: [AgendaDay] = []
     var insight: String?
     var isLoading = false
@@ -97,10 +100,17 @@ final class DashboardViewModel {
             atpPlan: atpPlan
         )
         projections = WeeklyTargets.projection(store: store)
+        WeeklyTargets.applyCrossTrainingCredit(
+            targets: targets,
+            into: &projections,
+            factor: AppSettings.storedCreditFactor()
+        )
+        visibleFamilies = WeeklyTargets.visibleFamilies(sportRatio: context.weeklyStructure.sportRatio)
 
         // Keep the Home Screen widget's snapshot in sync with what the dashboard
-        // is showing.
-        WeeklyTargetSnapshotWriter.write(targets: targets, projections: projections, weekStart: weekStart)
+        // is showing (same visible set + credited projections).
+        WeeklyTargetSnapshotWriter.write(targets: targets, projections: projections,
+                                         families: visibleFamilies, weekStart: weekStart)
 
         agendaDays = Self.buildAgenda(records: records, store: store)
 

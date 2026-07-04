@@ -21,10 +21,14 @@ struct WidgetRing: View {
     private var target: Double { entry.targetTSS }
     private var projected: Double { max(entry.projectedTSS, actual) }
 
-    private var fraction: Double { target > 0 ? min(actual / target, 1) : 0 }
-    private var projectedFraction: Double { target > 0 ? min(projected / target, 1) : 0 }
-    /// At-risk: the expected close still falls short of the weekly target.
-    private var fallsShort: Bool { target > 0 && projectedFraction < 0.999 }
+    private func fraction(_ value: Double) -> Double { target > 0 ? min(value / target, 1) : 0 }
+    private var realTop: Double { fraction(actual) }
+    /// End of the borrowed cross-training-credit segment (real + credit).
+    private var creditTop: Double { fraction(actual + entry.creditedTSS) }
+    /// End of the projection arc (projected close + its credit).
+    private var projTop: Double { fraction(projected + entry.projectedCreditTSS) }
+    /// At-risk: even the credited projected close falls short of the weekly target.
+    private var fallsShort: Bool { target > 0 && projTop < 0.999 }
 
     private var color: Color { WidgetRing.sportColor(entry.sport) }
 
@@ -32,15 +36,23 @@ struct WidgetRing: View {
         VStack(spacing: 6) {
             ZStack {
                 Circle().stroke(Color.primary.opacity(0.12), lineWidth: lineWidth)
-                if projectedFraction > fraction {
+                if projTop > creditTop {
                     Circle()
-                        .trim(from: fraction, to: projectedFraction)
+                        .trim(from: creditTop, to: projTop)
                         .stroke(color.opacity(0.40),
                                 style: StrokeStyle(lineWidth: lineWidth, lineCap: .butt, dash: [2, 2]))
                         .rotationEffect(.degrees(-90))
                 }
+                // Cross-training credit borrowed from another discipline's surplus.
+                if creditTop > realTop {
+                    Circle()
+                        .trim(from: realTop, to: creditTop)
+                        .stroke(color.opacity(0.45),
+                                style: StrokeStyle(lineWidth: lineWidth, lineCap: .butt))
+                        .rotationEffect(.degrees(-90))
+                }
                 Circle()
-                    .trim(from: 0, to: fraction)
+                    .trim(from: 0, to: realTop)
                     .stroke(color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                     .rotationEffect(.degrees(-90))
                 Image(systemName: entry.iconSystemName)

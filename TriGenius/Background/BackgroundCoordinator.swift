@@ -116,12 +116,19 @@ final class BackgroundCoordinator {
             weeklyStructure: memory.weeklyStructure,
             atpPlan: ATPEngine.current()
         )
-        let projection = WeeklyTargets.projection(store: TrainingDataStore.shared)
+        var projection = WeeklyTargets.projection(store: TrainingDataStore.shared)
         signals += ProactiveCoach.weeklyTargetSignals(targets: targets, projection: projection)
+
+        // Apply cross-training credit + the visible-family gate so the background
+        // widget refresh matches the foreground dashboard exactly.
+        WeeklyTargets.applyCrossTrainingCredit(targets: targets, into: &projection,
+                                               factor: AppSettings.storedCreditFactor())
+        let visible = WeeklyTargets.visibleFamilies(sportRatio: memory.weeklyStructure.sportRatio)
 
         // Refresh the Home Screen widget's snapshot from the same numbers, so it
         // stays current even when the app is only woken in the background.
-        WeeklyTargetSnapshotWriter.write(targets: targets, projections: projection, weekStart: weekStart)
+        WeeklyTargetSnapshotWriter.write(targets: targets, projections: projection,
+                                         families: visible, weekStart: weekStart)
 
         await NotificationCenterService.shared.postDailyDigest(signals)
 
