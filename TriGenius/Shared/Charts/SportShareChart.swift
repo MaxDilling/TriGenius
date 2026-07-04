@@ -42,6 +42,25 @@ struct SportShareModel: Codable, Equatable {
         }
         return acc.sorted { $0.value > $1.value }.map { ($0.key, $0.value) }
     }
+
+    /// Weekly per-sport share from completed records — the single builder
+    /// shared by Statistics and the chat's sport-share card.
+    @MainActor
+    static func make(records: [WorkoutRecord], weeks: Int, metric: Metric) -> SportShareModel {
+        let buckets = TrainingVolume.weeklyBuckets(records: records, weeks: weeks)
+        return SportShareModel(metric: metric, weeks: buckets.map { bucket in
+            Week(weekStart: bucket.weekStart, slices: SportFamily.allCases.compactMap { family in
+                let totals = bucket.totals(for: family)
+                let value: Double
+                switch metric {
+                case .tss: value = totals.tss
+                case .duration: value = totals.durationMinutes / 60
+                case .distance: value = totals.distanceKm
+                }
+                return value > 0 ? Week.Slice(sport: family, value: value) : nil
+            })
+        })
+    }
 }
 
 struct SportShareChart: View {

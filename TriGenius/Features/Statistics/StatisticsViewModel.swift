@@ -58,16 +58,7 @@ final class StatisticsViewModel {
     }
 
     private func rebuildShare() {
-        let buckets = TrainingVolume.weeklyBuckets(records: records, weeks: range.weeks)
-        share = SportShareModel(metric: shareMetric, weeks: buckets.map { bucket in
-            SportShareModel.Week(
-                weekStart: bucket.weekStart,
-                slices: SportFamily.allCases.compactMap { family in
-                    let value = metricValue(bucket.totals(for: family))
-                    return value > 0 ? SportShareModel.Week.Slice(sport: family, value: value) : nil
-                }
-            )
-        })
+        share = SportShareModel.make(records: records, weeks: range.weeks, metric: shareMetric)
     }
 
     private func rebuildZones() {
@@ -76,11 +67,4 @@ final class StatisticsViewModel {
         zonePower = ZoneDistribution.aggregate(records: sportRecords, source: .power)
     }
 
-    private func metricValue(_ totals: VolumeTotals) -> Double {
-        switch shareMetric {
-        case .tss: return totals.tss
-        case .duration: return totals.durationMinutes / 60
-        case .distance: return totals.distanceKm
-        }
-    }
 }

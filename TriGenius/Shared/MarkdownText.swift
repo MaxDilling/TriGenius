@@ -10,10 +10,13 @@ import SwiftUI
 
 struct MarkdownText: View {
     let markdown: String
+    /// True while this text is still streaming in — an unterminated ```card
+    /// fence renders as a pending placeholder instead of flashing raw JSON.
+    var isStreaming: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(Self.parse(markdown).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(Self.parse(markdown, isStreaming: isStreaming).enumerated()), id: \.offset) { _, block in
                 block.view
             }
         }
@@ -27,6 +30,10 @@ struct MarkdownText: View {
         case numbered(number: String, text: String)
         case codeBlock(String)
         case paragraph(String)
+        /// A parsed coach ```card token, rendered as the live card.
+        case card(ChatCard)
+        /// A ```card fence still streaming in — placeholder until it closes.
+        case pendingCard
 
         @ViewBuilder var view: some View {
             switch self {
@@ -64,6 +71,15 @@ struct MarkdownText: View {
             case .paragraph(let text):
                 MarkdownText.inline(text)
                     .fixedSize(horizontal: false, vertical: true)
+
+            case .card(let card):
+                ChatCardView(card: card)
+
+            case .pendingCard:
+                ProgressView()
+                    .frame(maxWidth: .infinity, minHeight: 72)
+                    .background(Color.appTertiaryBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.m))
             }
         }
 
@@ -92,7 +108,7 @@ struct MarkdownText: View {
 
     // MARK: - Block parsing
 
-    private static func parse(_ markdown: String) -> [Block] {
+    private static func parse(_ markdown: String, isStreaming: Bool) -> [Block] {
         var blocks: [Block] = []
         let lines = markdown.components(separatedBy: "\n")
 
@@ -109,16 +125,29 @@ struct MarkdownText: View {
             let line = lines[i]
             let trimmed = line.trimmingCharacters(in: .whitespaces)
 
-            // Fenced code block
+            // Fenced code block; a `card` info string is a coach card token.
             if trimmed.hasPrefix("```") {
                 flushParagraph()
+                let info = trimmed.dropFirst(3).trimmingCharacters(in: .whitespaces).lowercased()
                 var code: [String] = []
                 i += 1
                 while i < lines.count && !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("```") {
                     code.append(lines[i])
                     i += 1
                 }
-                blocks.append(.codeBlock(code.joined(separator: "\n")))
+                let terminated = i < lines.count
+                let body = code.joined(separator: "\n")
+                if info == "card" {
+                    if terminated {
+                        // A malformed token stays visible as a code block — a
+                        // coach mistake is never silently hidden.
+                        blocks.append(ChatCard.parse(tokenJSON: body).map(Block.card) ?? .codeBlock(body))
+                    } else {
+                        blocks.append(isStreaming ? .pendingCard : .codeBlock(body))
+                    }
+                } else {
+                    blocks.append(.codeBlock(body))
+                }
                 i += 1 // skip closing fence
                 continue
             }

@@ -613,6 +613,15 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
         ]
     ]
 
+    /// Emits a chat card for every successful plan mutation — the chat renders
+    /// it inline, so the model doesn't restate the workout in prose. Calendar
+    /// editor mutations bypass this handler and never emit cards.
+    private let onCard: (ChatCard) -> Void
+
+    init(onCard: @escaping (ChatCard) -> Void) {
+        self.onCard = onCard
+    }
+
     var definitions: [ToolDefinition] {
         [
             ToolDefinition(
@@ -743,12 +752,14 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                 continue
             }
             let outcome = await DataSyncCoordinator.shared.addPlan(workoutData: raw, date: date)
+            // The plan exists locally even when the target push failed — card either way.
+            onCard(.workout(id: outcome.planId, caption: "Scheduled"))
             if outcome.pushed {
                 ok += 1
                 let suffix = outcome.notes.isEmpty ? "" : " (\(outcome.notes.joined(separator: "; ")))"
-                lines.append("- \(dateStr) \(outcome.name) → \(outcome.targetName)\(suffix)")
+                lines.append("- \(dateStr) \(outcome.name) → \(outcome.targetName)\(suffix) [id: \(outcome.planId)]")
             } else {
-                lines.append("- \(dateStr) \(outcome.name) — saved locally, \(outcome.targetName) push failed: \(outcome.pushMessage)")
+                lines.append("- \(dateStr) \(outcome.name) — saved locally, \(outcome.targetName) push failed: \(outcome.pushMessage) [id: \(outcome.planId)]")
             }
         }
         let mark = ok == items.count ? "✓ " : ""
@@ -763,12 +774,21 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
               let rawWorkout = arguments["workout_data"] as? [String: Any] else {
             return "✗ Error: workout_id and workout_data are required."
         }
+        let before = DataSyncCoordinator.shared.plannedSnapshot(id: workoutId)
         guard let outcome = await DataSyncCoordinator.shared.updatePlan(id: workoutId, workoutData: rawWorkout) else {
             return "✗ No planned workout found for id \(workoutId). List it with get_workouts first."
         }
+        // Diff the stored before/after states — not the tool arguments — so the
+        // card shows what actually applied after WorkoutNormalizer.
+        if let before, let after = DataSyncCoordinator.shared.plannedSnapshot(id: outcome.planId) {
+            let changes = WorkoutDiff.changes(before: before.workoutData, after: after.workoutData)
+            if !changes.isEmpty {
+                onCard(.workoutDiff(id: outcome.planId, name: after.name, caption: "Updated", changes: changes))
+            }
+        }
         var msg = outcome.pushed
-            ? "✓ Updated '\(outcome.name)' on \(outcome.targetName)."
-            : "✓ Updated locally; \(outcome.targetName) push failed: \(outcome.pushMessage)"
+            ? "✓ Updated '\(outcome.name)' on \(outcome.targetName). [id: \(outcome.planId)]"
+            : "✓ Updated locally; \(outcome.targetName) push failed: \(outcome.pushMessage) [id: \(outcome.planId)]"
         if !outcome.notes.isEmpty { msg += "\nℹ️ Applied defaults & adjustments:\n" + outcome.notes.map { "- \($0)" }.joined(separator: "\n") }
         return msg
     }
@@ -780,12 +800,17 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
               let toDate = arguments["to_date"] as? String, let date = DateFormatter.ymd.date(from: toDate) else {
             return "✗ Error: workout_id and a valid to_date (YYYY-MM-DD) are required."
         }
+        let before = DataSyncCoordinator.shared.plannedSnapshot(id: workoutId)
         guard let outcome = await DataSyncCoordinator.shared.movePlan(id: workoutId, to: date) else {
             return "✗ No planned workout found for id \(workoutId)."
         }
+        if let before {
+            onCard(.workoutDiff(id: outcome.planId, name: outcome.name, caption: "Moved",
+                                changes: ["Date: \(cardDate(before.date)) → \(cardDate(date))"]))
+        }
         return outcome.pushed
-            ? "✓ Moved '\(outcome.name)' to \(toDate) on \(outcome.targetName)."
-            : "✓ Moved locally; \(outcome.targetName) push failed: \(outcome.pushMessage)"
+            ? "✓ Moved '\(outcome.name)' to \(toDate) on \(outcome.targetName). [id: \(outcome.planId)]"
+            : "✓ Moved locally; \(outcome.targetName) push failed: \(outcome.pushMessage) [id: \(outcome.planId)]"
     }
 
     // MARK: - delete_workout
@@ -794,9 +819,18 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
         guard let workoutId = Coerce.string(arguments["workout_id"]), !workoutId.isEmpty else {
             return "✗ Error: workout_id is required."
         }
+        // Snapshot first — after the delete there is nothing left to describe.
+        let before = DataSyncCoordinator.shared.plannedSnapshot(id: workoutId)
         // Delete from every provider the plan reached (not just the active write
         // target), then drop it locally.
         await DataSyncCoordinator.shared.deletePlan(id: workoutId)
+        if let before {
+            onCard(.workoutDeleted(name: before.name, sport: before.sport, date: before.date))
+        }
         return "✓ Deleted workout \(workoutId)."
+    }
+
+    private func cardDate(_ date: Date) -> String {
+        date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
     }
 }

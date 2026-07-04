@@ -1035,6 +1035,22 @@ final class TrainingDataStore {
         ).first
     }
 
+    /// Fetch a single completed activity by id — the stored id or the raw
+    /// provider id the coach sees (completed rows are keyed `source:rawId`).
+    /// Falls back to folded plan rows, whose linked activity id lives in
+    /// `externalRefs` (see `cachedActivities`).
+    func activity(id: String) -> WorkoutRecord? {
+        let candidates = [id, "garmin:\(id)", "healthkit:\(id)", "local:\(id)"]
+        if let hit = (try? context.fetch(
+            FetchDescriptor<WorkoutRecord>(predicate: #Predicate { candidates.contains($0.id) && $0.isCompleted })
+        ))?.first { return hit }
+        return (try? context.fetch(
+            FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.isCompleted })
+        ))?.first { rec in
+            rec.externalRefs[Self.completedRefKey].map { candidates.contains($0) } == true
+        }
+    }
+
     /// Open future-dated, **TriGenius-authored** plans (`source == "local"`, from
     /// `from` onward) that have no external ref for `target` yet — the set
     /// `reconcileWriteTarget` re-pushes after a target switch. Provider-mirrored

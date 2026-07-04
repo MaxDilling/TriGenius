@@ -615,9 +615,14 @@ final class DataSyncCoordinator {
     /// plan with `id` exists.
     func updatePlan(id: String, workoutData raw: [String: Any]) async -> PlanWriteOutcome? {
         let writeTarget = AppSettings.storedWriteTarget()
-        guard store.scheduledWorkout(id: id) != nil else { return nil }
+        guard let existing = store.scheduledWorkout(id: id) else { return nil }
         let editsSteps = raw["steps"] != nil
-        let (workoutData, notes) = editsSteps ? WorkoutNormalizer.normalize(raw) : (raw, [])
+        // Normalize the stored plan overlaid with the edits — never the partial
+        // dict alone, or the normalizer invents defaults ("Other", pool length,
+        // wrong sport for banding) for fields the plan already has.
+        let (workoutData, notes) = editsSteps
+            ? WorkoutNormalizer.normalize(WorkoutPayloadBuilder.workoutData(from: existing).merging(raw) { _, edit in edit })
+            : (raw, [])
         let steps = workoutData["steps"] as? [[String: Any]] ?? []
         let targetTSS: Double?? = editsSteps
             ? .some(PlannedTSS.estimate(compactSteps: steps,
@@ -687,6 +692,15 @@ final class DataSyncCoordinator {
             }
         }
         store.deleteScheduledWorkout(id: id)
+    }
+
+    /// Display snapshot of a plan for the chat's mutation cards (modify
+    /// before/after, move-from, delete): the fields the card shows plus the
+    /// canonical `workout_data` the diff compares — always the *stored* state,
+    /// never the tool's request.
+    func plannedSnapshot(id: String) -> (name: String, sport: String, date: Date, workoutData: [String: Any])? {
+        guard let rec = store.scheduledWorkout(id: id) else { return nil }
+        return (rec.name, rec.sport, rec.date, WorkoutPayloadBuilder.workoutData(from: rec))
     }
 
     /// Build a local plan DTO from normalized `workout_data`.

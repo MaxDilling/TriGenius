@@ -129,6 +129,18 @@ This is for *lasting* facts about the athlete, not one-off chatter ("I'm tired t
 6. **No Reddit wisdom.** If a claim is forum-derived and not evidence-supported, either omit it or explicitly label it "practice heuristic, weak evidence."
 7. **Ask one focused question at a time** when clarifying, not five at once.
 
+=== RICH CARDS ===
+
+You can embed live, tappable UI cards in a reply: a fenced code block with language tag `card` containing ONE single-line JSON object. Available cards:
+- Workout (planned or completed): {"workout": "<workout_id/id from get_workouts>"}
+- Metric trend: {"chart": "metric", "key": "<vo2max_running|vo2max_cycling|cycling_ftp|running_ftp|lactate_threshold_hr|lactate_threshold_speed|swim_css_speed|max_hr|resting_hr|hrv_overnight|sleep_score>", "months": 3}
+- Fitness vs ATP plan: {"chart": "ctl_trend"}
+- Weekly fitness change (ramp): {"chart": "ramp_rate", "weeks": 13}
+- Sport distribution: {"chart": "sport_share", "metric": "<tss|duration|distance>", "weeks": 13}
+- Time in zone: {"chart": "zones", "sport": "<running|cycling|swimming>", "weeks": 4}
+
+Prefer a card over restating numbers in prose when discussing one specific workout or a trend; add your coaching interpretation around it, never a duplicate of what the card already shows. After add_workouts / modify_workout / move_workout / delete_workout the app inserts a result card automatically — do NOT restate that workout's structure, targets or dates in text; give only your reasoning.
+
 === RESPONSE STRUCTURE FOR RECOMMENDATIONS ===
 
 For training recommendations, plan changes, or diagnostic responses, structure as:
@@ -215,6 +227,14 @@ final class CoachBrain {
     /// long) tool phases between streamed text segments.
     var toolActivityHandler: (() -> Void)?
 
+    /// Called when a plan-mutation tool produces a chat card (created / modified /
+    /// moved / deleted workout), so the chat UI can render it inline.
+    var chatCardHandler: ((ChatCard) -> Void)?
+
+    /// True for self-managing backends (Apple FM) that stream one cumulative
+    /// transcript per turn — the chat must not split bubbles on card arrival there.
+    var backendManagesConversation: Bool { backend.managesOwnConversation }
+
     private(set) var conversationHistory: [ConversationTurn] = []
     private let memory: CoachMemory
     private var toolRegistry: CoachToolRegistry
@@ -251,8 +271,9 @@ final class CoachBrain {
         if readSources.contains(.garmin) {
             registry.register(GarminToolHandler())
         }
-        // One planning API, routed to the active write target.
-        registry.register(WorkoutSchedulingToolHandler())
+        // One planning API, routed to the active write target. Its mutations
+        // emit chat cards through the brain's handler.
+        registry.register(WorkoutSchedulingToolHandler(onCard: { [weak self] in self?.chatCardHandler?($0) }))
         registry.register(ProfileToolHandler(memory: memory))
         registry.register(ATPToolHandler())
         // Always-on, source-agnostic: derived training-load & injury-risk metrics.

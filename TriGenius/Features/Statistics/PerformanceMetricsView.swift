@@ -11,8 +11,10 @@ import Charts
 // trend vs the first stored point, and a sparkline.
 
 /// One physiological marker the Performance Insights screen can display, with
-/// everything needed to read, format and color it.
-private struct PerformanceMetric: Identifiable {
+/// everything needed to read, format and color it. Internal (not private): the
+/// chat's metric-trend card validates its token key against this catalog and
+/// reuses `MetricCard`.
+struct PerformanceMetric: Identifiable {
     /// Which section the card belongs to.
     enum Group { case performance, recovery }
 
@@ -59,6 +61,11 @@ private struct PerformanceMetric: Identifiable {
         PerformanceMetric(key: "sleep_score", title: "Sleep Score", group: .recovery, accent: .blue,
                           unit: "", format: intFormat, higherIsBetter: true),
     ]
+
+    /// Catalog lookup by stored key — validates a chat card token's `key`.
+    static func metric(for key: String) -> PerformanceMetric? {
+        all.first { $0.key == key }
+    }
 
     private static let intFormat: (Double) -> String = { String(Int($0.rounded())) }
     /// Build a formatter turning a stored speed (m/s) into "m:ss" pace over `distanceM`.
@@ -177,19 +184,28 @@ private func tightDomain(_ points: [MetricPoint], topPad: Double = 0.18, bottomP
 
 // MARK: - Card
 
-private struct MetricCard: View {
+struct MetricCard: View {
     let metric: PerformanceMetric
     let points: [MetricPoint]
+    /// Sparkline window in months. The Statistics grid uses the 3-month default;
+    /// the chat's metric-trend card passes its token's `months`.
+    var windowMonths: Int
 
     @State private var showDetail = false
     @State private var scrubDate: Date?
 
-    /// The card sparkline summarises only the recent past — the last three
-    /// months — so day-to-day progression reads clearly without the whole
-    /// history compressing it flat. (The detail view still offers longer
-    /// windows.) The current value still comes from the full series' last point.
+    init(metric: PerformanceMetric, points: [MetricPoint], windowMonths: Int = 3) {
+        self.metric = metric
+        self.points = points
+        self.windowMonths = windowMonths
+    }
+
+    /// The card sparkline summarises only the recent past — `windowMonths` —
+    /// so day-to-day progression reads clearly without the whole history
+    /// compressing it flat. (The detail view still offers longer windows.)
+    /// The current value still comes from the full series' last point.
     private var recentPoints: [MetricPoint] {
-        guard let start = Calendar.current.date(byAdding: .month, value: -3, to: Date()) else { return points }
+        guard let start = Calendar.current.date(byAdding: .month, value: -windowMonths, to: Date()) else { return points }
         return points.filter { $0.date >= start }
     }
 

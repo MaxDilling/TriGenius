@@ -140,20 +140,8 @@ struct PlannedWorkoutStructure {
     /// Full target string for a step, e.g. "250–265 W", "4:30–4:50 /km",
     /// "145–155 bpm", "30–32 km/h", "85–90 rpm".
     func targetText(_ leaf: PlannedStepLeaf) -> String? {
-        guard let type = leaf.targetType else { return nil }
-        switch type {
-        case "power":      return PlannedWorkoutFormat.range(leaf.targetLow, leaf.targetHigh, unit: "W")
-        case "heart_rate": return PlannedWorkoutFormat.range(leaf.targetLow, leaf.targetHigh, unit: "bpm")
-        case "pace":       return PlannedWorkoutFormat.paceRange(leaf.targetLow, leaf.targetHigh, swim: family == .swim)
-        case "speed":      return PlannedWorkoutFormat.speedRange(leaf.targetLow, leaf.targetHigh)
-        case "cadence":    return PlannedWorkoutFormat.range(leaf.targetLow, leaf.targetHigh, unit: cadenceUnit)
-        default:           return nil
-        }
+        PlannedWorkoutFormat.target(type: leaf.targetType, low: leaf.targetLow, high: leaf.targetHigh, family: family)
     }
-
-    /// Cadence unit per discipline: cycling counts crank revolutions (rpm),
-    /// running and swimming count steps / strokes per minute (spm).
-    private var cadenceUnit: String { family == .bike ? "rpm" : "spm" }
 
     // MARK: Summaries
 
@@ -289,6 +277,21 @@ enum PlannedWorkoutFormat {
                 ? String(format: "%.0f km", km) : String(format: "%.1f km", km)
         }
         return "\(Int(meters.rounded())) m"
+    }
+
+    /// Target range text for a raw `target_type` key — the single target
+    /// formatter every surface (detail views, summaries, chat diff cards) uses.
+    /// Cadence: cycling counts crank revolutions (rpm), running and swimming
+    /// count steps / strokes per minute (spm).
+    static func target(type: String?, low: Double?, high: Double?, family: SportFamily) -> String? {
+        switch type {
+        case "power":      return range(low, high, unit: "W")
+        case "heart_rate": return range(low, high, unit: "bpm")
+        case "pace":       return paceRange(low, high, swim: family == .swim)
+        case "speed":      return speedRange(low, high)
+        case "cadence":    return range(low, high, unit: family == .bike ? "rpm" : "spm")
+        default:           return nil
+        }
     }
 
     /// A numeric target range, e.g. "250–265 W" (or "250 W" when low == high).

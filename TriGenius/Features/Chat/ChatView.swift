@@ -11,6 +11,9 @@ struct ChatMessage: Identifiable {
     let timestamp: Date
     /// Set only for `.tool` messages (Debug Mode) — the underlying tool call.
     var toolEvent: CoachToolEvent? = nil
+    /// Set for auto-emitted card rows (plan mutations) — rendered as a
+    /// `ChatCardView` instead of a text bubble.
+    var card: ChatCard? = nil
 
     var isUser: Bool { author == .user }
 }
@@ -76,7 +79,21 @@ final class ChatViewModel {
             guard let self, self.isResponding else { return }
             self.isThinking = true
         }
+        // Auto-cards from the plan-mutation tools: each card is its own coach
+        // row, mirroring the tool-bubble mechanism so ordering stays
+        // chronological during streaming.
+        brain.chatCardHandler = { [weak self] card in
+            guard let self else { return }
+            self.messages.append(ChatMessage(author: .coach, text: "", timestamp: Date(), card: card))
+            // Self-managing backends (Apple FM) stream one cumulative transcript
+            // per turn — resetting the bubble there would duplicate its text.
+            if !self.brain.backendManagesConversation { self.currentCoachID = nil }
+        }
     }
+
+    /// The message currently receiving streamed text — its `MarkdownText` treats
+    /// an unterminated ```card fence as pending instead of a raw code block.
+    var streamingMessageID: UUID? { isResponding ? currentCoachID : nil }
 
     /// Warm up the backend (Apple FM) so the first reply comes back faster.
     func prewarm() {
@@ -175,6 +192,8 @@ final class ChatViewModel {
             let text: String
             if msg.author == .tool, let e = msg.toolEvent {
                 text = "\(e.name)(\(e.argumentsJSON)) → \(e.resultPreview)"
+            } else if let card = msg.card {
+                text = "[card] \(card)"
             } else {
                 text = msg.text
             }
@@ -228,11 +247,14 @@ struct CoachChatView: View {
 
                         ForEach(viewModel.messages) { message in
                             Group {
-                                if message.author == .tool {
+                                if let card = message.card {
+                                    ChatCardView(card: card)
+                                } else if message.author == .tool {
                                     ToolCallBubble(message: message)
                                 } else {
                                     MessageBubble(
                                         message: message,
+                                        isStreaming: message.id == viewModel.streamingMessageID,
                                         onRetry: message.isUser ? { viewModel.retry(message) } : nil
                                     )
                                 }
@@ -277,6 +299,21 @@ struct CoachChatView: View {
             )
         }
         .navigationTitle("Coach")
+        // Workout cards push their detail view onto the chat's own stack; the
+        // record is resolved at tap time — completed first, so a finished
+        // (folded) plan's card opens the actual session.
+        .navigationDestination(for: ChatCardDestination.self) { destination in
+            switch destination {
+            case .workout(let id):
+                if let record = TrainingDataStore.shared.activity(id: id) {
+                    TrainingDetailView(record: record)
+                } else if let plan = TrainingDataStore.shared.scheduledWorkout(id: id) {
+                    PlannedWorkoutDetailView(workout: plan)
+                } else {
+                    ContentUnavailableView("Workout no longer available", systemImage: "calendar.badge.minus")
+                }
+            }
+        }
         .onAppear {
             viewModel.attach()
             // A tap may have set the prompt before this view existed / appeared.
@@ -377,6 +414,9 @@ private struct GreetingView: View {
 
 private struct MessageBubble: View {
     let message: ChatMessage
+    /// True while this bubble is still receiving streamed text — forwarded to
+    /// `MarkdownText` so a half-arrived ```card token shows a placeholder.
+    var isStreaming: Bool = false
     /// Set only for user messages: long-press → "Retry" re-sends this message
     /// against the conversation rewound to just before it.
     var onRetry: (() -> Void)? = nil
@@ -392,7 +432,7 @@ private struct MessageBubble: View {
                         Text(message.text)
                     } else {
                         // Coach replies are rendered as markdown.
-                        MarkdownText(markdown: message.text)
+                        MarkdownText(markdown: message.text, isStreaming: isStreaming)
                     }
                 }
                 .padding(.horizontal, Theme.Spacing.m)
