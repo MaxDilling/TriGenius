@@ -29,6 +29,8 @@ struct MarkdownText: View {
         case bullet(text: String)
         case numbered(number: String, text: String)
         case codeBlock(String)
+        case table(header: [String], alignments: [HorizontalAlignment], rows: [[String]])
+        case rule
         case paragraph(String)
         /// A parsed coach ```card token, rendered as the live card.
         case card(ChatCard)
@@ -67,6 +69,35 @@ struct MarkdownText: View {
                     .background(Color.appTertiaryBackground)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                     .textSelection(.enabled)
+
+            case .table(let header, let alignments, let rows):
+                ScrollView(.horizontal) {
+                    Grid(horizontalSpacing: 12, verticalSpacing: 5) {
+                        GridRow {
+                            ForEach(header.indices, id: \.self) { c in
+                                MarkdownText.inline(header[c])
+                                    .fontWeight(.semibold)
+                                    .gridColumnAlignment(alignments[c])
+                            }
+                        }
+                        Divider()
+                        ForEach(rows.indices, id: \.self) { r in
+                            GridRow {
+                                ForEach(rows[r].indices, id: \.self) { c in
+                                    MarkdownText.inline(rows[r][c])
+                                }
+                            }
+                        }
+                    }
+                    .font(.callout)
+                    .padding(8)
+                    .background(Color.appTertiaryBackground)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .scrollIndicators(.hidden)
+
+            case .rule:
+                Divider().padding(.vertical, 2)
 
             case .paragraph(let text):
                 MarkdownText.inline(text)
@@ -167,10 +198,52 @@ struct MarkdownText: View {
                 continue
             }
 
+            // Table: header row followed by a `|---|:--:|` separator line
+            if trimmed.contains("|"), i + 1 < lines.count,
+               let alignments = tableAlignments(lines[i + 1].trimmingCharacters(in: .whitespaces)) {
+                let header = tableCells(trimmed)
+                if header.count == alignments.count {
+                    flushParagraph()
+                    var rows: [[String]] = []
+                    i += 2
+                    while i < lines.count {
+                        let rowLine = lines[i].trimmingCharacters(in: .whitespaces)
+                        guard rowLine.contains("|") else { break }
+                        var cells = tableCells(rowLine)
+                        if cells.count < header.count {
+                            cells += Array(repeating: "", count: header.count - cells.count)
+                        }
+                        rows.append(Array(cells.prefix(header.count)))
+                        i += 1
+                    }
+                    blocks.append(.table(header: header, alignments: alignments, rows: rows))
+                    continue
+                }
+            }
+
+            // Thematic break (---, ***, ___)
+            if trimmed.count >= 3, let first = trimmed.first, "-*_".contains(first),
+               trimmed.allSatisfy({ $0 == first }) {
+                flushParagraph()
+                blocks.append(.rule)
+                i += 1
+                continue
+            }
+
             // Bullet list item
             if let bulletText = parseBullet(trimmed) {
                 flushParagraph()
                 blocks.append(.bullet(text: bulletText))
+                i += 1
+                continue
+            }
+
+            // A bare card token the coach forgot to fence: a line that is
+            // exactly one valid card JSON object renders as the card.
+            if trimmed.hasPrefix("{"), trimmed.hasSuffix("}"),
+               let card = ChatCard.parse(tokenJSON: trimmed) {
+                flushParagraph()
+                blocks.append(.card(card))
                 i += 1
                 continue
             }
@@ -212,6 +285,33 @@ struct MarkdownText: View {
             }
         }
         return nil
+    }
+
+    /// Splits a table line into trimmed cells, dropping the empty edge cells
+    /// produced by leading/trailing pipes.
+    private static func tableCells(_ line: String) -> [String] {
+        var cells = line.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+        if line.hasPrefix("|") { cells.removeFirst() }
+        if line.hasSuffix("|") { cells.removeLast() }
+        return cells
+    }
+
+    /// Parses a separator line (`|---|:--:|`) into per-column alignments;
+    /// nil when the line isn't a valid table separator.
+    private static func tableAlignments(_ line: String) -> [HorizontalAlignment]? {
+        guard line.contains("-"), line.contains("|") else { return nil }
+        let cells = tableCells(line)
+        guard !cells.isEmpty else { return nil }
+        var alignments: [HorizontalAlignment] = []
+        for cell in cells {
+            guard cell.contains("-"), cell.allSatisfy({ $0 == "-" || $0 == ":" }) else { return nil }
+            switch (cell.hasPrefix(":"), cell.hasSuffix(":")) {
+            case (true, true): alignments.append(.center)
+            case (false, true): alignments.append(.trailing)
+            default: alignments.append(.leading)
+            }
+        }
+        return alignments
     }
 
     private static func parseNumbered(_ line: String) -> (String, String)? {
