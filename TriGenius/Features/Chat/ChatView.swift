@@ -276,7 +276,12 @@ struct CoachChatView: View {
                 // Tapping anywhere in the message area also dismisses it.
                 .onTapGesture { inputFocused = false }
                 .onChange(of: viewModel.messages.count) {
-                    if let last = viewModel.messages.last {
+                    // While the thinking dots are up they sit below the last
+                    // message — scroll to them, not the message, or an appended
+                    // tool bubble pushes them out of view.
+                    if viewModel.isThinking {
+                        withAnimation { proxy.scrollTo("thinking", anchor: .bottom) }
+                    } else if let last = viewModel.messages.last {
                         withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
                     }
                 }

@@ -36,7 +36,19 @@ extension View {
                 }
         }
         #else
+        // Replace the default selection gesture: a bare tap would leave it
+        // mid-flight and block the enclosing ScrollView until the next touch.
+        // Long-press then drag scrubs; anything shorter falls through to scroll.
         return chartXSelection(value: snapped)
+            .chartGesture { proxy in
+                LongPressGesture(minimumDuration: 0.2)
+                    .sequenced(before: DragGesture(minimumDistance: 0))
+                    .onChanged { value in
+                        guard case .second(true, let drag?) = value else { return }
+                        proxy.selectXValue(at: drag.location.x)
+                    }
+                    .onEnded { _ in snapped.wrappedValue = nil }
+            }
         #endif
     }
 }
