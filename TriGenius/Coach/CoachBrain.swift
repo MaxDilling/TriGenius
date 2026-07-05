@@ -598,7 +598,7 @@ final class CoachBrain {
             "Reading the athlete's data from: \(sources). Activities and recovery metrics are merged into one history regardless of source.",
         ]
         if readSources.contains(.garmin) {
-            lines.append("- Garmin extras available: power-duration curve (get_power_curve) and a settings/metrics resync (sync_user_settings).")
+            lines.append("- Garmin extras available: a settings/metrics resync (sync_user_settings).")
         }
         switch writeTarget {
         case .garmin:

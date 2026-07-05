@@ -27,8 +27,6 @@ nonisolated enum GarminMappings {
         "walking": [6]
     ]
 
-    static let cyclingPowerCurveDurations: [Int] = [1, 5, 10, 20, 30, 60, 120, 300, 600, 1200, 1800, 3600]
-
     struct SportType { let sportTypeId: Int; let sportTypeKey: String; let displayOrder: Int
         var dict: [String: Any] { ["sportTypeId": sportTypeId, "sportTypeKey": sportTypeKey, "displayOrder": displayOrder] }
     }

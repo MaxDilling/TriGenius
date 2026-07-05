@@ -84,8 +84,8 @@ final class HealthKitService {
         var out: [IngestedActivity] = []
         for workout in workouts {
             let bounds = HRZones.upperBounds(snapshot: history.snapshot(asOf: workout.startDate))
-            let rec = try await normalizedRecord(for: workout, hrZoneBounds: bounds)
-            if let dto = Self.ingestDTO(from: rec) { out.append(dto) }
+            let (rec, powerCurveJSON) = try await normalizedRecord(for: workout, hrZoneBounds: bounds)
+            if let dto = Self.ingestDTO(from: rec, powerCurveJSON: powerCurveJSON) { out.append(dto) }
         }
         return out
     }
@@ -93,7 +93,7 @@ final class HealthKitService {
     /// Wrap a normalized record into an unscored `IngestedActivity` (mirrors
     /// `GarminService.ingestDTO`); the store computes TSS + effective distance from
     /// `detailsJSON` at ingest. Nil without an id/date.
-    private static func ingestDTO(from rec: [String: Any]) -> IngestedActivity? {
+    private static func ingestDTO(from rec: [String: Any], powerCurveJSON: String) -> IngestedActivity? {
         guard let id = rec["id"] as? String,
               let dateStr = rec["date"] as? String, let date = DateFormatter.ymd.date(from: dateStr) else { return nil }
         let detailsJSON = (try? JSONSerialization.data(withJSONObject: rec))
@@ -108,7 +108,8 @@ final class HealthKitService {
             distanceKm: (rec["distance_km"] as? NSNumber)?.doubleValue ?? 0,
             aerobicTE: nil,
             anaerobicTE: nil,
-            detailsJSON: detailsJSON
+            detailsJSON: detailsJSON,
+            powerCurveJSON: powerCurveJSON
         )
     }
 
@@ -123,7 +124,8 @@ final class HealthKitService {
     // `hrZoneBounds` (z1–z4 upper bpm, derived by the caller from the athlete's
     // thresholds for the activity's date) drives time-in-zone; pass nil to omit it.
 
-    func normalizedRecord(for workout: HKWorkout, hrZoneBounds: [Double]?) async throws -> [String: Any] {
+    func normalizedRecord(for workout: HKWorkout, hrZoneBounds: [Double]?) async throws -> (record: [String: Any], powerCurveJSON: String) {
+        var powerCurveJSON = ""
         let sport = Self.sportName(for: workout.workoutActivityType)
         let family = SportFamily(sportKey: sport)
         let durationMin = workout.duration / 60
@@ -190,11 +192,16 @@ final class HealthKitService {
             if let power = avg(.cyclingPower, .watt()) { cycling["avg_power_w"] = Int(power.rounded()) }
             if let power = peak(.cyclingPower, .watt()) { cycling["max_power_w"] = Int(power.rounded()) }
             if let cadence = avg(.cyclingCadence, rpm) { cycling["avg_cadence_rpm"] = Int(cadence.rounded()) }
-            // Normalized power for power-TSS, computed from the power stream when a
-            // power meter recorded one; absent it, TSS falls back to HR zones.
-            if let np = try? await fetchNormalizedPower(during: workout) {
+            // The power stream (when a power meter recorded one) feeds two derived
+            // values: normalized power for power-TSS — zeros kept, coasting counts
+            // toward NP (the TrainingPeaks convention; unlike pace, where a stop is
+            // not "slow running"), each reading covering its own real interval — and
+            // the max-mean power curve. Absent NP, TSS falls back to HR zones.
+            let series = (try? await quantityIntervalSeries(.cyclingPower, unit: .watt(), during: workout)) ?? []
+            if let np = NormalizedStream.normalized(series.map { (value: $0.value, seconds: $0.duration) }) {
                 cycling["normalized_power_w"] = Int(np.rounded())
             }
+            powerCurveJSON = PowerCurve.encode(PowerCurve.maxMeans(segments: Self.powerSegments(series)))
             if !cycling.isEmpty { data["cycling"] = cycling }
         case .swim:
             var swimming: [String: Any] = [:]
@@ -210,17 +217,26 @@ final class HealthKitService {
         case .strength, .other:
             break
         }
-        return data
+        return (data, powerCurveJSON)
     }
 
-    /// Normalized power (W) from the cycling power stream, via the shared
-    /// `NormalizedStream`. Each reading carries its own measurement interval, so the
-    /// 30 s window is real time. Zeros are kept (coasting counts toward NP — the
-    /// TrainingPeaks convention; unlike pace, where a stop is not "slow running").
-    /// Nil when no usable power series exists (no power meter).
-    private func fetchNormalizedPower(during workout: HKWorkout) async throws -> Double? {
-        let series = try await quantityIntervalSeries(.cyclingPower, unit: .watt(), during: workout)
-        return NormalizedStream.normalized(series.map { (value: $0.value, seconds: $0.duration) })
+    /// Expand the interval power series into contiguous 1 Hz segments (the shared
+    /// `PowerCurve.maxMeans` input): each reading repeats once per whole second it
+    /// covers, a >1 s gap between consecutive readings starts a new segment.
+    private static func powerSegments(_ series: [(start: Date, duration: TimeInterval, value: Double)]) -> [[Double]] {
+        var segments: [[Double]] = []
+        var current: [Double] = []
+        var previousEnd: Date?
+        for sample in series {
+            if let previousEnd, sample.start.timeIntervalSince(previousEnd) > 1, !current.isEmpty {
+                segments.append(current)
+                current = []
+            }
+            current.append(contentsOf: Array(repeating: sample.value, count: Int(sample.duration.rounded())))
+            previousEnd = sample.start.addingTimeInterval(sample.duration)
+        }
+        if !current.isEmpty { segments.append(current) }
+        return segments
     }
 
     /// Normalized graded speed (m/s) for a run, via the shared `NormalizedStream`. Nil

@@ -33,10 +33,11 @@ final class CoachToolRegistry {
 
 // MARK: - Activity / health read handler (source-agnostic)
 //
-// Always registered. Serves `get_health_metrics` from the local store, which
-// merges every enabled read source (Apple Health + Garmin), so the coach sees one
-// unified history regardless of where it came from. (Completed/planned workouts
-// are served by the unified `get_workouts` in `WorkoutSchedulingToolHandler`.)
+// Always registered. Serves `get_health_metrics` and `get_power_curve` from the
+// local store, which merges every enabled read source (Apple Health + Garmin), so
+// the coach sees one unified history regardless of where it came from.
+// (Completed/planned workouts are served by the unified `get_workouts` in
+// `WorkoutSchedulingToolHandler`.)
 
 @MainActor
 final class ActivityReadToolHandler: CoachToolHandler {
@@ -52,13 +53,67 @@ final class ActivityReadToolHandler: CoachToolHandler {
                     ],
                     "required": []
                 ]
+            ),
+            ToolDefinition(
+                name: "get_power_curve",
+                description: "Best cycling power (max mean average, watts) per standard duration (1 s – 6 h) over a date range, from the stored per-ride power streams — all sources merged. Each point names the ride that set it. Cycling only.",
+                parameters: [
+                    "type": "object",
+                    "properties": [
+                        "start_date": ["type": "string", "description": "Start date in YYYY-MM-DD format."],
+                        "end_date": ["type": "string", "description": "End date in YYYY-MM-DD format. Defaults to today."]
+                    ],
+                    "required": ["start_date"]
+                ]
             )
         ]
     }
 
     func execute(name: String, arguments: [String: Any]) async throws -> String {
-        guard name == "get_health_metrics" else { return "Unknown read tool: \(name)" }
-        return await DataSyncCoordinator.shared.healthMetrics(days: Coerce.int(arguments["days"]) ?? 7)
+        switch name {
+        case "get_health_metrics":
+            return await DataSyncCoordinator.shared.healthMetrics(days: Coerce.int(arguments["days"]) ?? 7)
+        case "get_power_curve":
+            return powerCurve(arguments: arguments)
+        default:
+            return "Unknown read tool: \(name)"
+        }
+    }
+
+    private func powerCurve(arguments: [String: Any]) -> String {
+        guard let startStr = arguments["start_date"] as? String,
+              let start = DateFormatter.ymd.date(from: startStr) else {
+            return "✗ Error: start_date must be a YYYY-MM-DD date."
+        }
+        let end: Date
+        if let endStr = arguments["end_date"] as? String {
+            guard let parsed = DateFormatter.ymd.date(from: endStr) else {
+                return "✗ Error: end_date must be a YYYY-MM-DD date."
+            }
+            end = parsed
+        } else {
+            end = Date()
+        }
+        guard start <= end else { return "✗ Error: start_date must be on or before end_date." }
+        let period = ["start": DateFormatter.ymd.string(from: start), "end": DateFormatter.ymd.string(from: end)]
+        let records = TrainingDataStore.shared.activities(from: start, to: end)
+        let points = PowerCurve.aggregate(records: records)
+        guard !points.isEmpty else {
+            return "No cycling power data between \(period["start"]!) and \(period["end"]!). Rides store their power curve at ingest; a per-source re-sync in Settings backfills older history."
+        }
+        let curve: [[String: Any]] = points.map { p in
+            ["duration_seconds": p.durationSeconds,
+             "duration_label": PowerCurve.durationLabel(p.durationSeconds),
+             "power_w": Int(p.watts.rounded()),
+             "activity_id": p.activityId,
+             "activity_name": p.activityName,
+             "activity_date": DateFormatter.ymd.string(from: p.date)]
+        }
+        return String(compactJSON: [
+            "period": period,
+            "curve": curve,
+            "activities_with_power_data": records.count { !$0.powerCurveJSON.isEmpty }
+        ])
     }
 }
 
@@ -505,30 +560,15 @@ final class WorkoutFeedbackToolHandler: CoachToolHandler {
 // MARK: - Garmin Tool Handler (Garmin-only read extras)
 //
 // Registered only when Garmin is an active READ source. The source-agnostic reads
-// (`get_health_metrics` here, `get_workouts` in `WorkoutSchedulingToolHandler`) and
-// planned-workout writes are brand-neutral. What's left here is what is genuinely
-// Garmin-specific: the power-duration curve and the settings resync.
+// (`get_health_metrics`/`get_power_curve` in `ActivityReadToolHandler`,
+// `get_workouts` in `WorkoutSchedulingToolHandler`) and planned-workout writes are
+// brand-neutral. What's left here is what is genuinely Garmin-specific: the
+// settings resync.
 
 @MainActor
 final class GarminToolHandler: CoachToolHandler {
-    private let service = GarminService.shared
-
     var definitions: [ToolDefinition] {
         [
-            ToolDefinition(
-                name: "get_power_curve",
-                description: "Compute a cycling power-duration curve from Garmin activity details over a date range.",
-                parameters: [
-                    "type": "object",
-                    "properties": [
-                        "start_date": ["type": "string", "description": "Start date in YYYY-MM-DD format."],
-                        "end_date": ["type": "string", "description": "End date in YYYY-MM-DD format."],
-                        "sport": ["type": "string", "enum": ["cycling"], "description": "Currently only cycling is supported."],
-                        "durations_seconds": ["type": "array", "description": "Optional custom duration list in seconds.", "items": ["type": "integer"]]
-                    ],
-                    "required": ["start_date", "end_date"]
-                ]
-            ),
             ToolDefinition(
                 name: "sync_user_settings",
                 description: "Refresh the athlete's Garmin-derived settings & metrics: wellness (sleep/HRV/resting HR), historical performance (FTP, VO2max, thresholds, CSS, weight) and training zones. Use when the athlete says they updated values in Garmin.",
@@ -541,20 +581,8 @@ final class GarminToolHandler: CoachToolHandler {
         guard await GarminAuth.shared.isAuthenticated else {
             return "Garmin is not connected. Please sign in under 'Read From → Garmin' in Settings."
         }
-        switch name {
-        case "get_power_curve":
-            let durations = (arguments["durations_seconds"] as? [Any])?.compactMap { Coerce.int($0) }
-            return await service.getPowerCurve(
-                startDate: arguments["start_date"] as? String ?? "",
-                endDate: arguments["end_date"] as? String ?? "",
-                sport: arguments["sport"] as? String ?? "cycling",
-                durationsSeconds: durations
-            )
-        case "sync_user_settings":
-            return await DataSyncCoordinator.shared.refreshGarminMetrics()
-        default:
-            return "Unknown Garmin tool: \(name)"
-        }
+        guard name == "sync_user_settings" else { return "Unknown Garmin tool: \(name)" }
+        return await DataSyncCoordinator.shared.refreshGarminMetrics()
     }
 }
 

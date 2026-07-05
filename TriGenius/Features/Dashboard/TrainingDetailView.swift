@@ -608,7 +608,7 @@ struct TrainingDetailView: View {
                     }
                     hrScrubMarks
                 }
-                .chartDateScrubbing($hrScrubDate) { date in
+                .chartScrubbing($hrScrubDate) { date in
                     heartRateSamples.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) })?.date
                 }
                 .chartYScale(domain: .automatic(includesZero: false))

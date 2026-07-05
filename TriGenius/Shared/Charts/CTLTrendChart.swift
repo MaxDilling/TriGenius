@@ -58,7 +58,7 @@ struct CTLTrendChart: View {
         }
         .chartYScale(domain: yDomain)
         .frame(height: 160)
-        .chartDateScrubbing($scrubDate) { nearestDay(to: $0) }
+        .chartScrubbing($scrubDate) { nearestDay(to: $0) }
     }
 
     @ChartContentBuilder private var scrubMarks: some ChartContent {

@@ -3,20 +3,21 @@ import Charts
 
 // MARK: - Chart scrubbing & tooltip
 //
-// Shared date-scrubbing for every chart with a date X-axis: touch/drag selection
-// on iOS (`chartXSelection`), pointer hover on macOS (where a hit-testable
-// overlay would block nothing else — these charts carry no other gestures).
-// Charts render their own tooltip from the selected date via `ChartTooltip`.
+// Shared X-axis scrubbing for every chart (date axes and numeric ones like the
+// power curve's log duration): touch/drag selection on iOS (`chartXSelection`),
+// pointer hover on macOS (where a hit-testable overlay would block nothing else —
+// these charts carry no other gestures). Charts render their own tooltip from the
+// selected value via `ChartTooltip`.
 
 extension View {
-    /// Bind the date under the finger (iOS) or pointer (macOS) — nil when idle.
+    /// Bind the X value under the finger (iOS) or pointer (macOS) — nil when idle.
     /// `snap` quantizes the raw location to the chart's own data grid (nearest
     /// point / containing week); the binding is only written when the snapped
     /// value changes. The scrub rule + tooltip are chart *content*, so every
     /// write re-collects all marks — snapping turns per-pixel pointer events
     /// into one update per data point crossed.
-    func chartDateScrubbing(_ selection: Binding<Date?>, snap: @escaping (Date) -> Date?) -> some View {
-        let snapped = Binding<Date?>(
+    func chartScrubbing<V: Plottable & Equatable>(_ selection: Binding<V?>, snap: @escaping (V) -> V?) -> some View {
+        let snapped = Binding<V?>(
             get: { selection.wrappedValue },
             set: { raw in
                 let value = raw.flatMap(snap)
@@ -29,7 +30,7 @@ extension View {
                 .onContinuousHover { phase in
                     switch phase {
                     case .active(let location):
-                        snapped.wrappedValue = proxy.value(atX: location.x, as: Date.self)
+                        snapped.wrappedValue = proxy.value(atX: location.x, as: V.self)
                     case .ended:
                         snapped.wrappedValue = nil
                     }

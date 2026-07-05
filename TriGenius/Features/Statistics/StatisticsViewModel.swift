@@ -37,6 +37,7 @@ final class StatisticsViewModel {
     private(set) var zoneHR: [Double] = []
     private(set) var zonePower: [Double] = []
     private(set) var ramp: [RampWeek] = []
+    private(set) var powerCurve: [PowerCurve.Point] = []
 
     private var records: [WorkoutRecord] = []
 
@@ -55,6 +56,7 @@ final class StatisticsViewModel {
 
         rebuildShare()
         rebuildZones()
+        powerCurve = PowerCurve.aggregate(records: records)
     }
 
     private func rebuildShare() {

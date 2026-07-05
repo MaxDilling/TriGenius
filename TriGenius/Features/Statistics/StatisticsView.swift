@@ -32,6 +32,7 @@ struct StatisticsView: View {
                     rampCard
                     shareCard
                     zonesCard
+                    powerCurveCard
 
                     PerformanceMetricsSection()
                 }
@@ -129,6 +130,23 @@ struct StatisticsView: View {
                 if !viewModel.zonePower.isEmpty {
                     ZoneDistributionBar(model: ZoneDistributionModel(title: "Power", seconds: viewModel.zonePower))
                 }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(Theme.Spacing.l)
+        .glassSurface(cornerRadius: Theme.Radius.l)
+    }
+
+    // MARK: Power curve
+
+    private var powerCurveCard: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            Text("Power Curve").font(.headline)
+            if viewModel.powerCurve.isEmpty {
+                Text("No cycling power data in this range.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                PowerCurveChart(model: PowerCurveModel(points: viewModel.powerCurve))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

@@ -55,13 +55,6 @@ nonisolated enum GarminTransform {
         return String(format: "0:%04.1f", rem)
     }
 
-    /// Format duration seconds into compact power-curve labels.
-    static func formatDurationLabel(_ seconds: Int) -> String {
-        if seconds < 60 { return "\(seconds)s" }
-        if seconds < 3600 { return "\(seconds / 60)m" }
-        return "\(seconds / 3600)h"
-    }
-
     /// Analyze a simple trend from newest-first values.
     static func analyzeTrend(_ values: [Double]) -> String {
         guard values.count >= 3 else { return "Insufficient data" }
@@ -147,11 +140,6 @@ nonisolated enum GarminTransform {
         return segments
     }
 
-    /// Extract contiguous directPower sample segments (power-curve feature).
-    static func extractPowerSegments(_ details: [String: Any]) -> [[Double]] {
-        metricSegments(details, key: "directPower")
-    }
-
     /// Normalized graded speed (m/s) — true NGP, the pace analogue of normalized power.
     /// Shapes the 1 Hz `directSpeed` stream into (speed, grade, 1 s) samples, then
     /// defers the grade adjustment + math to the shared `GradeAdjustedPace` /
@@ -234,24 +222,6 @@ nonisolated enum GarminTransform {
             }
         }
         return out
-    }
-
-    /// Return the best rolling average for each requested duration.
-    static func bestRollingAverages(_ samples: [Double], durations: [Int]) -> [Int: Double] {
-        guard !samples.isEmpty else { return [:] }
-        var prefix: [Double] = [0]
-        for s in samples { prefix.append(prefix[prefix.count - 1] + s) }
-        let n = samples.count
-        var best: [Int: Double] = [:]
-        for d in durations where n >= d {
-            var maxAvg = -Double.greatestFiniteMagnitude
-            for i in 0...(n - d) {
-                let avg = (prefix[i + d] - prefix[i]) / Double(d)
-                if avg > maxAvg { maxAvg = avg }
-            }
-            best[d] = maxAvg
-        }
-        return best
     }
 
     // MARK: - Metric-history range parsers

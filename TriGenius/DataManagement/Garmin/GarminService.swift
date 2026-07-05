@@ -72,7 +72,21 @@ actor GarminService {
         return GarminMappings.activityTypeToSport[id] ?? "other"
     }
 
-    private func formatActivityRecord(_ activity: [String: Any]) async -> [String: Any] {
+    /// Full activity details with the truncation retry: Garmin caps the response at
+    /// `maxChart` rows, so when `metricsCount < totalMetricsCount` re-fetch sized to
+    /// the total — without it long rides get a silently clipped stream.
+    private func fetchFullDetails(id: String) async throws -> [String: Any] {
+        var detail = try await client.getActivityDetails(id: id, maxChart: 20000, maxPoly: 0)
+        let total = (detail["totalMetricsCount"] as? NSNumber)?.intValue ?? 0
+        let metricsCount = (detail["metricsCount"] as? NSNumber)?.intValue ?? 0
+        if total > 0, metricsCount > 0, metricsCount < total {
+            detail = try await client.getActivityDetails(id: id, maxChart: total, maxPoly: 0)
+        }
+        return detail
+    }
+
+    private func formatActivityRecord(_ activity: [String: Any]) async -> (rec: [String: Any], powerCurveJSON: String) {
+        var powerCurveJSON = ""
         let startTime = activity["startTimeLocal"] as? String ?? ""
         let activityType = (activity["activityType"] as? [String: Any])?["typeKey"] as? String ?? "unknown"
 
@@ -147,6 +161,13 @@ actor GarminService {
                 cycling["power_zones_seconds"] = zoneSeconds(activity, prefix: "powerTimeInZone")
             }
             data["cycling"] = cycling
+            // Max-mean power curve from the 1 Hz `directPower` stream (only runs for
+            // NEW activities — callers gate on the cache). No stream/details → "".
+            if let activityId = activity["activityId"].map({ "\($0)" }),
+               let details = try? await fetchFullDetails(id: activityId) {
+                powerCurveJSON = PowerCurve.encode(PowerCurve.maxMeans(
+                    segments: GarminTransform.metricSegments(details, key: "directPower")))
+            }
         } else if activityType.lowercased().contains("swim") {
             let poolLengthM = Coerce.double(activity["poolLength"]).map { $0 / 100 }
             let activityId = activity["activityId"].map { "\($0)" }
@@ -180,7 +201,7 @@ actor GarminService {
             // Effective distance + sTSS are resolved by the store at ingest
             // (`TrainingDataStore.ingest` → `TSSScoring.score`).
         }
-        return data
+        return (data, powerCurveJSON)
     }
 
     /// Garmin feel buckets (0/25/50/75/100) → 1–5. Nil when not rated.
@@ -201,7 +222,7 @@ actor GarminService {
     /// effective distance are computed by the store at ingest
     /// (`TrainingDataStore.ingest`), scored against the activity's own date. Returns
     /// nil without an id/date.
-    private func ingestDTO(from rec: [String: Any]) -> IngestedActivity? {
+    private func ingestDTO(from rec: [String: Any], powerCurveJSON: String) -> IngestedActivity? {
         guard let idNum = rec["id"] as? NSNumber else { return nil }
         guard let dateStr = rec["date"] as? String, let date = GarminTransform.date(from: dateStr) else { return nil }
         let detailsJSON = (try? JSONSerialization.data(withJSONObject: rec))
@@ -216,7 +237,8 @@ actor GarminService {
             distanceKm: (rec["distance_km"] as? NSNumber)?.doubleValue ?? 0,
             aerobicTE: (rec["aerobic_te"] as? NSNumber)?.doubleValue,
             anaerobicTE: (rec["anaerobic_te"] as? NSNumber)?.doubleValue,
-            detailsJSON: detailsJSON
+            detailsJSON: detailsJSON,
+            powerCurveJSON: powerCurveJSON
         )
     }
 
@@ -258,10 +280,10 @@ actor GarminService {
                     // fetch inside formatActivityRecord. One span per activity, so the
                     // timeline shows whether these round-trips are the launch bottleneck.
                     let dp = Perf.begin("garmin.activityDetail")
-                    let rec = await formatActivityRecord(activity)
+                    let (rec, powerCurveJSON) = await formatActivityRecord(activity)
                     Perf.end(dp)
                     formatted.append(rec)
-                    if let dto = ingestDTO(from: rec) { toIngest.append(dto) }
+                    if let dto = ingestDTO(from: rec, powerCurveJSON: powerCurveJSON) { toIngest.append(dto) }
                 }
                 if formatted.count >= count { break }
             }
@@ -299,7 +321,8 @@ actor GarminService {
             for activity in raw {
                 let gid = (activity["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" }
                 if !force, let gid, cache[gid] != nil { continue }   // cache: skip known
-                var rec = await formatActivityRecord(activity)
+                let (formatted, powerCurveJSON) = await formatActivityRecord(activity)
+                var rec = formatted
                 // Preserve a prior manual distance override across a forced re-fetch.
                 if let gid, let cached = cache[gid],
                    let data = cached.detailsJSON.data(using: .utf8),
@@ -307,91 +330,12 @@ actor GarminService {
                     rec["manual_distance_m"] = prior
                 }
                 // TSS + effective distance are scored by the store at ingest.
-                if let dto = ingestDTO(from: rec) { toIngest.append(dto) }
+                if let dto = ingestDTO(from: rec, powerCurveJSON: powerCurveJSON) { toIngest.append(dto) }
             }
             await TrainingDataStore.shared.ingest(toIngest)
             return toIngest.count
         } catch {
             return nil
-        }
-    }
-
-    // MARK: - get_power_curve
-
-    func getPowerCurve(startDate: String, endDate: String, sport: String = "cycling", durationsSeconds: [Int]?) async -> String {
-        let sportKey = Coerce.token(sport, default: "cycling")
-        if sportKey != "cycling" {
-            return resultString(success: false, data: nil, message: "Power curve analysis is currently supported only for cycling.")
-        }
-        let start = GarminTransform.formatDate(startDate)
-        let end = GarminTransform.formatDate(endDate)
-        guard let startD = GarminTransform.date(from: start), let endD = GarminTransform.date(from: end) else {
-            return resultString(success: false, data: nil, message: "Invalid date format. Use YYYY-MM-DD.")
-        }
-        if startD > endD {
-            return resultString(success: false, data: nil, message: "start_date must be on or before end_date.")
-        }
-        let durations = Array(Set((durationsSeconds ?? GarminMappings.cyclingPowerCurveDurations).filter { $0 > 0 })).sorted()
-        if durations.isEmpty {
-            return resultString(success: false, data: nil, message: "durations_seconds must contain at least one positive integer.")
-        }
-
-        do {
-            let targetIDs = GarminMappings.sportFilterIDs[sportKey] ?? []
-            let rawActivities = try await client.getActivitiesByDate(start: start, end: end)
-            let activities: [(id: String, name: String, date: String)] = rawActivities.compactMap { a in
-                let st = a["startTimeLocal"] as? String ?? ""
-                guard st.count >= 10 else { return nil }
-                if !targetIDs.isEmpty, let sid = (a["sportTypeId"] as? NSNumber)?.intValue, !targetIDs.contains(sid) { return nil }
-                guard let id = a["activityId"].map({ "\($0)" }) else { return nil }
-                return (id, a["activityName"] as? String ?? "Activity", String(st.prefix(10)))
-            }
-            if activities.isEmpty {
-                return resultString(success: false, data: nil, message: "No \(sportKey) activities found between \(start) and \(end).")
-            }
-
-            var bestCurve: [Int: [String: Any]] = [:]
-            var activitiesWithPower = 0
-            for activity in activities {
-                var detail = try await client.getActivityDetails(id: activity.id, maxChart: 20000, maxPoly: 0)
-                let total = (detail["totalMetricsCount"] as? NSNumber)?.intValue ?? 0
-                let metricsCount = (detail["metricsCount"] as? NSNumber)?.intValue ?? 0
-                if total > 0, metricsCount > 0, metricsCount < total {
-                    detail = try await client.getActivityDetails(id: activity.id, maxChart: total, maxPoly: 0)
-                }
-                let segments = GarminTransform.extractPowerSegments(detail)
-                if segments.isEmpty { continue }
-                activitiesWithPower += 1
-                for segment in segments {
-                    for (duration, power) in GarminTransform.bestRollingAverages(segment, durations: durations) {
-                        if let existing = bestCurve[duration], let p = existing["power_w"] as? Int, Double(p) >= power { continue }
-                        bestCurve[duration] = [
-                            "duration_seconds": duration,
-                            "duration_label": GarminTransform.formatDurationLabel(duration),
-                            "power_w": Int(power.rounded()),
-                            "activity_id": activity.id,
-                            "activity_name": activity.name,
-                            "activity_date": activity.date
-                        ]
-                    }
-                }
-            }
-            if bestCurve.isEmpty {
-                return resultString(success: false, data: nil, message: "No cycling power samples found between \(start) and \(end).")
-            }
-            let curve = durations.compactMap { bestCurve[$0] }
-            let data: [String: Any] = [
-                "sport": sportKey,
-                "period": ["start": start, "end": end],
-                "durations_seconds": durations,
-                "curve": curve,
-                "activities_analyzed": activities.count,
-                "activities_with_power_data": activitiesWithPower,
-                "data_source": "activity_details.directPower"
-            ]
-            return resultString(success: true, data: data, message: "Computed cycling power curve from \(activitiesWithPower) activities")
-        } catch {
-            return resultString(success: false, data: nil, message: "Failed to compute power curve: \(authMessage(error))")
         }
     }
 

@@ -89,7 +89,7 @@ struct SportShareChart: View {
                 }
             }
             .frame(height: 180)
-            .chartDateScrubbing($scrubDate) { date in
+            .chartScrubbing($scrubDate) { date in
                 model.weeks.last(where: { $0.weekStart <= date })?.weekStart
             }
             legend

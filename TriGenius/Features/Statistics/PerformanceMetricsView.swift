@@ -297,7 +297,7 @@ struct MetricCard: View {
             // its plot to the frame by default — without this the area bleeds
             // far outside the small sparkline rect.
             .clipped()
-            .chartDateScrubbing($scrubDate) { date in
+            .chartScrubbing($scrubDate) { date in
                 recentPoints.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) })?.date
             }
         } else {
@@ -421,7 +421,7 @@ private var chart: some View {
                 }
                 scrubMarks
             }
-            .chartDateScrubbing($scrubDate) { date in
+            .chartScrubbing($scrubDate) { date in
                 visiblePoints.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) })?.date
             }
             .chartYScale(domain: tightDomain(visiblePoints))
