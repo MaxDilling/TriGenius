@@ -1,5 +1,13 @@
+.env
+
 *.db
+*.store*
 *.png
 
 ref/*
 TriGenius.xcodeproj/xcuserdata/maxdillinger.xcuserdatad/xcdebugger/Breakpoints_v2.xcbkptlist
+dist/
+
+# sourcekit-lsp build server config — machine-specific DerivedData paths
+buildServer.json
+.compile
