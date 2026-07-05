@@ -138,5 +138,10 @@ struct RootTabView: View {
             }
         }
         .environment(router)
+        // Trace marker: aligns the Instruments timeline with each tab switch, so
+        // hangs/hitches right after it attribute to that tab's first build + load.
+        .onChange(of: router.selectedTab) { old, new in
+            Perf.event("tabSwitch", "\(old)→\(new)")
+        }
     }
 }

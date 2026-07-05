@@ -240,6 +240,7 @@ struct ATPTabView: View {
     // MARK: Load / save
 
     private func load() {
+        let perf = Perf.begin("ATP.load"); defer { Perf.end(perf) }
         let store = TrainingDataStore.shared
         if let p = store.atpParams() {
             methodology = p.methodology
