@@ -3,8 +3,9 @@ import Combine
 
 // MARK: - Dashboard View
 //
-// The athlete's home screen. Card-based layout (see the design mockups):
-//   • Header: greeting + calendar shortcut.
+// The athlete's home screen. Card-based layout: a fixed header (greeting +
+// Settings entry), then the `DashboardSection` cards in the athlete's configured
+// order/visibility (`AppSettings.dashboardLayout`, Settings → Dashboard layout):
 //   • Plan banner: current ATP period + countdown to the next A event; taps
 //     through to the Plan tab.
 //   • Performance Insights: CTL / ATL / TSB stat tiles — display-only (the full
@@ -40,7 +41,7 @@ struct DashboardView: View {
             readSources: readSources,
             weeklyStructure: weeklyStructure,
             makeBackend: makeBackend,
-            aiInsightEnabled: settings.aiDashboardInsight
+            aiInsightEnabled: settings.isVisible(.aiInsight)
         )
     }
 
@@ -54,12 +55,9 @@ struct DashboardView: View {
                         ProgressView("Loading…").padding(.top, 60)
                     } else {
                         header
-                        planBanner
-                        performanceInsights
-                        weeklyTarget
-                        statistics
-                        aiInsightCard
-                        upNext
+                        ForEach(settings.dashboardLayout.filter(\.isVisible)) { item in
+                            sectionView(item.section)
+                        }
                     }
                 }
             }
@@ -86,10 +84,24 @@ struct DashboardView: View {
         .onChange(of: structureSignature) {
             Task { await viewModel.load(context: context) }
         }
-        // Toggling the AI summary on/off (Settings → Dashboard) — generate or clear
-        // the insight without a full sync.
-        .onChange(of: settings.aiDashboardInsight) {
+        // Toggling the AI summary on/off (Settings → Dashboard layout) — generate or
+        // clear the insight without a full sync. Watches only this section's
+        // visibility, not the whole layout, so a mere reorder never re-loads.
+        .onChange(of: settings.isVisible(.aiInsight)) {
             Task { await viewModel.load(context: context) }
+        }
+    }
+
+    /// Renders one configurable dashboard section (order + visibility come from
+    /// `AppSettings.dashboardLayout`; the header stays fixed above them).
+    @ViewBuilder private func sectionView(_ section: DashboardSection) -> some View {
+        switch section {
+        case .planBanner: planBanner
+        case .performance: performanceInsights
+        case .weeklyTarget: weeklyTarget
+        case .statistics: statistics
+        case .aiInsight: aiInsightCard
+        case .upNext: upNext
         }
     }
 
@@ -309,7 +321,7 @@ struct DashboardView: View {
     // glyph and an iridescent gradient hairline around the card. A heuristic
     // fallback is surfaced instantly while the model line is generated.
     @ViewBuilder private var aiInsightCard: some View {
-        if settings.aiDashboardInsight, let insight = viewModel.insight, !insight.isEmpty {
+        if let insight = viewModel.insight, !insight.isEmpty {
             let parsed = DashboardInsight.parse(insight)
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "apple.intelligence")

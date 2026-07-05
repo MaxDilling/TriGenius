@@ -51,6 +51,50 @@ enum WriteTarget: String, CaseIterable, Identifiable {
     }
 }
 
+// MARK: - Dashboard Layout
+
+/// One configurable dashboard content section (the header is fixed). Declaration
+/// order is the default display order.
+enum DashboardSection: String, CaseIterable, Identifiable {
+    case planBanner = "plan_banner"
+    case performance = "performance"
+    case weeklyTarget = "weekly_target"
+    case statistics = "statistics"
+    case aiInsight = "ai_insight"
+    case upNext = "up_next"
+
+    var id: String { rawValue }
+    var displayName: String {
+        switch self {
+        case .planBanner: return "Plan Banner"
+        case .performance: return "Performance Insights"
+        case .weeklyTarget: return "Weekly Target"
+        case .statistics: return "Statistics"
+        case .aiInsight: return "AI Summary"
+        case .upNext: return "Up Next"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .planBanner: return "flag.checkered"
+        case .performance: return "chart.bar.xaxis"
+        case .weeklyTarget: return "target"
+        case .statistics: return "chart.xyaxis.line"
+        case .aiInsight: return "sparkles"
+        case .upNext: return "calendar.day.timeline.left"
+        }
+    }
+}
+
+/// A section's slot in the athlete's dashboard layout: position (array order) +
+/// visibility.
+struct DashboardLayoutItem: Identifiable, Equatable {
+    let section: DashboardSection
+    var isVisible: Bool
+
+    var id: DashboardSection { section }
+}
+
 // MARK: - App Settings
 
 final class AppSettings: ObservableObject {
@@ -116,10 +160,12 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(proactiveNotifications, forKey: Self.proactiveNotificationsKey) }
     }
     static let proactiveNotificationsKey = "proactive_notifications"
-    /// Whether the dashboard shows the AI-generated insight card. Off by default —
-    /// the card costs an LLM call per load.
-    @Published var aiDashboardInsight: Bool {
-        didSet { UserDefaults.standard.set(aiDashboardInsight, forKey: "ai_dashboard_insight") }
+    /// Dashboard section order + visibility (Settings → Dashboard → Dashboard
+    /// layout). Persisted as an order-preserving CSV under `dashboard_sections`,
+    /// hidden sections prefixed `-`. Hiding the AI summary also skips its LLM call
+    /// (the card is off by default — it costs a call per load).
+    @Published var dashboardLayout: [DashboardLayoutItem] {
+        didSet { UserDefaults.standard.set(Self.encode(dashboardLayout), forKey: "dashboard_sections") }
     }
     /// How much of an over-delivered discipline's surplus TSS credits the other
     /// weekly rings (0 = strict per-discipline, 1 = fully fungible). Read by
@@ -165,8 +211,20 @@ final class AppSettings: ObservableObject {
         lmStudioModel = UserDefaults.standard.string(forKey: "lmstudio_model") ?? "local-model"
         debugMode = UserDefaults.standard.bool(forKey: "debug_mode")
         proactiveNotifications = UserDefaults.standard.bool(forKey: Self.proactiveNotificationsKey)
-        aiDashboardInsight = UserDefaults.standard.bool(forKey: "ai_dashboard_insight")
+        let layout = Self.loadDashboardLayout()
+        dashboardLayout = layout
+        // One-time migration of the pre-layout AI-summary toggle (its value seeded
+        // the load above; didSet doesn't fire during init, so persist explicitly).
+        if UserDefaults.standard.object(forKey: "ai_dashboard_insight") != nil {
+            UserDefaults.standard.set(Self.encode(layout), forKey: "dashboard_sections")
+            UserDefaults.standard.removeObject(forKey: "ai_dashboard_insight")
+        }
         crossTrainingCreditFactor = Self.loadCreditFactor()
+    }
+
+    /// Whether a dashboard section is currently shown.
+    func isVisible(_ section: DashboardSection) -> Bool {
+        dashboardLayout.first { $0.section == section }?.isVisible ?? false
     }
 
     /// The cross-training credit factor, defaulting to 0.5 when never set (a bare
@@ -176,6 +234,32 @@ final class AppSettings: ObservableObject {
     }
     /// Credit factor as seen by non-SwiftUI callers (the background widget refresh).
     static func storedCreditFactor() -> Double { loadCreditFactor() }
+
+    // MARK: - Dashboard-layout persistence
+
+    private static func encode(_ layout: [DashboardLayoutItem]) -> String {
+        layout.map { ($0.isVisible ? "" : "-") + $0.section.rawValue }.joined(separator: ",")
+    }
+
+    private static func loadDashboardLayout() -> [DashboardLayoutItem] {
+        var items: [DashboardLayoutItem] = []
+        if let csv = UserDefaults.standard.string(forKey: "dashboard_sections"), !csv.isEmpty {
+            for token in csv.split(separator: ",") {
+                let hidden = token.hasPrefix("-")
+                guard let section = DashboardSection(rawValue: String(hidden ? token.dropFirst() : token)) else { continue }
+                items.append(DashboardLayoutItem(section: section, isVisible: !hidden))
+            }
+        } else {
+            // First run: everything visible except the AI summary, which keeps the
+            // legacy opt-in toggle's value (false when never set).
+            let aiOn = UserDefaults.standard.bool(forKey: "ai_dashboard_insight")
+            items = DashboardSection.allCases.map { DashboardLayoutItem(section: $0, isVisible: $0 != .aiInsight || aiOn) }
+        }
+        // Sections the app gained after the layout was stored surface at the end.
+        let known = Set(items.map(\.section))
+        items += DashboardSection.allCases.filter { !known.contains($0) }.map { DashboardLayoutItem(section: $0, isVisible: true) }
+        return items
+    }
 
     // MARK: - Read-source / write-target persistence
 
@@ -364,10 +448,12 @@ struct SettingsView: View {
                 Text("Lets the coach read your calendar's busy/free windows to plan workouts around busy days. Read-only — TriGenius never changes your events.")
             }
 
-            // Dashboard section — opt-in AI summary card + weekly-ring tuning.
+            // Dashboard section — section layout + weekly-ring tuning.
             Section {
-                Toggle(isOn: $settings.aiDashboardInsight) {
-                    Label("AI summary", systemImage: "sparkles")
+                NavigationLink {
+                    DashboardLayoutView(settings: settings)
+                } label: {
+                    Label("Dashboard layout", systemImage: "rectangle.grid.1x2")
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
@@ -381,7 +467,7 @@ struct SettingsView: View {
             } header: {
                 Text("Dashboard")
             } footer: {
-                Text("AI summary shows a one-line read on your week (an LLM call per load, off by default). Cross-training credit lets surplus in one discipline partly fill the other weekly rings — 0 % keeps each discipline strict, 100 % treats load as fully interchangeable.")
+                Text("Dashboard layout picks which sections appear and in what order (the AI summary costs an LLM call per load, off by default). Cross-training credit lets surplus in one discipline partly fill the other weekly rings — 0 % keeps each discipline strict, 100 % treats load as fully interchangeable.")
             }
 
             // Notifications section — proactive background coaching.
@@ -476,7 +562,7 @@ struct SettingsView: View {
                                 readSources: settings.readSources,
                                 weeklyStructure: memory.weeklyStructure,
                                 makeBackend: settings.makeBackend,
-                                aiInsightEnabled: settings.aiDashboardInsight
+                                aiInsightEnabled: settings.isVisible(.aiInsight)
                             )
                         )
                     } label: {
