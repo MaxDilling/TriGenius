@@ -208,3 +208,48 @@ If the athlete does no strength training:
 
 ### Common brick mistake
 - Every long bike followed by a long run multiplies fatigue and run injury risk. Most bricks should have a *short* run (10–20 min) if the goal is transition adaptation. Long-run-after-long-ride is for peak specificity only, and sparingly.
+
+---
+
+## 12. Schrittfrequenz (Cadence)
+
+**Grundlage:** Geschwindigkeit = Kadenz × Schrittlänge. Beide Stellschrauben sind austauschbar — es gibt keine physiologisch "korrekte" Kadenz, sondern individuelle Optima, die von Beinlänge, Tempo und Lauferfahrung abhängen.
+
+**Die "180 spm"-Regel (Jack Daniels) ist kein wissenschaftlicher Grenzwert.** Sie basiert auf einer informellen Beobachtung bei Elite-Läufern der Olympischen Spiele 1984, nicht auf einer kontrollierten Studie. Sie überträgt sich nicht 1:1 auf Freizeitläufer, kleinere Menschen oder langsamere Tempi. Als grobe Orientierung, nicht als Ziel für jeden Athleten.
+
+### Typische Kadenz-Bereiche (grobe Orientierung, keine Studien-Schwellenwerte)
+
+| Läufertyp / Tempo | Kadenz (spm) |
+|---|---|
+| Anfänger, Easy Pace | 150–165 | 
+| Freizeitläufer, Easy Pace | 160–175 |
+| Freizeitläufer, Race Pace (10k–HM) | 170–185 |
+| Elite, Easy Pace | 175–185 |
+| Elite, Race Pace | 185–200+ |
+
+Kadenz steigt mit Tempo (bis zu einem Plateau) und tendenziell mit Lauferfahrung. Große Menschen laufen bei gleichem Tempo oft mit etwas niedrigerer Kadenz als kleine — das ist kein Fehler.
+
+**Overstriding ist das eigentliche Problem, nicht niedrige Kadenz per se.** Overstriding = Aufsatzpunkt des Fußes deutlich vor dem Körperschwerpunkt, meist mit gestrecktem Knie. Das erhöht Bremskräfte und vertikale Belastungsraten. Eine niedrige Kadenz korreliert oft mit Overstriding, ist aber nicht dasselbe — ein Läufer kann niedrige Kadenz und trotzdem sauberen Fußaufsatz haben.
+
+**Evidenz zu Kadenzerhöhung und Verletzungsrisiko (moderat, mechanistisch fundiert, nicht durch große RCTs auf harte Endpunkte bestätigt):**
+- Eine Erhöhung der Kadenz um **5–10 %** gegenüber der selbstgewählten Kadenz reduziert nachweislich vertikale Belastungsspitzen, Bremskräfte und die Belastung am Knie (patellofemoral) sowie an der Hüfte (Heiderscheit et al. 2011).
+- Mehr als 10 % Erhöhung bringt keinen klaren Zusatznutzen und erhöht die metabolische Kosten sowie die Belastung am Sprunggelenk/der Achillessehne.
+- Assoziative Daten (Luedke 2016, Kliethermes 2021) verknüpfen niedrigere Kadenz mit erhöhtem Risiko für tibiale Stressreaktionen — Kausalität nicht durch RCT belegt.
+
+### Pitfall: Kadenz-Coaching bei beschwerdefreien Läufern
+Ein Läufer ohne Beschwerden, ohne Overstriding-Muster und mit stabiler Leistungsentwicklung braucht **keine** Kadenz-Intervention, nur weil die Uhr 165 spm statt 180 anzeigt. Kadenz ist ein Mittel, kein Ziel.
+
+### Pitfall: Zu schnelle Kadenz-Änderung
+Wie bei Volumen gilt: abrupte Technikänderungen sind ein Belastungsreiz für andere Gewebestrukturen (Waden, Achillessehne). Kadenzerhöhung schrittweise vornehmen — **max. 5–10 % pro Anpassungsphase**, über mehrere Wochen eingeschliffen (z. B. per Metronom in kurzen Intervallen von 5–10 Min. innerhalb eines Easy Runs), nicht als Dauerzustand von Tag 1 an.
+
+### Wann Kadenz-Arbeit sinnvoll ist
+- Klares Overstriding-Muster (visuell oder via Wearable: hohe Vertical Oscillation + niedrige Kadenz + langer Ground Contact Time)
+- Historie von Schienbein-/Knie-Beschwerden ohne andere klare Ursache
+- Explizite Laufökonomie-Optimierung bei ambitionierten Athleten
+
+### Wann eher nicht
+- Beschwerdefreier Läufer, stabile Progression
+- Anfänger in den ersten 8–12 Wochen: Fokus liegt auf Volumenaufbau und Laufkonsistenz (siehe §5) — Technikfeedback zusätzlich zur Belastungssteigerung erhöht die Zahl gleichzeitiger Stressoren unnötig
+- Wearable-Kadenzwert allein, ohne Beschwerden oder Bewegungsauffälligkeit, ist kein Interventionsgrund
+
+**Anfänger-spezifisch:** Laufanfänger zeigen oft niedrigere Kadenz (150–165 spm) durch Unsicherheit, Rumpfkraft-Defizite und geringere Schrittfrequenz-Ökonomie — das ist in der Aufbauphase normal und muss nicht aktiv korrigiert werden, sofern kein Overstriding oder Beschwerden vorliegen. Metronom-Feedback kann helfen, ist aber ein zusätzlicher kognitiver Load und sollte nicht mit Volumenaufbau in derselben Trainingswoche kombiniert werden.
