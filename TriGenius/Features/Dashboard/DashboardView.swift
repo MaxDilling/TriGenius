@@ -54,6 +54,9 @@ struct DashboardView: View {
                     if viewModel.isLoading && viewModel.pmc == nil {
                         ProgressView("Loading…").padding(.top, 60)
                     } else {
+                        if let error = viewModel.errorMessage {
+                            Text(error).font(.caption).foregroundStyle(.red)
+                        }
                         header
                         ForEach(settings.dashboardLayout.filter(\.isVisible)) { item in
                             sectionView(item.section)
@@ -67,7 +70,12 @@ struct DashboardView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)
         #endif
-        .refreshable { await viewModel.refresh(context: context) }
+        // Unstructured Task so the sync survives the reloads it triggers along the way
+        // (`trainingDataDidChange` fires mid-sync from the metrics ingest, re-rendering
+        // this view) — `.refreshable`'s own task gets cancelled by that re-render before
+        // the Garmin fetch for new workouts even starts, which is why a manual pull
+        // silently missed new activities that only showed up after an app restart.
+        .refreshable { await Task { await viewModel.refresh(context: context) }.value }
         .task { await viewModel.loadInitialIfNeeded(context: context) }
         // Any local-store mutation (coach `add_workout`, a sync, a Calendar
         // reschedule/delete) updates the DB but not this view's cached snapshot;

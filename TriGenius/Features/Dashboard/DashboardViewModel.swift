@@ -68,12 +68,13 @@ final class DashboardViewModel {
 
     /// Re-sync from all enabled sources, then recompute everything.
     func refresh(context: DashboardContext) async {
-        await DataSyncCoordinator.shared.syncAll(context.readSources)
+        let synced = await DataSyncCoordinator.shared.syncAll(context.readSources)
         // Push local plan changes down to the provider — including re-creating any
         // TriGenius plan the athlete deleted on the provider side (local is source of
         // truth). syncAll just cleared the dead refs; this re-pushes them.
         await DataSyncCoordinator.shared.reconcileWriteTarget(AppSettings.storedWriteTarget())
-        await load(context: context)
+        await load(context: context)   // resets errorMessage — set it after, not before.
+        if !synced { errorMessage = "Sync failed — showing last synced data." }
     }
 
     func load(context: DashboardContext) async {

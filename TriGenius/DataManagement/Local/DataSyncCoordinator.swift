@@ -148,8 +148,10 @@ final class DataSyncCoordinator {
 
     /// Sync every enabled read source in turn (parallel read). Each source keeps its
     /// own watermark, so they advance independently. Garmin is skipped silently when
-    /// not authenticated.
-    func syncAll(_ sources: Set<DataSource>) async {
+    /// not authenticated. Returns `false` if any source failed, so a manual refresh
+    /// can surface that instead of silently looking like "nothing new".
+    @discardableResult
+    func syncAll(_ sources: Set<DataSource>) async -> Bool {
         let perf = Perf.begin("syncAll"); defer { Perf.end(perf) }
         // Sync the chosen metrics source first so the FTP/threshold series is present
         // before the *other* source's activities are scored at ingest (ingest order is
@@ -160,9 +162,11 @@ final class DataSyncCoordinator {
             if b == metricsSource { return false }
             return a.rawValue < b.rawValue
         }
+        var allSucceeded = true
         for source in ordered {
-            _ = await sync(source: source)
+            if await sync(source: source) == nil { allSucceeded = false }
         }
+        return allSucceeded
     }
 
     // MARK: - Deep history backfill (CTL warm-up)
