@@ -11,3 +11,7 @@ dist/
 # sourcekit-lsp build server config — machine-specific DerivedData paths
 buildServer.json
 .compile
+
+# TestFlight API-key credentials (local, per-Mac)
+Scripts/testflight.env
+.keys

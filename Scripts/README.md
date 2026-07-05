@@ -1,6 +1,13 @@
-# Release script
+# Release scripts
 
-`release.sh` builds, signs, notarizes, packages and publishes a macOS release of TriGenius. It's run manually from your own Mac (the one with Xcode-beta) — there is no CI for this.
+Two manual scripts, run from your own Mac (the one with Xcode-beta) — there is no CI:
+
+- **`release.sh`** — macOS: Developer ID build → notarize → `.dmg` → GitHub Release.
+- **`testflight.sh`** — iOS: Apple Distribution build → upload to App Store Connect / TestFlight.
+
+# macOS release (`release.sh`)
+
+`release.sh` builds, signs, notarizes, packages and publishes a macOS release of TriGenius.
 
 ## One-time setup
 
@@ -40,3 +47,35 @@ This will:
 5. Commit the version bump, tag `v1.1.0`, push both, and publish a GitHub Release with the `.dmg` attached
 
 Takes a few minutes, mostly waiting on Apple's notarization service. If notarization is rejected, the script prints the rejection log automatically.
+
+# iOS TestFlight (`testflight.sh`)
+
+`testflight.sh` bumps only the build number, archives the iOS build signed with **Apple Distribution**, and uploads it straight to App Store Connect (no git commit/tag, no GitHub release — betas are throwaway). `MARKETING_VERSION` stays owned by `release.sh`; you can upload many builds per version.
+
+## One-time setup
+
+1. **App record in App Store Connect** — [Apps → +](https://appstoreconnect.apple.com/apps): platform **iOS**, bundle id `net.Narica.TriGenius`. Without it the upload is rejected.
+
+2. **App IDs with capabilities** — `net.Narica.TriGenius` *and* the widget `net.Narica.TriGenius.WeeklyTargetWidget` must have HealthKit, iCloud/CloudKit, Push and App Groups enabled in the [Developer portal](https://developer.apple.com/account/resources/identifiers/list). Automatic signing (`-allowProvisioningUpdates`) creates the App Store provisioning profiles and the Apple Distribution certificate on demand.
+
+3. **App Store Connect API key** for the upload — an [API key](https://appstoreconnect.apple.com/access/integrations/api) with role **App Manager**. Download the `.p8` (you keep the raw file — unlike notarization, the `TriGenius-Notary` keychain profile isn't used here). Point the script at it via a gitignored `Scripts/testflight.env`:
+   ```
+   export ASC_KEY_PATH=/path/to/AuthKey_XXXXXXXXXX.p8
+   export ASC_KEY_ID=XXXXXXXXXX
+   export ASC_ISSUER_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+   ```
+
+## Uploading a build
+
+```
+Scripts/testflight.sh
+```
+
+Bumps `CURRENT_PROJECT_VERSION`, archives, signs and uploads. The build appears in TestFlight after a few minutes of "Processing".
+
+## Getting it to testers
+
+In App Store Connect → your app → **TestFlight**:
+
+- **Internal Testers** (up to 100) — people in *Users and Access* on your team. Instant, **no review**. Simplest for a small fixed circle.
+- **External Testers** (up to 10,000) — invited by email or public link. The **first build needs Beta App Review** (~1 day; HealthKit may draw questions). Create a group, add their emails.
