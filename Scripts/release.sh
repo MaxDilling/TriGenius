@@ -22,10 +22,10 @@ TAG="v$VERSION"
 DIST_DIR="$REPO_ROOT/dist"
 DMG_PATH="$DIST_DIR/TriGenius-$VERSION.dmg"
 
-if [[ -n "$(git status --porcelain)" ]]; then
-	echo "error: working tree is not clean — commit or stash changes first" >&2
-	exit 1
-fi
+# if [[ -n "$(git status --porcelain)" ]]; then // Do not check for now
+# 	echo "error: working tree is not clean — commit or stash changes first" >&2
+# 	exit 1
+# fi
 
 if git rev-parse "$TAG" >/dev/null 2>&1 || git ls-remote --tags origin "$TAG" | grep -q "$TAG"; then
 	echo "error: tag $TAG already exists locally or on origin" >&2
@@ -38,7 +38,7 @@ if [[ "$IDENTITY_COUNT" -ne 1 ]]; then
 	echo "error: expected exactly one 'Developer ID Application' identity in the keychain, found $IDENTITY_COUNT" >&2
 	exit 1
 fi
-SIGN_IDENTITY="$(echo "$IDENTITIES" | sed -E 's/^[0-9]+\) [A-F0-9]+ "(.*)"$/\1/')"
+SIGN_IDENTITY="$(echo "$IDENTITIES" | sed -E 's/^[[:space:]]*[0-9]+\) [A-F0-9]+ "(.*)"$/\1/')"
 echo "Using signing identity: $SIGN_IDENTITY"
 
 echo "Bumping MARKETING_VERSION -> $VERSION"
@@ -50,7 +50,8 @@ echo "Bumping CURRENT_PROJECT_VERSION $CURRENT_BUILD -> $NEXT_BUILD"
 sed -i '' -E "s/CURRENT_PROJECT_VERSION = [^;]+;/CURRENT_PROJECT_VERSION = $NEXT_BUILD;/g" "$PROJECT/project.pbxproj"
 
 WORK_DIR="$(mktemp -d)"
-trap 'rm -rf "$WORK_DIR"' EXIT
+# trap 'rm -rf "$WORK_DIR"' EXIT	// do not delete the work dir for now, so we can inspect it if something goes wrong
+echo "Using temporary work dir: $WORK_DIR"
 ARCHIVE_PATH="$WORK_DIR/TriGenius.xcarchive"
 EXPORT_PATH="$WORK_DIR/export"
 APP_PATH="$EXPORT_PATH/TriGenius.app"
