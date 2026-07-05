@@ -617,9 +617,9 @@ final class CoachBrain {
 // MARK: - Backend factory
 
 enum BackendType: String, CaseIterable, Identifiable {
-    case openRouter = "OpenRouter"
     case appleIntelligence = "Apple Intelligence"
     case lmStudio = "LM Studio"
+    case openRouter = "OpenRouter"
 
     var id: String { rawValue }
     var displayName: String { rawValue }

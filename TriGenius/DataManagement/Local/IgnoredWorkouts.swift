@@ -59,6 +59,11 @@ enum IgnoredWorkouts {
         save(entries.filter { $0.id != id })
     }
 
+    /// Wipe the whole blacklist — part of the in-app full data erase.
+    static func clearAll() {
+        save([])
+    }
+
     private static func save(_ list: [IgnoredWorkout]) {
         let data = try? JSONEncoder().encode(list)
         UserDefaults.standard.set(data, forKey: key)

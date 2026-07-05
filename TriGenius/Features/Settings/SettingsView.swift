@@ -7,8 +7,8 @@ import UniformTypeIdentifiers
 /// A *read* source: where athlete history is pulled from. Multiple can be active
 /// at once (parallel read), merged into the local store.
 enum DataSource: String, CaseIterable, Identifiable {
-    case garmin = "Garmin"
     case appleHealth = "Apple Health"
+    case garmin = "Garmin"
 
     var id: String { rawValue }
     var displayName: String { rawValue }
@@ -106,6 +106,13 @@ final class AppSettings: ObservableObject {
     @Published var useAppleCloudCompute: Bool {
         didSet { UserDefaults.standard.set(useAppleCloudCompute, forKey: "use_apple_cloud_compute") }
     }
+    /// Whether the athlete has explicitly consented to sending workout + health
+    /// data to the third-party cloud AI (OpenRouter). Gates the OpenRouter backend:
+    /// on-device Apple Intelligence needs no consent, the cloud path does. Persisted
+    /// under `cloud_ai_consent`.
+    @Published var cloudAIConsent: Bool {
+        didSet { UserDefaults.standard.set(cloudAIConsent, forKey: "cloud_ai_consent") }
+    }
     /// Stored in the Keychain (synchronizable via iCloud Keychain), never in
     /// UserDefaults — a secret shouldn't sit in plaintext or ride the CloudKit store.
     @Published var openRouterAPIKey: String {
@@ -192,8 +199,11 @@ final class AppSettings: ObservableObject {
     init() {
         openRouterAPIKey = KeychainStore.string(for: KeychainStore.openRouterAPIKey) ?? ""
         let savedBackend = UserDefaults.standard.string(forKey: "selected_backend") ?? ""
-        selectedBackend = BackendType(rawValue: savedBackend) ?? .openRouter
+        // Default to the privacy-safe on-device backend; cloud AI is an explicit,
+        // consented opt-in.
+        selectedBackend = BackendType(rawValue: savedBackend) ?? .appleIntelligence
         useAppleCloudCompute = UserDefaults.standard.bool(forKey: "use_apple_cloud_compute")
+        cloudAIConsent = UserDefaults.standard.bool(forKey: "cloud_ai_consent")
         openRouterModel = UserDefaults.standard.string(forKey: "openrouter_model") ?? Self.availableOpenRouterModels[0]
         readSources = Self.loadReadSources()
         metricsSource = Self.loadMetricsSource()
@@ -309,7 +319,7 @@ final class AppSettings: ObservableObject {
 
     var isConfigured: Bool {
         switch selectedBackend {
-        case .openRouter: return !openRouterAPIKey.isEmpty
+        case .openRouter: return cloudAIConsent && !openRouterAPIKey.isEmpty
         case .appleIntelligence: return true
         case .lmStudio: return !lmStudioBaseURL.isEmpty
         }
@@ -349,19 +359,33 @@ struct SettingsView: View {
     @State private var showAPIKey = false
     @State private var showClearConfirm = false
     @State private var showClearDataConfirm = false
+    @State private var showCloudConsent = false
+    #if DEBUG
+    @State private var showClearDBConfirm = false
     @State private var showDeletePerfConfirm = false
+    #endif
 
     var body: some View {
         List {
-            // Backend section
-            Section("AI Backend") {
+            // AI Coach section — which model answers. On-device Apple Intelligence
+            // is the private default; OpenRouter (cloud) is gated behind explicit
+            // consent because it sends training + health data to a third party.
+            Section {
                 Picker("Backend", selection: $settings.selectedBackend) {
                     ForEach(BackendType.allCases) { backend in
                         Text(backend.displayName).tag(backend)
                     }
                 }
                 .pickerStyle(.segmented)
-                .onChange(of: settings.selectedBackend) { onBackendChanged() }
+                .onChange(of: settings.selectedBackend) { _, new in
+                    // Selecting the cloud backend without prior consent opens the
+                    // consent sheet instead of activating it.
+                    if new == .openRouter && !settings.cloudAIConsent {
+                        showCloudConsent = true
+                    } else {
+                        onBackendChanged()
+                    }
+                }
 
                 switch settings.selectedBackend {
                 case .openRouter:
@@ -371,72 +395,22 @@ struct SettingsView: View {
                 case .lmStudio:
                     lmStudioSection
                 }
-            }
-
-            // Read sources — parallel; merged into the local store. Source selection
-            // only; each enabled source's own controls live in its section below.
-            Section {
-                ForEach(DataSource.allCases) { source in
-                    Toggle(isOn: readBinding(source)) {
-                        Label(source.displayName, systemImage: source.icon)
-                    }
-                }
-                // When both providers feed activities, pick exactly one to supply the
-                // performance + wellness metrics, so FTP/VO₂max/sleep aren't sourced twice.
-                if settings.readSources.count > 1 {
-                    Picker("Metrics from", selection: $settings.metricsSource) {
-                        ForEach(settings.readSources.sorted(by: { $0.rawValue < $1.rawValue })) { source in
-                            Text(source.displayName).tag(source)
-                        }
-                    }
-                }
             } header: {
-                Text("Read From")
+                Text("AI Coach")
             } footer: {
-                Text("Pull training and health data from one or both. Garmin Connect workouts already mirrored into Apple Health are skipped to avoid duplicates. When both are on, performance and wellness metrics come from the single \u{201C}Metrics from\u{201D} provider.")
+                Text("Apple Intelligence runs on your device — no training or health data leaves it. OpenRouter is a cloud service you connect with your own API key; using it sends your workout data to OpenRouter and the model you pick.")
             }
 
-            // Per-source controls — one section each, headed by the provider, so it's
-            // clear what belongs to whom. Each carries a Re-sync that re-pulls and
-            // recomputes that source's history in place.
-            if settings.readSources.contains(.garmin) {
-                Section {
-                    GarminLoginSection(settings: settings)
-                    ReadSourceSyncSection(source: .garmin)
-                } header: {
-                    Label(DataSource.garmin.displayName, systemImage: DataSource.garmin.icon)
-                } footer: {
-                    Text("Re-sync re-fetches your Garmin history and recomputes TSS for every activity.")
-                }
-            }
-            if settings.readSources.contains(.appleHealth) {
-                Section {
-                    ReadSourceSyncSection(source: .appleHealth)
-                } header: {
-                    Label(DataSource.appleHealth.displayName, systemImage: DataSource.appleHealth.icon)
-                } footer: {
-                    Text("Re-sync re-reads every Apple Health workout — recomputing heart rate, zones and TSS for sessions imported before they were supported.")
-                }
-            }
-
-            // Write target — where the coach schedules planned workouts.
+            // Data sources — read (Garmin / Apple Health) + write target live on
+            // their own sub-page to keep the root list scannable.
             Section {
-                Picker("Schedule workouts to", selection: $settings.writeTarget) {
-                    ForEach(WriteTarget.allCases.filter { $0.isSupportedOnThisPlatform }) { target in
-                        Text(target.displayName).tag(target)
-                    }
+                NavigationLink {
+                    DataSourcesView(settings: settings, onBackendChanged: onBackendChanged)
+                } label: {
+                    Label("Data Sources", systemImage: "arrow.triangle.2.circlepath")
                 }
-                .onChange(of: settings.writeTarget) { onBackendChanged() }
-
-                if settings.writeTarget == .garmin, !settings.readSources.contains(.garmin) {
-                    GarminLoginSection(settings: settings)
-                }
-            } header: {
-                Text("Write To")
             } footer: {
-                Text(settings.writeTarget == .appleWatch
-                     ? "Planned workouts are sent to the Apple Watch via WorkoutKit — start them from the Workout app."
-                     : "Planned workouts are created and scheduled in Garmin Connect. Switching targets re-syncs upcoming plans; nothing is lost.")
+                Text("Where TriGenius reads your training and health data from, and where it schedules planned workouts.")
             }
 
             // Schedule (calendar) section — gives the coach awareness of busy days.
@@ -535,7 +509,42 @@ struct SettingsView: View {
                 Text("Synced automatically from \(settings.metricsSource.displayName). History is kept in the local database.")
             }
 
-            // Developer section
+            // Privacy & Data — user-facing controls Apple review expects: the
+            // privacy policy, a medical disclaimer, and full data deletion.
+            Section {
+                Link(destination: URL(string: Self.privacyPolicyURL)!) {
+                    Label("Privacy Policy", systemImage: "hand.raised")
+                }
+                NavigationLink {
+                    IgnoredWorkoutsView()
+                } label: {
+                    Label("Ignored workouts", systemImage: "eye.slash")
+                }
+                Button(role: .destructive) {
+                    showClearDataConfirm = true
+                } label: {
+                    Label("Delete all my data", systemImage: "trash")
+                }
+                .confirmationDialog(
+                    "Delete all my data?",
+                    isPresented: $showClearDataConfirm,
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete everything", role: .destructive) {
+                        Task { await deleteAllData() }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Removes all synced workouts, performance metrics and scheduled workouts (locally and from your iCloud sync), resets your athlete profile, and signs out of Garmin. This cannot be undone.")
+                }
+            } header: {
+                Text("Privacy & Data")
+            } footer: {
+                Text("TriGenius is not a medical device. Its coaching is informational only — always consult a doctor before making training or health decisions.")
+            }
+
+            #if DEBUG
+            // Developer section — DEBUG builds only, never shipped.
             Section {
                 Toggle(isOn: $settings.debugMode) {
                     Label("Debug Mode", systemImage: "ladybug")
@@ -579,23 +588,19 @@ struct SettingsView: View {
                         Label("Reports", systemImage: "exclamationmark.bubble")
                     }
                 }
-                NavigationLink {
-                    IgnoredWorkoutsView()
-                } label: {
-                    Label("Ignored workouts", systemImage: "eye.slash")
-                }
                 Button(role: .destructive) {
-                    showClearDataConfirm = true
+                    showClearDBConfirm = true
                 } label: {
                     Label("Clear local database", systemImage: "externaldrive.badge.xmark")
                 }
                 .confirmationDialog(
                     "Clear local database?",
-                    isPresented: $showClearDataConfirm,
+                    isPresented: $showClearDBConfirm,
                     titleVisibility: .visible
                 ) {
                     Button("Clear", role: .destructive) {
-                        clearDatabase()
+                        TrainingDataStore.shared.deleteAllData()
+                        DataSyncCoordinator.shared.resetSyncState()
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
@@ -623,6 +628,7 @@ struct SettingsView: View {
             } footer: {
                 Text("Debug mode shows the coach's hidden tool calls as messages in the chat and logs the full prompt to the console.")
             }
+            #endif
 
             // About section
             Section("About") {
@@ -632,9 +638,27 @@ struct SettingsView: View {
                     Text("AI Triathlon Coach")
                         .foregroundStyle(.secondary)
                 }
+                HStack {
+                    Text("Version")
+                    Spacer()
+                    Text(Self.appVersion).foregroundStyle(.secondary).monospacedDigit()
+                }
             }
         }
         .navigationTitle("Settings")
+        .sheet(isPresented: $showCloudConsent) {
+            CloudAIConsentView(
+                onAccept: {
+                    settings.cloudAIConsent = true
+                    showCloudConsent = false
+                    onBackendChanged()
+                },
+                onDecline: {
+                    settings.selectedBackend = .appleIntelligence
+                    showCloudConsent = false
+                }
+            )
+        }
     }
 
     // MARK: - OpenRouter section
@@ -677,6 +701,19 @@ struct SettingsView: View {
                     .foregroundStyle(.green)
                     .font(.caption)
             }
+
+            // Cloud-sharing consent state + a way to revoke it (revoking falls the
+            // coach back to on-device Apple Intelligence).
+            if settings.cloudAIConsent {
+                Button(role: .destructive) {
+                    settings.cloudAIConsent = false
+                    settings.selectedBackend = .appleIntelligence
+                    onBackendChanged()
+                } label: {
+                    Label("Revoke cloud data sharing", systemImage: "hand.raised")
+                }
+                .font(.caption)
+            }
         }
     }
 
@@ -687,7 +724,9 @@ struct SettingsView: View {
             if #available(iOS 27.0, macOS 27.0, *) {
                 modelStatusRow("On-device", status: AppleModelAvailability.onDeviceStatus())
 
-                let cloud = AppleModelAvailability.cloudStatus()
+                // TODO: Force Private Cloud Compute to unavailable until Apple unlocks it
+                // for this developer account; restore `AppleModelAvailability.cloudStatus()` then.
+                let cloud = AppleModelAvailability.Status(isAvailable: false, detail: "Not yet enabled for this account")
                 modelStatusRow("Private Cloud Compute", status: cloud)
 
                 Toggle("Use Private Cloud Compute", isOn: $settings.useAppleCloudCompute)
@@ -745,20 +784,6 @@ struct SettingsView: View {
 
     // MARK: - Helpers
 
-    /// Toggle binding for a read source. Keeps at least one source enabled.
-    private func readBinding(_ source: DataSource) -> Binding<Bool> {
-        Binding(
-            get: { settings.readSources.contains(source) },
-            set: { on in
-                var next = settings.readSources
-                if on { next.insert(source) } else { next.remove(source) }
-                if next.isEmpty { next = [source] } // never leave zero sources
-                settings.readSources = next
-                onBackendChanged()
-            }
-        )
-    }
-
     private func profileRow(_ label: String, value: String?) -> some View {
         HStack {
             Text(label)
@@ -775,12 +800,32 @@ struct SettingsView: View {
         memory.updatePreferences { $0 = AthletePreferences() }
     }
 
-    /// Wipe the local time-series database (workouts, performance metrics,
-    /// scheduled workouts) and the last-sync watermarks. The coach profile and
-    /// app settings (`coach_memory.json`, UserDefaults UI prefs) are kept.
-    private func clearDatabase() {
-        TrainingDataStore.shared.deleteAllData()
+    /// Full user-data erase for the Privacy & Data section (Guideline 5.1.1-v):
+    /// every piece of personal data and every consent. Clears the local +
+    /// CloudKit-mirrored training/ATP time series and coach memory, wipes the
+    /// ignored-workout blacklist, signs out of Garmin, removes the OpenRouter key,
+    /// and revokes cloud-AI consent (reverting the coach to on-device). Non-personal
+    /// UI preferences in UserDefaults are kept.
+    private func deleteAllData() async {
+        TrainingDataStore.shared.deleteTrainingAndATP()
         DataSyncCoordinator.shared.resetSyncState()
+        memory.reset()
+        IgnoredWorkouts.clearAll()
+        await GarminAuth.shared.logout()
+        settings.garminEmail = ""
+        settings.openRouterAPIKey = ""
+        settings.cloudAIConsent = false
+        settings.selectedBackend = .appleIntelligence
+        onBackendChanged()
+    }
+
+    static let privacyPolicyURL = "https://trigenius.narica.net/privacy"
+
+    /// Marketing version + build, e.g. "0.0.3 (13)".
+    static var appVersion: String {
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
+        let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
+        return "\(v) (\(b))"
     }
 }
 
@@ -861,9 +906,9 @@ struct GarminLoginSection: View {
 
     private func login() async {
         isWorking = true
-        // Garmin's Cloudflare WAF forces a 30–45s delay between the sign-in page
+        // Garmin's Cloudflare WAF forces a 5–20s delay between the sign-in page
         // load and the credential submit, so the login deliberately takes a while.
-        statusMessage = "Connecting to Garmin… this takes about 30–45 seconds (protection against Garmin's rate limit)."
+        statusMessage = "Connecting to Garmin… this takes about 5–20 seconds."
         isError = false
         defer { isWorking = false }
         do {

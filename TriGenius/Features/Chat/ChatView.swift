@@ -402,7 +402,7 @@ private struct GreetingView: View {
 
     var body: some View {
         VStack(alignment: .center, spacing: 16) {
-            Image(systemName: "apple.intelligence")
+            Image(systemName: "sparkles")
                 .font(.system(size: 48))
                 .foregroundStyle(.secondary)
             Text(text)

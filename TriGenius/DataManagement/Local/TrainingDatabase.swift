@@ -569,6 +569,19 @@ final class TrainingDataStore {
         markChanged()
     }
 
+    /// Erase the training time series and the whole ATP for the in-app "Delete all
+    /// my data" (Guideline 5.1.1-v). Coach-memory rows are reset separately via
+    /// `CoachMemory.reset()`; the CloudKit mirror deletes in step.
+    func deleteTrainingAndATP() {
+        try? context.delete(model: WorkoutRecord.self)
+        try? context.delete(model: PerformanceMetricRecord.self)
+        try? context.delete(model: ATPConfig.self)
+        try? context.delete(model: ATPEvent.self)
+        try? context.delete(model: ATPWeekOverride.self)
+        try? context.save()
+        markChanged()
+    }
+
     /// Delete every stored historical performance metric (FTP, VO2max,
     /// thresholds, zones, weight — `MetricKeys.performance`), leaving daily
     /// wellness metrics and workouts intact. Dev action for clearing

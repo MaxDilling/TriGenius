@@ -11,9 +11,9 @@ import Foundation
 // Garmin has no public API; these endpoints are reverse-engineered and mirror
 // the `garmin_health_data` reference implementation. Two important details:
 //   • Cloudflare's WAF returns 429 if the credential POST follows the sign-in
-//     page GET too quickly. A random 30–45s delay between the two mimics
+//     page GET too quickly. A random 5–20s delay between the two mimics
 //     natural browser behavior and avoids the block. Login therefore visibly
-//     takes ~30–45 seconds.
+//     takes ~5–25 seconds.
 //   • Swift cannot do TLS-fingerprint impersonation (curl_cffi), so we use the
 //     plain-requests strategies: portal web first, mobile SSO as fallback.
 
@@ -80,8 +80,8 @@ actor GarminAuth {
     ]
 
     // Cloudflare WAF anti-rate-limit delay bounds (seconds).
-    private let loginDelayMin = 15.0
-    private let loginDelayMax = 30.0
+    private let loginDelayMin = 5.0
+    private let loginDelayMax = 20.0
 
     // Native (Android app) UA headers used for DI token exchange + API calls.
     private let nativeUserAgent = "GCM-Android-5.23"
@@ -129,7 +129,7 @@ actor GarminAuth {
 
     /// Per-strategy SSO endpoint configuration. The portal web flow is preferred
     /// (it's the endpoint connect.garmin.com itself uses); mobile SSO is the
-    /// fallback. Both share the 30–45s Cloudflare delay.
+    /// fallback.
     private struct SSOConfig {
         let signinPageURL: String
         let loginURL: String
@@ -165,7 +165,7 @@ actor GarminAuth {
 
     /// Begin login. Throws `GarminAuthError.mfaRequired` if a code is needed —
     /// the caller then collects the code and calls `resumeLogin(code:)`.
-    /// Note: blocks for ~30–45s (Cloudflare anti-rate-limit delay).
+    /// Note: blocks for ~5–20s (Cloudflare anti-rate-limit delay).
     func login(email: String, password: String) async throws {
         pendingConfig = nil
         pendingMFAMethod = nil
@@ -274,7 +274,7 @@ actor GarminAuth {
         [("clientId", config.clientId), ("locale", "en-US"), ("service", config.serviceURL)]
     }
 
-    /// Runs one SSO strategy: GET sign-in page → 30–45s delay → POST credentials.
+    /// Runs one SSO strategy: GET sign-in page → 5–20s delay → POST credentials.
     /// Returns the CAS service ticket on success. Throws `.mfaRequired` (after
     /// stashing state for `resumeLogin`), `.invalidCredentials`, `.tooManyRequests`,
     /// or `.network`.

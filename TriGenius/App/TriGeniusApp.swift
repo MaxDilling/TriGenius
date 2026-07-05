@@ -94,6 +94,9 @@ struct RootTabView: View {
     @Bindable var router: CoachRouter
     let onBackendChanged: () -> Void
 
+    /// First-launch medical disclaimer gate (Guideline 1.4.1).
+    @AppStorage("medical_disclaimer_accepted") private var disclaimerAccepted = false
+
     var body: some View {
         TabView(selection: $router.selectedTab) {
             NavigationStack {
@@ -142,6 +145,9 @@ struct RootTabView: View {
         // hangs/hitches right after it attribute to that tab's first build + load.
         .onChange(of: router.selectedTab) { old, new in
             Perf.event("tabSwitch", "\(old)→\(new)")
+        }
+        .sheet(isPresented: Binding(get: { !disclaimerAccepted }, set: { _ in })) {
+            MedicalDisclaimerView { disclaimerAccepted = true }
         }
     }
 }

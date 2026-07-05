@@ -58,6 +58,19 @@ final class CoachMemory: ObservableObject {
             sportProgress: sportProgress, feedback: feedbackHistory)
     }
 
+    /// Erase all coach memory to a fresh state — part of the in-app "Delete all my
+    /// data". Clears the in-memory copy and the backing rows (which propagates to
+    /// the CloudKit mirror).
+    func reset() {
+        userProfile = UserProfile()
+        weeklyStructure = WeeklyStructure()
+        preferences = AthletePreferences()
+        sportProgress = SportProgressMap()
+        feedbackHistory = []
+        onboardingComplete = false
+        persistAll()
+    }
+
     /// Replace the entire in-memory state from a `coach_memory.json` payload — the
     /// same shape `save()` writes and the debug view shows — and persist it.
     /// Sections missing from the file reset to their defaults: this is a full
