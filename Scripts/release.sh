@@ -76,7 +76,16 @@ xcodebuild -exportArchive \
 	-allowProvisioningUpdates
 
 echo "Re-signing with hardened runtime + secure timestamp..."
-codesign --force --deep --options runtime --timestamp --sign "$SIGN_IDENTITY" "$APP_PATH"
+# Reuse the entitlements xcodebuild already resolved into the exported app (with
+# com.apple.application-identifier / team-identifier / $(TeamIdentifierPrefix) filled
+# in) rather than the raw project entitlements file — codesign does no variable
+# substitution, and a signature missing application-identifier fails App Sandbox
+# validation at launch (RBSRequestErrorDomain/163, "Launchd job spawn failed").
+ENTITLEMENTS_PLIST="$WORK_DIR/entitlements.plist"
+codesign -d --entitlements "$ENTITLEMENTS_PLIST" --xml "$APP_PATH"
+codesign --force --deep --options runtime --timestamp \
+	--entitlements "$ENTITLEMENTS_PLIST" \
+	--sign "$SIGN_IDENTITY" "$APP_PATH"
 
 echo "Submitting for notarization..."
 ditto -c -k --keepParent "$APP_PATH" "$NOTARIZE_ZIP"
@@ -93,11 +102,12 @@ xcrun stapler staple "$APP_PATH"
 echo "Packaging .dmg..."
 mkdir -p "$DIST_DIR"
 rm -f "$DMG_PATH"
-hdiutil create -volname TriGenius -srcfolder "$APP_PATH" -ov -format UDZO "$DMG_PATH"
+diskutil image create from --format UDZO --volumeName TriGenius "$APP_PATH" "$DMG_PATH"
 
 echo "Publishing release $TAG..."
 git add "$PROJECT/project.pbxproj"
 git commit -m "release: TriGenius $VERSION"
+
 git tag "$TAG"
 git push origin HEAD "$TAG"
 gh release create "$TAG" "$DMG_PATH" --title "TriGenius $VERSION" --generate-notes
