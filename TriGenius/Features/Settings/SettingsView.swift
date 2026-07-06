@@ -363,6 +363,7 @@ struct SettingsView: View {
     #if DEBUG
     @State private var showClearDBConfirm = false
     @State private var showDeletePerfConfirm = false
+    @State private var plannedTSSRecomputeCount: Int?
     #endif
 
     var body: some View {
@@ -587,6 +588,22 @@ struct SettingsView: View {
                     } label: {
                         Label("Reports", systemImage: "exclamationmark.bubble")
                     }
+                }
+                Button {
+                    plannedTSSRecomputeCount = TrainingDataStore.shared.recomputePlannedTSS()
+                } label: {
+                    Label("Recompute planned TSS", systemImage: "arrow.triangle.2.circlepath")
+                }
+                .alert(
+                    "Planned TSS recomputed",
+                    isPresented: Binding(
+                        get: { plannedTSSRecomputeCount != nil },
+                        set: { if !$0 { plannedTSSRecomputeCount = nil } }
+                    )
+                ) {
+                    Button("OK") { plannedTSSRecomputeCount = nil }
+                } message: {
+                    Text("\(plannedTSSRecomputeCount ?? 0) workout(s) updated against the current thresholds.")
                 }
                 Button(role: .destructive) {
                     showClearDBConfirm = true

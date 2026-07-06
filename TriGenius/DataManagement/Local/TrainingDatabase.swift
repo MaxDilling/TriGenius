@@ -1185,6 +1185,34 @@ final class TrainingDataStore {
         return record
     }
 
+    /// Re-estimate every planned row's target TSS from its stored steps against
+    /// the current thresholds. Plan edits recompute in place, but a threshold
+    /// correction (or a historically mis-scored row) doesn't reach already-stored
+    /// values — this is the Developer "Recompute planned TSS" action. Returns how
+    /// many rows changed.
+    func recomputePlannedTSS() -> Int {
+        let plans = (try? context.fetch(
+            FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.isPlanned })
+        )) ?? []
+        let thresholds = latestSnapshot()
+        var changed = 0
+        for plan in plans {
+            let tss = PlannedTSS.estimate(
+                compactSteps: WorkoutPayloadBuilder.parseSteps(plan.stepsJSON) ?? [],
+                family: SportFamily(sportKey: plan.sport),
+                thresholds: thresholds
+            )
+            if plan.targetTSS != tss {
+                plan.targetTSS = tss
+                changed += 1
+            }
+        }
+        guard changed > 0 else { return 0 }
+        try? context.save()
+        markChanged()
+        return changed
+    }
+
     /// Set (or clear) a planned workout's local time-of-day, in minutes after
     /// midnight. Returns the updated record.
     @discardableResult
@@ -1313,12 +1341,14 @@ final class TrainingDataStore {
         markChanged()
     }
 
-    /// Source preference when two records share the newest day for a metric.
+    /// Source preference when two records share the newest day for a metric. A
+    /// hand-entered value outranks a synced one — the athlete's correction wins on
+    /// its day (see `setManualMetric`).
     private static func sourceRank(_ source: String) -> Int {
         switch source {
-        case "garmin": return 3
-        case "healthkit": return 2
-        default: return 1   // "manual"
+        case "manual": return 3
+        case "garmin": return 2
+        default: return 1   // "healthkit"
         }
     }
 
@@ -1365,6 +1395,37 @@ final class TrainingDataStore {
         return perDay.values
             .map { MetricPoint(date: $0.date, value: $0.value) }
             .sorted { $0.date < $1.date }
+    }
+
+    // MARK: - Manual entry
+
+    /// Write a hand-entered performance value at `date` (start-of-day). Upserts the
+    /// `source: "manual"` record for that key+day, so a re-entry edits in place.
+    func setManualMetric(key: String, value: Double, unit: String, date: Date) {
+        ingestMetrics([IngestedMetric(metricKey: key, value: value, unit: unit, source: "manual", date: date)])
+    }
+
+    /// Remove the manual value for a key on a given day.
+    func deleteManualMetric(key: String, date: Date) {
+        let day = Calendar.current.startOfDay(for: date)
+        let id = "\(key):manual:\(DateFormatter.ymd.string(from: day))"
+        guard let record = try? context.fetch(
+            FetchDescriptor<PerformanceMetricRecord>(predicate: #Predicate { $0.id == id })
+        ).first else { return }
+        context.delete(record)
+        try? context.save()
+        markChanged()
+    }
+
+    /// Ascending manual-only points for a key — the athlete's editable entries.
+    func manualMetricEntries(key: String) -> [MetricPoint] {
+        let records = (try? context.fetch(
+            FetchDescriptor<PerformanceMetricRecord>(
+                predicate: #Predicate { $0.metricKey == key && $0.source == "manual" },
+                sortBy: [SortDescriptor(\.date, order: .forward)]
+            )
+        )) ?? []
+        return records.map { MetricPoint(date: $0.date, value: $0.value) }
     }
 }
 
