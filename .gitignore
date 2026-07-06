@@ -1,0 +1,18 @@
+# Secrets & credentials
+.env
+.keys
+# TestFlight API-key credentials (local, per-Mac)
+Scripts/testflight.env
+
+# Local data & reference material
+*.db
+*.png
+*.store*
+ref/*
+
+# Build & IDE
+dist/
+TriGenius.xcodeproj/xcuserdata/maxdillinger.xcuserdatad/xcdebugger/Breakpoints_v2.xcbkptlist
+# sourcekit-lsp build server config — machine-specific DerivedData paths
+.compile
+buildServer.json
