@@ -58,12 +58,14 @@ APP_PATH="$EXPORT_PATH/TriGenius.app"
 NOTARIZE_ZIP="$WORK_DIR/TriGenius-notarize.zip"
 
 echo "Archiving..."
+# Pinned derived data so the Sparkle SPM artifact (generate_appcast) is at a known path.
 xcodebuild archive \
 	-project "$PROJECT" \
 	-scheme "$SCHEME" \
 	-configuration Release \
 	-destination 'generic/platform=macOS' \
 	-archivePath "$ARCHIVE_PATH" \
+	-derivedDataPath "$WORK_DIR/DerivedData" \
 	-allowProvisioningUpdates \
 	CODE_SIGN_ENTITLEMENTS=TriGenius/TriGenius-Release.entitlements \
 	ENABLE_HARDENED_RUNTIME=YES
@@ -81,9 +83,12 @@ echo "Re-signing with hardened runtime + secure timestamp..."
 # in) rather than the raw project entitlements file — codesign does no variable
 # substitution, and a signature missing application-identifier fails App Sandbox
 # validation at launch (RBSRequestErrorDomain/163, "Launchd job spawn failed").
+# No --deep: it would stamp the app's entitlements onto every nested binary,
+# breaking Sparkle's XPC installer service (which needs its own); nested code
+# keeps its valid export-time signatures and is only sealed by the outer one.
 ENTITLEMENTS_PLIST="$WORK_DIR/entitlements.plist"
 codesign -d --entitlements "$ENTITLEMENTS_PLIST" --xml "$APP_PATH"
-codesign --force --deep --options runtime --timestamp \
+codesign --force --options runtime --timestamp \
 	--entitlements "$ENTITLEMENTS_PLIST" \
 	--sign "$SIGN_IDENTITY" "$APP_PATH"
 
@@ -100,9 +105,29 @@ echo "Stapling..."
 xcrun stapler staple "$APP_PATH"
 
 echo "Packaging .dmg..."
+# diskutil images the *contents* of the given folder as the volume root, so
+# stage a folder holding the .app (plus the usual /Applications drop link) —
+# imaging $APP_PATH directly would put the app's Contents/ at the root, where
+# neither users nor generate_appcast find an app bundle.
 mkdir -p "$DIST_DIR"
 rm -f "$DMG_PATH"
-diskutil image create from --format UDZO --volumeName TriGenius "$APP_PATH" "$DMG_PATH"
+DMG_ROOT="$WORK_DIR/dmg-root"
+mkdir -p "$DMG_ROOT"
+ditto "$APP_PATH" "$DMG_ROOT/TriGenius.app"
+ln -s /Applications "$DMG_ROOT/Applications"
+diskutil image create from --format UDZO --volumeName TriGenius "$DMG_ROOT" "$DMG_PATH"
+
+echo "Generating Sparkle appcast..."
+# EdDSA-sign the DMG and emit appcast.xml (single-item feed for just this
+# release; SUFeedURL resolves it via GitHub's /releases/latest/download/).
+# Needs the Sparkle private key generated once per machine via generate_keys.
+SPARKLE_BIN="$WORK_DIR/DerivedData/SourcePackages/artifacts/sparkle/Sparkle/bin"
+APPCAST_DIR="$WORK_DIR/appcast"
+mkdir -p "$APPCAST_DIR"
+cp "$DMG_PATH" "$APPCAST_DIR/"
+"$SPARKLE_BIN/generate_appcast" "$APPCAST_DIR" \
+	--download-url-prefix "https://github.com/MaxDilling/TriGenius/releases/download/$TAG/" \
+	--link "https://github.com/MaxDilling/TriGenius/releases"
 
 echo "Publishing release $TAG..."
 git add "$PROJECT/project.pbxproj"
@@ -110,6 +135,6 @@ git commit -m "release: TriGenius $VERSION"
 
 git tag "$TAG"
 git push origin HEAD "$TAG"
-gh release create "$TAG" "$DMG_PATH" --title "TriGenius $VERSION" --generate-notes
+gh release create "$TAG" "$DMG_PATH" "$APPCAST_DIR/appcast.xml" --title "TriGenius $VERSION" --generate-notes
 
 echo "Done: $DMG_PATH published as $TAG"

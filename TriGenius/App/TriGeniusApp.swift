@@ -36,6 +36,9 @@ struct TriGeniusApp: App {
                 BackgroundCoordinator.shared.schedule()
             }
         }
+#if os(macOS)
+        .commands { CheckForUpdatesCommand() }
+#endif
     }
 
     private func setupBrain() async {
