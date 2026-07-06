@@ -25,8 +25,14 @@ struct PerformanceMetric: Identifiable {
     let accent: Color
     /// Label shown under the value (e.g. "W", "ml/kg/min", "/km").
     let unit: String
+    /// Raw unit token stored on the `PerformanceMetricRecord` (e.g. "watts", "bpm",
+    /// "m_per_s"), matching the sync path — used when writing a manual value.
+    let storageUnit: String
     /// Renders a raw stored value as a display string.
     let format: (Double) -> String
+    /// Parses a display string back into the raw stored value (inverse of `format`),
+    /// or nil when the input is malformed — drives manual-entry validation.
+    let parse: (String) -> Double?
     /// True when a rising value is an improvement (VO2max, FTP, HRV); false where
     /// a lower value is better (pace markers — stored as speed — and resting HR).
     let higherIsBetter: Bool
@@ -38,29 +44,35 @@ struct PerformanceMetric: Identifiable {
     static let all: [PerformanceMetric] = [
         // Performance (physiological capacity)
         PerformanceMetric(key: "vo2max_running", title: "VO₂max (Run)", group: .performance, accent: .red,
-                          unit: "ml/kg/min", format: intFormat, higherIsBetter: true),
+                          unit: "ml/kg/min", storageUnit: "ml_kg_min", format: intFormat, parse: doubleParse, higherIsBetter: true),
         PerformanceMetric(key: "vo2max_cycling", title: "VO₂max (Bike)", group: .performance, accent: .orange,
-                          unit: "ml/kg/min", format: intFormat, higherIsBetter: true),
+                          unit: "ml/kg/min", storageUnit: "ml_kg_min", format: intFormat, parse: doubleParse, higherIsBetter: true),
         PerformanceMetric(key: "cycling_ftp", title: "FTP (Bike)", group: .performance, accent: .blue,
-                          unit: "W", format: intFormat, higherIsBetter: true),
+                          unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true),
         PerformanceMetric(key: "running_ftp", title: "FTP (Run)", group: .performance, accent: .indigo,
-                          unit: "W", format: intFormat, higherIsBetter: true),
+                          unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true),
         PerformanceMetric(key: "lactate_threshold_hr", title: "LT Heart Rate", group: .performance, accent: .pink,
-                          unit: "bpm", format: intFormat, higherIsBetter: true),
+                          unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true),
         PerformanceMetric(key: "lactate_threshold_speed", title: "LT Pace", group: .performance, accent: .teal,
-                          unit: "/km", format: paceFromSpeed(1000), higherIsBetter: true),
+                          unit: "/km", storageUnit: "m_per_s", format: paceFromSpeed(1000), parse: speedFromPace(1000), higherIsBetter: true),
         PerformanceMetric(key: "swim_css_speed", title: "CSS (Swim)", group: .performance, accent: .cyan,
-                          unit: "/100m", format: paceFromSpeed(100), higherIsBetter: true),
+                          unit: "/100m", storageUnit: "m_per_s", format: paceFromSpeed(100), parse: speedFromPace(100), higherIsBetter: true),
         PerformanceMetric(key: "max_hr", title: "Max Heart Rate", group: .performance, accent: .purple,
-                          unit: "bpm", format: intFormat, higherIsBetter: true),
+                          unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true),
+        PerformanceMetric(key: "weight_kg", title: "Weight", group: .performance, accent: .brown,
+                          unit: "kg", storageUnit: "kg", format: oneDecimalFormat, parse: doubleParse, higherIsBetter: false),
         // Recovery (daily wellness signals)
         PerformanceMetric(key: "resting_hr", title: "Resting HR", group: .recovery, accent: .mint,
-                          unit: "bpm", format: intFormat, higherIsBetter: false),
+                          unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: false),
         PerformanceMetric(key: "hrv_overnight", title: "HRV (Overnight)", group: .recovery, accent: .green,
-                          unit: "ms", format: intFormat, higherIsBetter: true),
+                          unit: "ms", storageUnit: "ms", format: intFormat, parse: doubleParse, higherIsBetter: true),
         PerformanceMetric(key: "sleep_score", title: "Sleep Score", group: .recovery, accent: .blue,
-                          unit: "", format: intFormat, higherIsBetter: true),
+                          unit: "", storageUnit: "", format: intFormat, parse: doubleParse, higherIsBetter: true),
     ]
+
+    /// The markers the athlete can hand-enter (physiological capacity + weight);
+    /// daily wellness signals are provider-driven and excluded.
+    static let editable: [PerformanceMetric] = all.filter { $0.group == .performance }
 
     /// Catalog lookup by stored key — validates a chat card token's `key`.
     static func metric(for key: String) -> PerformanceMetric? {
@@ -68,12 +80,23 @@ struct PerformanceMetric: Identifiable {
     }
 
     private static let intFormat: (Double) -> String = { String(Int($0.rounded())) }
+    private static let oneDecimalFormat: (Double) -> String = { String(format: "%.1f", $0) }
+    private static let doubleParse: (String) -> Double? = { Double($0.replacingOccurrences(of: ",", with: ".")) }
     /// Build a formatter turning a stored speed (m/s) into "m:ss" pace over `distanceM`.
     private static func paceFromSpeed(_ distanceM: Double) -> (Double) -> String {
         { speed in
             guard speed > 0 else { return "—" }
             let secs = distanceM / speed
             return String(format: "%d:%02d", Int(secs) / 60, Int(secs) % 60)
+        }
+    }
+    /// Inverse of `paceFromSpeed`: parse "m:ss" pace over `distanceM` back into m/s.
+    private static func speedFromPace(_ distanceM: Double) -> (String) -> Double? {
+        { text in
+            let parts = text.split(separator: ":", maxSplits: 1)
+            guard parts.count == 2, let m = Int(parts[0]), let s = Int(parts[1]), s < 60 else { return nil }
+            let secs = Double(m * 60 + s)
+            return secs > 0 ? distanceM / secs : nil
         }
     }
 }
@@ -86,6 +109,7 @@ struct PerformanceMetric: Identifiable {
 struct PerformanceMetricsSection: View {
     @State private var histories: [String: [MetricPoint]] = [:]
     @State private var loaded = false
+    @State private var showAdd = false
 
     private func available(_ group: PerformanceMetric.Group) -> [PerformanceMetric] {
         PerformanceMetric.all.filter { $0.group == group && (histories[$0.key]?.isEmpty == false) }
@@ -98,7 +122,15 @@ struct PerformanceMetricsSection: View {
         // fires reliably even while the section has nothing to show yet.
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Performance Metrics").font(.headline)
+                HStack {
+                    Text("Performance Metrics").font(.headline)
+                    Spacer()
+                    Button { showAdd = true } label: {
+                        Image(systemName: "plus.circle.fill").font(.title3)
+                    }
+                    .buttonStyle(.plain).foregroundStyle(.tint)
+                    .accessibilityLabel("Add performance value")
+                }
                 let performance = available(.performance)
                 if !performance.isEmpty {
                     grid(performance)
@@ -125,6 +157,7 @@ struct PerformanceMetricsSection: View {
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
             load()
         }
+        .sheet(isPresented: $showAdd) { ManualMetricEntryView() }
     }
 
     private func grid(_ metrics: [PerformanceMetric]) -> some View {
@@ -323,6 +356,9 @@ private struct MetricDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var range: TimeRange = .threeMonths
     @State private var scrubDate: Date?
+    @State private var manualEntries: [MetricPoint] = []
+    @State private var showAdd = false
+    @State private var editEntry: MetricPoint?
 
     /// The selectable windows over which the progression can be viewed.
     private enum TimeRange: String, CaseIterable, Identifiable {
@@ -362,6 +398,7 @@ private struct MetricDetailView: View {
                     rangePicker
                     chart
                     stats
+                    manualSection
                 }
                 .padding(Theme.Spacing.l)
             }
@@ -372,6 +409,54 @@ private struct MetricDetailView: View {
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
+                }
+            }
+            .task { manualEntries = TrainingDataStore.shared.manualMetricEntries(key: metric.key) }
+            .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
+                manualEntries = TrainingDataStore.shared.manualMetricEntries(key: metric.key)
+            }
+            .sheet(isPresented: $showAdd) { ManualMetricEntryView(defaultKey: metric.key) }
+            .sheet(item: $editEntry) { p in
+                ManualMetricEntryView(editing: .init(metric: metric, date: p.date, value: p.value))
+            }
+        }
+    }
+
+    /// The athlete's hand-entered points for this marker, with add / edit / delete.
+    /// Shown only for editable (physiological) markers, not provider-driven wellness.
+    @ViewBuilder
+    private var manualSection: some View {
+        if metric.group == .performance {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Manual Entries").font(.headline)
+                    Spacer()
+                    Button { showAdd = true } label: { Image(systemName: "plus.circle.fill").font(.title3) }
+                        .buttonStyle(.plain).foregroundStyle(.tint)
+                }
+                if manualEntries.isEmpty {
+                    Text("No manual values yet. Tap + to add one.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                } else {
+                    ForEach(manualEntries.reversed()) { p in
+                        HStack {
+                            Text(p.date.formatted(.dateTime.day().month(.abbreviated).year()))
+                                .font(.subheadline)
+                            Spacer()
+                            Text("\(metric.format(p.value)) \(metric.unit)")
+                                .font(.subheadline.weight(.semibold))
+                            Button(role: .destructive) {
+                                TrainingDataStore.shared.deleteManualMetric(key: metric.key, date: p.date)
+                            } label: {
+                                Image(systemName: "trash").foregroundStyle(Theme.Palette.warning)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .padding(Theme.Spacing.s)
+                        .glassSurface(cornerRadius: Theme.Radius.m)
+                        .contentShape(Rectangle())
+                        .onTapGesture { editEntry = p }
+                    }
                 }
             }
         }

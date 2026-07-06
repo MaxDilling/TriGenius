@@ -614,9 +614,10 @@ final class DataSyncCoordinator {
     }
 
     /// Merge-update a plan's content from a (possibly partial) `workout_data` dict:
-    /// steps are re-normalized and the target TSS recomputed only when the dict
-    /// carries `steps`; other fields update only when present. Returns nil when no
-    /// plan with `id` exists.
+    /// steps are re-normalized when the dict carries `steps`, and the target TSS
+    /// recomputed when `steps` or `sport` change (the sport family picks the
+    /// threshold the estimate scores against); other fields update only when
+    /// present. Returns nil when no plan with `id` exists.
     func updatePlan(id: String, workoutData raw: [String: Any]) async -> PlanWriteOutcome? {
         let writeTarget = AppSettings.storedWriteTarget()
         guard let existing = store.scheduledWorkout(id: id) else { return nil }
@@ -628,9 +629,9 @@ final class DataSyncCoordinator {
             ? WorkoutNormalizer.normalize(WorkoutPayloadBuilder.workoutData(from: existing).merging(raw) { _, edit in edit })
             : (raw, [])
         let steps = workoutData["steps"] as? [[String: Any]] ?? []
-        let targetTSS: Double?? = editsSteps
-            ? .some(PlannedTSS.estimate(compactSteps: steps,
-                                        family: SportFamily(sportKey: workoutData["sport"] as? String ?? "other"),
+        let targetTSS: Double?? = (editsSteps || raw["sport"] != nil)
+            ? .some(PlannedTSS.estimate(compactSteps: editsSteps ? steps : (WorkoutPayloadBuilder.parseSteps(existing.stepsJSON) ?? []),
+                                        family: SportFamily(sportKey: workoutData["sport"] as? String ?? existing.sport),
                                         thresholds: store.latestSnapshot()))
             : nil
         store.updateScheduledContent(
