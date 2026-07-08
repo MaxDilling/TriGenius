@@ -30,7 +30,7 @@ final class ATPToolHandler: CoachToolHandler {
             ),
             ToolDefinition(
                 name: "set_atp",
-                description: "Set or update the ATP's season config (methodology + volume inputs). Merges with the existing config — only the fields you pass change. Does NOT touch events or week pins (use set_atp_event / pin_atp_week). methodology is required the first time. The engine re-periodizes from the config + events.",
+                description: "Set or update the ATP's season config (methodology + volume inputs). Call read_knowledge('trainingplan') first when seeding a new plan or choosing a methodology/ramp rate — it covers starting-CTL estimates, realistic volume ranges, and how to individualize recovery_cycle/max_ramp_rate. Merges with the existing config — only the fields you pass change. Does NOT touch events or week pins (use set_atp_event / pin_atp_week). methodology is required the first time. The engine re-periodizes from the config + events.",
                 parameters: [
                     "type": "object",
                     "properties": [
@@ -57,7 +57,7 @@ final class ATPToolHandler: CoachToolHandler {
                         "event_type": ["type": "string", "enum": ATPEventType.allCases.map(\.rawValue),
                                        "description": "Discipline-scoped event type (e.g. marathon, tri_olympic, road_race)."],
                         "priority": ["type": "string", "enum": ["A", "B", "C"],
-                                     "description": "A = goal race (anchors periodization + taper), B = secondary, C = training race (ignored by the engine)."],
+                                     "description": "A = goal race (anchors periodization + taper), B = secondary, C = training race (ignored by the engine). The engine doesn't validate A-race spacing — read_knowledge('trainingplan') before adding a second A event close to an existing one."],
                         "target_ctl": ["type": "number", "description": "Target fitness (CTL) on race day (target_ctl methodology)."],
                         "notes": ["type": "string", "description": "Optional free-text context for the coach."]
                     ],

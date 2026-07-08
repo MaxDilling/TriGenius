@@ -182,13 +182,13 @@ final class ProfileToolHandler: CoachToolHandler {
             ),
             ToolDefinition(
                 name: "read_knowledge",
-                description: "Read coaching knowledge files on specific topics: cycling, running, swimming, injuries, or workouts. Always call this FIRST when answering sport-specific training questions, and read the 'workouts' topic before building structured workouts with add_workouts.",
+                description: "Read coaching knowledge files on specific topics: cycling, running, swimming, injuries, workouts, or trainingplan. Always call this FIRST when answering sport-specific training questions, read the 'workouts' topic before building structured workouts with add_workouts, and the 'trainingplan' topic before building or adjusting the season plan with set_atp/set_atp_event.",
                 parameters: [
                     "type": "object",
                     "properties": [
                         "topic": [
                             "type": "string",
-                            "enum": ["cycling", "running", "swimming", "injuries", "workouts"],
+                            "enum": ["cycling", "running", "swimming", "injuries", "workouts", "trainingplan"],
                             "description": "The topic to read."
                         ]
                     ],
@@ -316,7 +316,8 @@ final class ProfileToolHandler: CoachToolHandler {
         "running":  ("RUNNING",  "md"),
         "swimming": ("SWIMMING", "md"),
         "injuries": ("INJURIES", "MD"),
-        "workouts": ("WORKOUTS", "md")
+        "workouts": ("WORKOUTS", "md"),
+        "trainingplan": ("TRAININGSPLAN", "md")
     ]
 
     private func knowledgeSummary(for topic: String) -> String {
