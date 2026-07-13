@@ -1,10 +1,13 @@
 import SwiftUI
 import Charts
+#if os(iOS)
+import UIKit
+#endif
 
 // MARK: - Chart scrubbing & tooltip
 //
 // Shared X-axis scrubbing for every chart (date axes and numeric ones like the
-// power curve's log duration): touch/drag selection on iOS (`chartXSelection`),
+// power curve's log duration): long-press-then-drag on iOS (`chartGesture`),
 // pointer hover on macOS (where a hit-testable overlay would block nothing else —
 // these charts carry no other gestures). Charts render their own tooltip from the
 // selected value via `ChartTooltip`.
@@ -37,22 +40,55 @@ extension View {
                 }
         }
         #else
-        // Replace the default selection gesture: a bare tap would leave it
-        // mid-flight and block the enclosing ScrollView until the next touch.
-        // Long-press then drag scrubs; anything shorter falls through to scroll.
-        return chartXSelection(value: snapped)
-            .chartGesture { proxy in
-                LongPressGesture(minimumDuration: 0.2)
-                    .sequenced(before: DragGesture(minimumDistance: 0))
-                    .onChanged { value in
-                        guard case .second(true, let drag?) = value else { return }
-                        proxy.selectXValue(at: drag.location.x)
-                    }
-                    .onEnded { _ in snapped.wrappedValue = nil }
+        // A UIKit recognizer, not a SwiftUI gesture: every SwiftUI route
+        // (`chartXSelection`, `chartGesture`, a plain overlay `.gesture`) claims
+        // the touch ahead of the enclosing ScrollView's pan, so a scroll starting
+        // on the plot goes dead. UILongPressGestureRecognizer arbitrates natively
+        // with UIScrollView — a swipe cancels it and scrolls; a ~0.2 s hold
+        // recognizes, excludes the pan, and tracks the finger to scrub.
+        return chartOverlay { proxy in
+            ScrubTouchOverlay { point in
+                snapped.wrappedValue = point.flatMap { proxy.value(atX: $0.x, as: V.self) }
             }
+        }
         #endif
     }
 }
+
+#if os(iOS)
+/// Clear plot-covering view whose long-press recognizer reports the finger's
+/// plot-local position while active — nil on lift, swipe-cancel, or failure.
+private struct ScrubTouchOverlay: UIViewRepresentable {
+    let onChange: (CGPoint?) -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        let press = UILongPressGestureRecognizer(target: context.coordinator,
+                                                 action: #selector(Coordinator.handle(_:)))
+        press.minimumPressDuration = 0.2
+        view.addGestureRecognizer(press)
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {
+        context.coordinator.onChange = onChange
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(onChange: onChange) }
+
+    final class Coordinator: NSObject {
+        var onChange: (CGPoint?) -> Void
+        init(onChange: @escaping (CGPoint?) -> Void) { self.onChange = onChange }
+
+        @objc func handle(_ recognizer: UILongPressGestureRecognizer) {
+            switch recognizer.state {
+            case .began, .changed: onChange(recognizer.location(in: recognizer.view))
+            default: onChange(nil)
+            }
+        }
+    }
+}
+#endif
 
 /// The floating value readout shown at the scrubbed date.
 struct ChartTooltip: View {
