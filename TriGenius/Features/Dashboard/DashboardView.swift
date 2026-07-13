@@ -648,7 +648,7 @@ private struct VolumeRing: View {
                 if projTop > creditTop {
                     Circle()
                         .trim(from: creditTop, to: projTop)
-                        .stroke(family.color.opacity(0.40),
+                        .stroke(family.color.opacity(0.65),
                                 style: StrokeStyle(lineWidth: 7, lineCap: .butt, dash: [2, 2]))
                         .rotationEffect(.degrees(-90))
                 }
@@ -657,7 +657,7 @@ private struct VolumeRing: View {
                 if creditTop > realTop {
                     Circle()
                         .trim(from: realTop, to: creditTop)
-                        .stroke(family.color.opacity(0.45),
+                        .stroke(family.color.opacity(0.80),
                                 style: StrokeStyle(lineWidth: 7, lineCap: .butt))
                         .rotationEffect(.degrees(-90))
                 }
