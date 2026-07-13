@@ -10,7 +10,7 @@
           "image-name" : "logo-1b-open-loop.svg",
           "name" : "logo-open-loop-mac",
           "position" : {
-            "scale" : 12.5,
+            "scale" : 12,
             "translation-in-points" : [
               0,
               -25
