@@ -448,8 +448,12 @@ final class TrainingDataStore {
     /// A CloudKit merge lands in the store asynchronously; SwiftData posts
     /// `.NSPersistentStoreRemoteChange` when it does — but also for this process's
     /// *own* writes (mirroring/export activity), so launch + sync produce long
-    /// notification bursts. Debounced to quiescence: one `deduplicate()` per burst,
-    /// 1.5 s after the last notification, instead of one per runloop tick.
+    /// notification bursts. Debounced to quiescence: one pass per burst, 1.5 s after
+    /// the last notification, instead of one per runloop tick. The pass dedups, then
+    /// *always* notifies: an import can update or delete rows without leaving a
+    /// duplicate behind, and the UI must recompute from the merged store — otherwise
+    /// a long-running app displays pre-import numbers indefinitely (the listeners are
+    /// pure reads, so the one coalesced reload per burst can't feed back).
     private var dedupDebounce: Task<Void, Never>?
     private func observeRemoteChanges() {
         NotificationCenter.default.addObserver(
@@ -463,6 +467,7 @@ final class TrainingDataStore {
                     try? await Task.sleep(for: .seconds(1.5))
                     guard !Task.isCancelled else { return }
                     self.deduplicate()
+                    self.markChanged()
                 }
             }
         }
@@ -503,8 +508,9 @@ final class TrainingDataStore {
     // fires after every CloudKit merge.
 
     /// Collapse duplicate rows across every model down to one per natural key.
-    /// Idempotent; saves + notifies only when a duplicate was actually removed —
-    /// a no-op pass must not claim "data changed" (that fed the launch reload storm).
+    /// Idempotent; saves only when a duplicate was actually removed. Change
+    /// notification is the caller's concern (the remote-change burst always posts
+    /// one; local ingest paths post via their own save).
     func deduplicate() {
         let perf = Perf.begin("deduplicate"); defer { Perf.end(perf) }
         dedupeWorkouts()
@@ -532,28 +538,79 @@ final class TrainingDataStore {
         for row in all where !seen.insert(key(row)).inserted { context.delete(row) }
     }
 
-    /// Keep the most-complete row per workout id, folding any external ref the
-    /// dropped duplicate carried onto the survivor (so a write-target id is never
-    /// lost). Does not save.
+    /// Collapse duplicate workout rows by identity, not just row id: a CloudKit
+    /// merge of two offline devices can hold the same workout under *different*
+    /// ids — a local plan next to the `garmin:` mirror another device created
+    /// before the merge delivered the local row, or the same completed actuals
+    /// folded into two such rows (double-counting the load). Does not save.
     private func dedupeWorkouts() {
-        let all = (try? context.fetch(FetchDescriptor<WorkoutRecord>())) ?? []
-        guard all.count > 1 else { return }
-        var winners: [String: WorkoutRecord] = [:]
-        for row in all {
-            guard let current = winners[row.id] else { winners[row.id] = row; continue }
-            let winner = Self.moreComplete(current, row) ? current : row
-            let loser = winner === current ? row : current
-            for (k, v) in loser.externalRefs where winner.externalRefs[k] == nil {
-                winner.setExternalRef(target: k, externalId: v)
-            }
-            winners[row.id] = winner
-            context.delete(loser)
+        var rows = (try? context.fetch(FetchDescriptor<WorkoutRecord>())) ?? []
+        guard rows.count > 1 else { return }
+        // 1) Same row id — a plain CloudKit re-insert.
+        rows = collapse(rows) { $0.id }
+        // 2) Same Garmin plan — a local plan's pushed workout id vs the `garmin:`
+        // mirror row `syncScheduledWorkouts` created while the local row hadn't
+        // reached that device yet.
+        rows = collapse(rows) {
+            $0.externalRefs["garmin"] ?? ($0.isPlanned && $0.source == "garmin" ? Self.rawId($0.id) : nil)
+        }
+        // 3) Same completed activity on a folded plan AND a standalone row (each
+        // side of a cross-device double-ingest). Two *plans* claiming one activity
+        // are left to the provider-link correction (`applyProviderCompletions`) —
+        // deleting either would drop a real plan.
+        var foldedByActual: [String: WorkoutRecord] = [:]
+        for row in rows where row.isPlanned && row.isCompleted {
+            if let aid = row.externalRefs[Self.completedRefKey] { foldedByActual[aid] = row }
+        }
+        for row in rows where !row.isPlanned && row.isCompleted {
+            if let plan = foldedByActual[row.id] { merge(row, into: plan) }
         }
     }
 
-    /// Order two same-id rows by how much they carry: a completed section beats a
-    /// plan-only row, a plan beats neither, then the richer `detailsJSON` wins.
-    private static func moreComplete(_ a: WorkoutRecord, _ b: WorkoutRecord) -> Bool {
+    /// Delete all but the best row per identity `key`, merging each loser into its
+    /// winner; returns the survivors. Rows with a nil key pass through untouched.
+    private func collapse(_ rows: [WorkoutRecord], by key: (WorkoutRecord) -> String?) -> [WorkoutRecord] {
+        var winners: [String: WorkoutRecord] = [:]
+        var keyless: [WorkoutRecord] = []
+        for row in rows {
+            guard let k = key(row) else { keyless.append(row); continue }
+            guard let current = winners[k] else { winners[k] = row; continue }
+            let winner = Self.outranks(current, row) ? current : row
+            merge(winner === current ? row : current, into: winner)
+            winners[k] = winner
+        }
+        return keyless + winners.values
+    }
+
+    /// Fold a losing duplicate onto its winner — external refs it alone carries
+    /// plus its completed section if the winner's is absent or unscored (the two
+    /// sections describe the same activity, but only one device may have had the
+    /// thresholds to score its TL) — then delete it.
+    private func merge(_ loser: WorkoutRecord, into winner: WorkoutRecord) {
+        for (k, v) in loser.externalRefs where winner.externalRefs[k] == nil {
+            winner.setExternalRef(target: k, externalId: v)
+        }
+        if loser.isCompleted && (!winner.isCompleted || (winner.tss == nil && loser.tss != nil)) {
+            winner.isCompleted = true
+            winner.durationMinutes = loser.durationMinutes
+            winner.distanceKm = loser.distanceKm
+            winner.tss = loser.tss
+            winner.tssBasis = loser.tssBasis
+            winner.aerobicTE = loser.aerobicTE
+            winner.anaerobicTE = loser.anaerobicTE
+            winner.detailsJSON = loser.detailsJSON
+            winner.powerCurveJSON = loser.powerCurveJSON
+            if winner.startMinute == nil { winner.startMinute = loser.startMinute }
+        }
+        context.delete(loser)
+    }
+
+    /// Winner between two rows for the same workout: the locally-authored row is
+    /// authoritative (plan edits and the write-target reconcile key off it), then a
+    /// completed section beats a plan-only row, a plan beats neither, then the
+    /// richer `detailsJSON` wins.
+    private static func outranks(_ a: WorkoutRecord, _ b: WorkoutRecord) -> Bool {
+        if (a.source == "local") != (b.source == "local") { return a.source == "local" }
         if a.isCompleted != b.isCompleted { return a.isCompleted }
         if a.isPlanned != b.isPlanned { return a.isPlanned }
         return a.detailsJSON.count >= b.detailsJSON.count
@@ -688,7 +745,8 @@ final class TrainingDataStore {
     }
 
     /// Find an open plan (`isPlanned && !isCompleted`) this activity completes: first
-    /// by an explicit Garmin link (`externalRefs["garmin"]` == the activity's raw id),
+    /// by an explicit completion link (`externalRefs["completed"]` == the activity's
+    /// stored id, set from the provider's calendar via `applyProviderCompletions`),
     /// else the nearest open plan on the same day for the same sport family.
     private func matchingOpenPlan(for a: IngestedActivity) -> WorkoutRecord? {
         let cal = Calendar.current
@@ -978,9 +1036,17 @@ final class TrainingDataStore {
     /// No-op unless the row is a folded plan carrying a completion link.
     func unlinkActual(planId: String) {
         guard let plan = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
-                  predicate: #Predicate { $0.id == planId && $0.isPlanned && $0.isCompleted }
-              )))?.first,
-              let activityId = plan.externalRefs[Self.completedRefKey] else { return }
+            predicate: #Predicate { $0.id == planId && $0.isPlanned && $0.isCompleted }
+        )))?.first else { return }
+        unfold(plan)
+        try? context.save()
+        markChanged()
+    }
+
+    /// Split a folded plan back into an open plan + a standalone completed row.
+    /// Does not save; no-op without a completion link.
+    private func unfold(_ plan: WorkoutRecord) {
+        guard let activityId = plan.externalRefs[Self.completedRefKey] else { return }
         let activity = WorkoutRecord(
             id: activityId,
             source: activityId.components(separatedBy: ":").first ?? plan.source,
@@ -1002,6 +1068,33 @@ final class TrainingDataStore {
         plan.detailsJSON = ""
         plan.powerCurveJSON = ""
         plan.setExternalRef(target: Self.completedRefKey, externalId: nil)
+    }
+
+    /// Apply the provider's authoritative plan→activity completion links to plans
+    /// pushed to `target` (`links`: provider workout id → raw activity id). Garmin's
+    /// calendar names the activity that completed each workout; the heuristic ingest
+    /// fold can beat that link to the plan and pick the wrong same-day session, so a
+    /// contradicting fold is undone first (the stray actual re-materializes as a
+    /// standalone row and re-pairs on the next ingest) before the named activity is
+    /// linked and folded in.
+    func applyProviderCompletions(target: String, links: [String: String]) {
+        guard !links.isEmpty else { return }
+        let plans = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
+            predicate: #Predicate { $0.isPlanned }
+        ))) ?? []
+        var changed = false
+        for plan in plans {
+            guard let workoutId = plan.externalRefs[target],
+                  let rawActivityId = links[workoutId] else { continue }
+            let activityId = "\(target):\(rawActivityId)"
+            guard plan.externalRefs[Self.completedRefKey] != activityId else { continue }
+            if plan.isCompleted { unfold(plan) }
+            plan.setExternalRef(target: Self.completedRefKey, externalId: activityId)
+            foldStandaloneCompleted(into: plan, source: target, rawActivityId: rawActivityId)
+            changed = true
+        }
+        guard changed else { return }
+        dedupeWorkouts()
         try? context.save()
         markChanged()
     }

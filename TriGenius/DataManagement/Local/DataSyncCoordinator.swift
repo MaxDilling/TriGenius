@@ -360,14 +360,22 @@ final class DataSyncCoordinator {
         let thresholds = store.latestSnapshot()
         // Skip Garmin workouts that are TriGenius's own local plans pushed to Garmin —
         // they already exist locally (as `local:` rows referencing this Garmin id), so
-        // re-mirroring them as separate `garmin:` rows would duplicate them.
+        // re-mirroring them as separate `garmin:` rows would duplicate them. Their
+        // calendar item still names the activity that completed them, though — apply
+        // that authoritative link to the local plan so a heuristic fold that grabbed
+        // the wrong same-day session is corrected.
         let ownPushed = store.externalRefIds(target: "garmin", source: "local")
-        let planned = scheduled
-            .filter { item in
-                guard let wid = item["workout_id"] else { return true }
-                return !ownPushed.contains("\(wid)")
+        var ownLinks: [String: String] = [:]
+        var foreign: [[String: Any]] = []
+        for item in scheduled {
+            guard let wid = item["workout_id"].map({ "\($0)" }), ownPushed.contains(wid) else {
+                foreign.append(item)
+                continue
             }
-            .compactMap { Self.scheduledDTO(from: $0, thresholds: thresholds) }
+            if let aid = item["associated_activity_id"].map({ "\($0)" }) { ownLinks[wid] = aid }
+        }
+        store.applyProviderCompletions(target: "garmin", links: ownLinks)
+        let planned = foreign.compactMap { Self.scheduledDTO(from: $0, thresholds: thresholds) }
         store.replaceScheduled(source: "garmin", from: from, to: to, with: planned)
     }
 
