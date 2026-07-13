@@ -16,7 +16,8 @@ import Foundation
 //     hr_zones_seconds: {z1…z5: seconds}    (HR fallback)
 //     cycling.normalized_power_w: Number    (bike)
 //     running.normalized_pace_s_per_km: Number   (run; normalized, grade-adjusted NGP)
-//     swimming.cleaned_distance_m: Number   · swimming.swim_time_s: Number  (swim)
+//     swimming.cleaned_distance_m: Number   · swimming.swim_time_s: Number  (swim;
+//         swim_time_s falls back to duration_minutes when no per-length data exists)
 //
 // Dispatch: bike → power, run/swim → pace, everything else → HR zone-load. Each
 // path falls back to HR zone-load when its inputs/thresholds are missing.
@@ -27,16 +28,17 @@ nonisolated enum TSSCalculator {
     /// where the number came from (BUGS.md "show where the TSS calculation comes
     /// from"). Mirrors the dispatch in `compute(details:snapshot:)`.
     enum Basis {
-        case power, runPace, swimPace, swimDuration, hrZones
+        case power, runPace, swimPace, swimPaceFromDuration, swimDuration, hrZones
 
         /// Short, athlete-facing provenance label.
         var label: String {
             switch self {
-            case .power:        return "normalized power vs FTP"
-            case .runPace:      return "normalized pace vs threshold pace"
-            case .swimPace:     return "swim pace vs CSS (cleaned distance)"
-            case .swimDuration: return "duration × typical swim intensity"
-            case .hrZones:      return "heart-rate zone load"
+            case .power:                return "normalized power vs FTP"
+            case .runPace:              return "normalized pace vs threshold pace"
+            case .swimPace:             return "swim pace vs CSS (cleaned distance)"
+            case .swimPaceFromDuration: return "swim pace vs CSS (total duration)"
+            case .swimDuration:         return "duration × typical swim intensity"
+            case .hrZones:              return "heart-rate zone load"
             }
         }
     }
@@ -90,9 +92,11 @@ nonisolated enum TSSCalculator {
         return round(intensity * intensity * hours * 100)
     }
 
-    /// Swim sTSS from the CLEANED distance + active swim time, with a duration
-    /// floor so slow technique sessions aren't under-scored. Returns the value plus
-    /// whether it came from a CSS pace (`.swimPace`) or the duration floor
+    /// Swim sTSS from the resolved distance + active swim time — falling back to
+    /// the total duration when no per-length data produced a swim time (open water
+    /// has no wall rests, so duration ≈ swim time) — with a duration floor so slow
+    /// technique sessions aren't under-scored. Returns the value plus whether the
+    /// CSS pace drove it (`.swimPace` / `.swimPaceFromDuration`) or the floor did
     /// (`.swimDuration`).
     private static func swimResult(_ details: [String: Any], css: Double?, fallbackHours: Double) -> (Double, Basis)? {
         let swim = sub(details, "swimming")
@@ -103,13 +107,14 @@ nonisolated enum TSSCalculator {
         guard hours > 0 else { return nil }
         let floor = TSSConstants.swimDefaultIF * TSSConstants.swimDefaultIF * hours * 100
 
-        guard let css, css > 0, let swimTime, swimTime > 0,
-              let distance, distance > 0 else { return (round(floor), .swimDuration) }   // floor-only
-        let pace = swimTime / (distance / 100.0)           // sec / 100 m
+        guard let css, css > 0, let distance, distance > 0
+        else { return (round(floor), .swimDuration) }      // floor-only
+        let pace = hours * 3600 / (distance / 100.0)       // sec / 100 m
         let intensity = clamp(css / pace)
         let value = round(max(intensity * intensity * hours * 100, floor))
         // If the floor dominated, the CSS pace didn't actually drive the score.
-        return (value, value > round(floor) ? .swimPace : .swimDuration)
+        guard value > round(floor) else { return (value, .swimDuration) }
+        return (value, swimTime != nil ? .swimPace : .swimPaceFromDuration)
     }
 
     // MARK: HR zone-load (fallback)

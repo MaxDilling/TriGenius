@@ -40,6 +40,16 @@ private func snapshot(ftp: Int? = nil, runThrPace: Double? = nil, css: Double? =
     #expect(r.basis == .swimPace)
 }
 
+@Test func swimPaceTSS_fallsBackToTotalDuration_withoutLengthData() {
+    // No per-length swim_time_s (open water): pace from the total duration —
+    // 3600s / (3000m/100) = 120 s/100m; IF = css(90)/120 = 0.75 → 56.25 → 56.
+    let d: [String: Any] = ["sport": "open_water_swimming", "duration_minutes": 60,
+                            "distance_km": 3.0]
+    let r = TSSCalculator.compute(details: d, snapshot: snapshot(css: 90))
+    #expect(r.tss == 56)
+    #expect(r.basis == .swimPaceFromDuration)
+}
+
 @Test func swimFallsToDurationFloor_withoutCSS() {
     // No CSS → duration floor only: 0.63²·1h·100 ≈ 39.69 → 40.
     let d: [String: Any] = ["sport": "lap_swimming", "duration_minutes": 60,
