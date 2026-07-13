@@ -140,6 +140,48 @@ nonisolated enum GarminTransform {
         return segments
     }
 
+    /// (offset-from-first-sample seconds, value) samples for a named detail metric —
+    /// the stream shape `WorkoutStreams` bins. Offsets come from `directTimestamp`
+    /// (ms), falling back to the row index (the detail grid is ~1 Hz); null-value
+    /// rows are skipped, so recording gaps stay empty bins.
+    static func metricSamples(_ details: [String: Any], key: String) -> [(offset: Double, value: Double)] {
+        guard let descriptors = details["metricDescriptors"] as? [[String: Any]],
+              let rows = details["activityDetailMetrics"] as? [[String: Any]],
+              !descriptors.isEmpty, !rows.isEmpty else { return [] }
+        var indexes: [String: Int] = [:]
+        for d in descriptors {
+            if let k = d["key"] as? String, let idx = d["metricsIndex"] as? Int { indexes[k] = idx }
+        }
+        guard let valueIdx = indexes[key] else { return [] }
+        let timestampIdx = indexes["directTimestamp"]
+
+        var firstTimestamp: Double?
+        var samples: [(offset: Double, value: Double)] = []
+        for (rowIndex, row) in rows.enumerated() {
+            guard let metrics = row["metrics"] as? [Any], valueIdx < metrics.count,
+                  let value = (metrics[valueIdx] as? NSNumber)?.doubleValue else { continue }
+            var offset = Double(rowIndex)
+            if let ti = timestampIdx, ti < metrics.count,
+               let ts = (metrics[ti] as? NSNumber)?.doubleValue {
+                if firstTimestamp == nil { firstTimestamp = ts }
+                offset = (ts - firstTimestamp!) / 1000
+            }
+            samples.append((offset, value))
+        }
+        return samples
+    }
+
+    /// 1 Hz HR samples from `heartRateDTOs` — where Garmin carries the HR stream
+    /// for pool swims (their detail grid is per-length, not per-second).
+    static func heartRateSamples(_ details: [String: Any]) -> [(offset: Double, value: Double)] {
+        guard let dtos = details["heartRateDTOs"] as? [[String: Any]] else { return [] }
+        return dtos.compactMap { dto in
+            guard let t = (dto["duration"] as? NSNumber)?.doubleValue,
+                  let bpm = (dto["bpm"] as? NSNumber)?.doubleValue, bpm > 0 else { return nil }
+            return (t, bpm)
+        }
+    }
+
     /// Normalized graded speed (m/s) — true NGP, the pace analogue of normalized power.
     /// Shapes the 1 Hz `directSpeed` stream into (speed, grade, 1 s) samples, then
     /// defers the grade adjustment + math to the shared `GradeAdjustedPace` /

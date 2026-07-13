@@ -85,10 +85,15 @@ actor GarminService {
         return detail
     }
 
-    private func formatActivityRecord(_ activity: [String: Any]) async -> (rec: [String: Any], powerCurveJSON: String) {
+    private func formatActivityRecord(_ activity: [String: Any]) async -> (rec: [String: Any], powerCurveJSON: String, streamsData: Data) {
         var powerCurveJSON = ""
         let startTime = activity["startTimeLocal"] as? String ?? ""
         let activityType = (activity["activityType"] as? [String: Any])?["typeKey"] as? String ?? "unknown"
+        let activityId = activity["activityId"].map { "\($0)" }
+        // One full-details fetch feeds NGP, the power curve and the metric streams
+        // (callers gate this function to new/forced activities only).
+        var details: [String: Any]?
+        if let activityId { details = try? await fetchFullDetails(id: activityId) }
 
         func intOrNull(_ key: String) -> Any { Coerce.double(activity[key]).map { Int($0.rounded()) } ?? NSNull() }
 
@@ -140,9 +145,7 @@ actor GarminService {
             // average pace (a different number, not a normalized one). Grade ignored
             // (future NGP). Only runs for NEW activities (callers gate on the cache).
             var normPaceSecPerKm: Double?
-            if let activityId = activity["activityId"].map({ "\($0)" }),
-               let details = try? await client.getActivityDetails(id: activityId),
-               let ngs = GarminTransform.normalizedSpeedMps(details), ngs > 0 {
+            if let details, let ngs = GarminTransform.normalizedSpeedMps(details), ngs > 0 {
                 normPaceSecPerKm = 1000.0 / ngs
             }
             running["normalized_pace_s_per_km"] = normPaceSecPerKm.map { round1($0) } ?? NSNull()
@@ -161,16 +164,13 @@ actor GarminService {
                 cycling["power_zones_seconds"] = zoneSeconds(activity, prefix: "powerTimeInZone")
             }
             data["cycling"] = cycling
-            // Max-mean power curve from the 1 Hz `directPower` stream (only runs for
-            // NEW activities — callers gate on the cache). No stream/details → "".
-            if let activityId = activity["activityId"].map({ "\($0)" }),
-               let details = try? await fetchFullDetails(id: activityId) {
+            // Max-mean power curve from the 1 Hz `directPower` stream. No stream → "".
+            if let details {
                 powerCurveJSON = PowerCurve.encode(PowerCurve.maxMeans(
                     segments: GarminTransform.metricSegments(details, key: "directPower")))
             }
         } else if activityType.lowercased().contains("swim") {
             let poolLengthM = Coerce.double(activity["poolLength"]).map { $0 / 100 }
-            let activityId = activity["activityId"].map { "\($0)" }
             var intervals: [[String: Any]]? = nil
             var lengths: [[String: Any]] = []
             if let activityId {
@@ -201,7 +201,32 @@ actor GarminService {
             // Effective distance + sTSS are resolved by the store at ingest
             // (`TrainingDataStore.ingest` → `TSSScoring.score`).
         }
-        return (data, powerCurveJSON)
+
+        // Downsampled metric streams for the detail charts. Cadence key is per
+        // sport; a key the details don't carry is simply an absent metric.
+        // NOTE: `directHeartRate`/`directBikeCadence`/`directDoubleCadence` are the
+        // documented detail keys — validate against a real capture (`ref/garmin_api/`).
+        var streamsData = Data()
+        if let details {
+            var keys: [WorkoutStreams.Metric: String] = [
+                .heartRate: "directHeartRate", .power: "directPower",
+                .speed: "directSpeed", .elevation: "directElevation"
+            ]
+            if data["running"] != nil { keys[.cadence] = "directDoubleCadence" }
+            if data["cycling"] != nil { keys[.cadence] = "directBikeCadence" }
+            var metrics: [WorkoutStreams.Metric: [(offset: Double, value: Double)]] = [:]
+            for (metric, key) in keys {
+                let samples = GarminTransform.metricSamples(details, key: key)
+                if !samples.isEmpty { metrics[metric] = samples }
+            }
+            if metrics[.heartRate] == nil {
+                let hr = GarminTransform.heartRateSamples(details)
+                if !hr.isEmpty { metrics[.heartRate] = hr }
+            }
+            streamsData = WorkoutStreams.encode(
+                spanSeconds: Coerce.double(activity["duration"]) ?? 0, metrics: metrics)
+        }
+        return (data, powerCurveJSON, streamsData)
     }
 
     /// Garmin feel buckets (0/25/50/75/100) → 1–5. Nil when not rated.
@@ -222,7 +247,7 @@ actor GarminService {
     /// effective distance are computed by the store at ingest
     /// (`TrainingDataStore.ingest`), scored against the activity's own date. Returns
     /// nil without an id/date.
-    private func ingestDTO(from rec: [String: Any], powerCurveJSON: String) -> IngestedActivity? {
+    private func ingestDTO(from rec: [String: Any], powerCurveJSON: String, streamsData: Data) -> IngestedActivity? {
         guard let idNum = rec["id"] as? NSNumber else { return nil }
         guard let dateStr = rec["date"] as? String, let date = GarminTransform.date(from: dateStr) else { return nil }
         let detailsJSON = (try? JSONSerialization.data(withJSONObject: rec))
@@ -238,7 +263,8 @@ actor GarminService {
             aerobicTE: (rec["aerobic_te"] as? NSNumber)?.doubleValue,
             anaerobicTE: (rec["anaerobic_te"] as? NSNumber)?.doubleValue,
             detailsJSON: detailsJSON,
-            powerCurveJSON: powerCurveJSON
+            powerCurveJSON: powerCurveJSON,
+            streamsData: streamsData
         )
     }
 
@@ -280,10 +306,10 @@ actor GarminService {
                     // fetch inside formatActivityRecord. One span per activity, so the
                     // timeline shows whether these round-trips are the launch bottleneck.
                     let dp = Perf.begin("garmin.activityDetail")
-                    let (rec, powerCurveJSON) = await formatActivityRecord(activity)
+                    let (rec, powerCurveJSON, streamsData) = await formatActivityRecord(activity)
                     Perf.end(dp)
                     formatted.append(rec)
-                    if let dto = ingestDTO(from: rec, powerCurveJSON: powerCurveJSON) { toIngest.append(dto) }
+                    if let dto = ingestDTO(from: rec, powerCurveJSON: powerCurveJSON, streamsData: streamsData) { toIngest.append(dto) }
                 }
                 if formatted.count >= count { break }
             }
@@ -321,7 +347,7 @@ actor GarminService {
             for activity in raw {
                 let gid = (activity["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" }
                 if !force, let gid, cache[gid] != nil { continue }   // cache: skip known
-                let (formatted, powerCurveJSON) = await formatActivityRecord(activity)
+                let (formatted, powerCurveJSON, streamsData) = await formatActivityRecord(activity)
                 var rec = formatted
                 // Preserve a prior manual distance override across a forced re-fetch.
                 if let gid, let cached = cache[gid],
@@ -330,7 +356,7 @@ actor GarminService {
                     rec["manual_distance_m"] = prior
                 }
                 // TSS + effective distance are scored by the store at ingest.
-                if let dto = ingestDTO(from: rec, powerCurveJSON: powerCurveJSON) { toIngest.append(dto) }
+                if let dto = ingestDTO(from: rec, powerCurveJSON: powerCurveJSON, streamsData: streamsData) { toIngest.append(dto) }
             }
             await TrainingDataStore.shared.ingest(toIngest)
             return toIngest.count

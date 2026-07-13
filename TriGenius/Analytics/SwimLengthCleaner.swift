@@ -23,13 +23,33 @@ struct SwimLength: Sendable {
 }
 
 struct SwimCleanResult: Sendable {
+    /// One cleaned (possibly rejoined) real length.
+    struct Length: Sendable, Equatable {
+        let durationSeconds: Double
+        let strokes: Int
+        /// = pool length: one cleaned length is exactly one pool traversal.
+        let distanceMeters: Double
+        /// True when a wrongly-split fragment was merged into this length.
+        let absorbedFragment: Bool
+    }
+    let lengths: [Length]
     /// Cleaned (rejoined) real-length count.
-    let cleanedLengthCount: Int
+    nonisolated var cleanedLengthCount: Int { lengths.count }
     /// Total active swim time (Σ length durations) — conserved by merging.
     let swimTimeSeconds: Double
 }
 
 nonisolated enum SwimLengthCleaner {
+
+    /// The stored `swimming.lengths` dicts (`d`/`s`/`m`) → the cleaner's input —
+    /// the single parser, so every caller feeds the cleaner identical data.
+    static func lengths(from raw: [[String: Any]]) -> [SwimLength] {
+        raw.map {
+            SwimLength(durationSeconds: Coerce.double($0["d"]) ?? 0,
+                       strokes: Int(Coerce.double($0["s"]) ?? 0),
+                       distanceMeters: Coerce.double($0["m"]) ?? 0)
+        }
+    }
 
     /// Clean the active lengths of a pool swim. Returns nil when there is no usable
     /// per-length data (caller then keeps Garmin's count / falls back to duration).
@@ -45,7 +65,8 @@ nonisolated enum SwimLengthCleaner {
         let sRef = fullStrokes.isEmpty ? 0 : median(fullStrokes)
 
         // Mutable working segments; merge fragments into the shorter neighbour.
-        var segs: [(time: Double, strokes: Int)] = lengths.map { ($0.durationSeconds, $0.strokes) }
+        var segs: [(time: Double, strokes: Int, merged: Bool)] =
+            lengths.map { ($0.durationSeconds, $0.strokes, false) }
         var changed = true
         while changed && segs.count > 1 {
             changed = false
@@ -57,14 +78,19 @@ nonisolated enum SwimLengthCleaner {
                 let j = prev <= next ? i - 1 : i + 1
                 segs[j].time += segs[i].time
                 segs[j].strokes += segs[i].strokes
+                segs[j].merged = true
                 segs.remove(at: i)
                 changed = true
                 break
             }
         }
 
-        return SwimCleanResult(cleanedLengthCount: segs.count,
-                               swimTimeSeconds: times.reduce(0, +))
+        return SwimCleanResult(
+            lengths: segs.map {
+                .init(durationSeconds: $0.time, strokes: $0.strokes,
+                      distanceMeters: poolLengthMeters, absorbedFragment: $0.merged)
+            },
+            swimTimeSeconds: times.reduce(0, +))
     }
 
     /// A length that can't be a full pool length: impossibly fast, or far fewer

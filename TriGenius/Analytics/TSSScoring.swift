@@ -22,12 +22,7 @@ nonisolated enum TSSScoring {
         if var swimming = details["swimming"] as? [String: Any],
            let pool = Coerce.double(swimming["pool_length_m"]), pool > 0,
            let raw = swimming["lengths"] as? [[String: Any]], !raw.isEmpty {
-            let lengths = raw.map {
-                SwimLength(durationSeconds: Coerce.double($0["d"]) ?? 0,
-                           strokes: Int(Coerce.double($0["s"]) ?? 0),
-                           distanceMeters: Coerce.double($0["m"]) ?? 0)
-            }
-            if let cleaned = SwimLengthCleaner.clean(lengths, poolLengthMeters: pool) {
+            if let cleaned = SwimLengthCleaner.clean(SwimLengthCleaner.lengths(from: raw), poolLengthMeters: pool) {
                 swimming["cleaned_distance_m"] = round1(Double(cleaned.cleanedLengthCount) * pool)
                 swimming["swim_time_s"] = round1(cleaned.swimTimeSeconds)
                 details["swimming"] = swimming

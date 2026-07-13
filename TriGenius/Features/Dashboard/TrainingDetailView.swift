@@ -9,18 +9,13 @@ import AppKit
 // MARK: - Training Detail View
 //
 // Per-activity detail. Summary metrics (duration, distance, TSS, TE, avg HR,
-// calories) come from the stored `WorkoutRecord` / its `detailsJSON`. The HR
-// time-series chart + CSV export are HealthKit-only for now (Garmin HR series
-// is not yet stored — see plan's future "deeper Garmin history").
+// calories) come from the stored `WorkoutRecord` / its `detailsJSON`; the
+// time-series charts render the stored `streamsData` streams, source-agnostic.
 
 struct TrainingDetailView: View {
     let record: WorkoutRecord
 
-    @State private var heartRateSamples: [HeartRateSample] = []
-    @State private var isLoadingHR = false
-    @State private var hrScrubDate: Date?
     @State private var exportFile: ExportFile?
-    @State private var isExporting = false
     @State private var exportError: String?
     @State private var showDistanceEdit = false
     @State private var distanceInput = ""
@@ -64,9 +59,8 @@ struct TrainingDetailView: View {
                 zonesCard
                 feelCard
                 computedCard
-                if isHealthKit {
-                    heartRateCard
-                }
+                streamsSection
+                swimSection
             }
             .padding()
         }
@@ -149,7 +143,6 @@ struct TrainingDetailView: View {
         } message: {
             Text("Removes this workout and stops it from re-syncing — for a duplicate recorded on another device. Restore it anytime from Settings → Ignored workouts.")
         }
-        .task { await loadHeartRate() }
         .sheet(item: $exportFile) { file in ShareSheet(items: [file.url]) }
         .alert("Export failed", isPresented: Binding(
             get: { exportError != nil },
@@ -588,87 +581,131 @@ struct TrainingDetailView: View {
         return String(format: "%d:%02d /km", s / 60, s % 60)
     }
 
-    // MARK: Heart rate
+    // MARK: Metric streams — one chart per stored time-series metric
 
     @ViewBuilder
-    private var heartRateCard: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            Text("Heart rate").font(.headline)
-            if isLoadingHR {
-                HStack { Spacer(); ProgressView(); Spacer() }
-            } else if heartRateSamples.isEmpty {
-                Text("No heart-rate samples available.")
-                    .font(.caption).foregroundStyle(.secondary)
-            } else {
-                Chart {
-                    ForEach(heartRateSamples) { sample in
-                        LineMark(x: .value("Time", sample.date), y: .value("BPM", sample.bpm))
-                            .foregroundStyle(Color.red.gradient)
-                            .interpolationMethod(.linear)
-                    }
-                    hrScrubMarks
-                }
-                .chartScrubbing($hrScrubDate) { date in
-                    heartRateSamples.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) })?.date
-                }
-                .chartYScale(domain: .automatic(includesZero: false))
-                .chartYAxisLabel("BPM")
-                .frame(height: 180)
+    private var streamsSection: some View {
+        ForEach(WorkoutStreamModel.models(from: record.streamsData, family: family)) { model in
+            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                Text(model.kind.label).font(.headline)
+                WorkoutStreamChart(model: model)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .cardSurface()
+        }
+    }
 
-                Button(action: exportCSV) {
-                    if isExporting {
-                        ProgressView()
-                    } else {
-                        Label("Export heart rate (CSV)", systemImage: "square.and.arrow.up")
-                    }
+    // MARK: Swim — per-lap intervals + the cleaned lengths (Garmin per-length data)
+
+    @ViewBuilder
+    private var swimSection: some View {
+        let swim = details["swimming"] as? [String: Any]
+        if let intervals = swim?["intervals"] as? [[String: Any]], !intervals.isEmpty {
+            swimIntervalsCard(intervals)
+        }
+        if let cleaned = cleanedLengths {
+            swimLengthsCard(cleaned)
+        }
+    }
+
+    /// The same cleaning as ingest (`TSSScoring`), re-run on the stored lengths —
+    /// deterministic, so the rows shown always match the scored distance.
+    private var cleanedLengths: SwimCleanResult? {
+        guard let swim = details["swimming"] as? [String: Any],
+              let pool = Coerce.double(swim["pool_length_m"]), pool > 0,
+              let raw = swim["lengths"] as? [[String: Any]], !raw.isEmpty else { return nil }
+        return SwimLengthCleaner.clean(SwimLengthCleaner.lengths(from: raw), poolLengthMeters: pool)
+    }
+
+    private func swimIntervalsCard(_ intervals: [[String: Any]]) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+            Text("Intervals").font(.headline)
+            Grid(alignment: .trailing, horizontalSpacing: Theme.Spacing.m, verticalSpacing: Theme.Spacing.xs) {
+                GridRow {
+                    Text("#").gridColumnAlignment(.leading)
+                    Text("Dist")
+                    Text("Time")
+                    Text("Pace")
+                    Text("SWOLF")
+                    Text("Strokes")
                 }
-                .disabled(isExporting)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                ForEach(Array(intervals.enumerated()), id: \.offset) { _, interval in
+                    let isRest = (interval["is_rest"] as? Bool) ?? false
+                    GridRow {
+                        Text(isRest ? "Rest" : "\(Coerce.int(interval["interval"]) ?? 0)")
+                            .gridColumnAlignment(.leading)
+                        Text(isRest ? "–" : "\(Int(Coerce.double(interval["distance_m"]) ?? 0)) m")
+                        Text(Coerce.string(interval["time_formatted"]) ?? "–")
+                        Text(Coerce.string(interval["avg_pace_per_100m"]) ?? "–")
+                        Text(Coerce.int(interval["swolf"]).map(String.init) ?? "–")
+                        Text(isRest ? "–" : "\(Coerce.int(interval["total_strokes"]) ?? 0)")
+                    }
+                    .font(.caption.monospacedDigit())
+                    .opacity(isRest ? 0.5 : 1)
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
     }
 
-    @ChartContentBuilder private var hrScrubMarks: some ChartContent {
-        if let date = hrScrubDate,
-           let sample = heartRateSamples.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }) {
-            RuleMark(x: .value("Scrub", sample.date))
-                .foregroundStyle(.secondary.opacity(0.6))
-                .lineStyle(StrokeStyle(lineWidth: 1))
-                .annotation(position: .top, spacing: 0,
-                            overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
-                    ChartTooltip(
-                        title: sample.date.formatted(.dateTime.hour().minute().second()),
-                        rows: [.init(color: .red, label: "HR", value: "\(Int(sample.bpm.rounded())) bpm")]
-                    )
+    private func swimLengthsCard(_ cleaned: SwimCleanResult) -> some View {
+        DisclosureGroup {
+            Grid(alignment: .trailing, horizontalSpacing: Theme.Spacing.m, verticalSpacing: Theme.Spacing.xs) {
+                GridRow {
+                    Text("#").gridColumnAlignment(.leading)
+                    Text("Time")
+                    Text("Pace")
+                    Text("Strokes")
+                    Text("")
                 }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                ForEach(Array(cleaned.lengths.enumerated()), id: \.offset) { index, length in
+                    GridRow {
+                        Text("\(index + 1)").gridColumnAlignment(.leading)
+                        Text(lengthTimeLabel(length.durationSeconds))
+                        Text(length.distanceMeters > 0
+                             ? pace100Label(length.durationSeconds / length.distanceMeters * 100) : "–")
+                        Text("\(length.strokes)")
+                        if length.absorbedFragment {
+                            Image(systemName: "arrow.triangle.merge")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .help("Rejoined a wrongly-split length")
+                        } else {
+                            Text("")
+                        }
+                    }
+                    .font(.caption.monospacedDigit())
+                }
+            }
+            .padding(.top, Theme.Spacing.s)
+        } label: {
+            Text("Lengths (\(cleaned.cleanedLengthCount))").font(.headline)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface()
+    }
+
+    /// One length's duration, `m:ss.d`.
+    private func lengthTimeLabel(_ seconds: Double) -> String {
+        let m = Int(seconds) / 60
+        return String(format: "%d:%04.1f", m, seconds - Double(m * 60))
+    }
+
+    /// Seconds per 100 m → `m:ss`.
+    private func pace100Label(_ secondsPer100: Double) -> String {
+        let s = Int(secondsPer100.rounded())
+        return String(format: "%d:%02d", s / 60, s % 60)
     }
 
     // The HealthKit workout UUID, stripped of the source prefix.
     private var healthKitWorkoutID: String {
         if let raw = details["id"] as? String { return raw }
         return record.id.replacingOccurrences(of: "healthkit:", with: "")
-    }
-
-    private func loadHeartRate() async {
-        guard isHealthKit, heartRateSamples.isEmpty, !isLoadingHR else { return }
-        isLoadingHR = true
-        defer { isLoadingHR = false }
-        if let workout = try? await HealthKitService.shared.fetchWorkout(id: healthKitWorkoutID),
-           let samples = try? await HealthKitService.shared.fetchHeartRateSeries(during: workout) {
-            heartRateSamples = Self.downsample(samples, to: 600)
-        }
-    }
-
-    /// Evenly stride a dense series down to at most `limit` points for the chart —
-    /// the high-res HR stream can be thousands of samples; the line stays smooth.
-    private static func downsample(_ samples: [HeartRateSample], to limit: Int) -> [HeartRateSample] {
-        guard samples.count > limit else { return samples }
-        let stride = Int((Double(samples.count) / Double(limit)).rounded(.up))
-        return samples.enumerated().compactMap { index, sample in
-            index % stride == 0 ? sample : nil
-        }
     }
 
     // MARK: Debug export
@@ -776,27 +813,11 @@ struct TrainingDetailView: View {
         }
     }
 
-    private func exportCSV() {
-        isExporting = true
-        Task {
-            defer { isExporting = false }
-            do {
-                let csv = try await HealthKitService.shared.heartRateCSV(forWorkoutID: healthKitWorkoutID)
-                let safeSport = family.displayName
-                let filename = "HR_\(safeSport)_\(Int(record.date.timeIntervalSince1970)).csv"
-                let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
-                try csv.write(to: url, atomically: true, encoding: .utf8)
-                exportFile = ExportFile(url: url)
-            } catch {
-                exportError = error.localizedDescription
-            }
-        }
-    }
 }
 
-// MARK: - CSV Export Helpers
+// MARK: - Export helpers
 //
-// Used by the training detail view's heart-rate export.
+// Used by the training detail view's debug JSON export.
 
 /// Wraps an exported file URL so it can drive a `.sheet(item:)` presentation.
 struct ExportFile: Identifiable {

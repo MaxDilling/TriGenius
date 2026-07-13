@@ -108,6 +108,9 @@ final class WorkoutRecord {
     /// Max-mean power per grid duration, computed at ingest from the source's raw
     /// power stream (`PowerCurve.encode`). "" when the activity has no power stream.
     var powerCurveJSON: String = ""
+    /// Downsampled metric streams (`WorkoutStreams.encode`), the detail charts'
+    /// data. Empty when the source delivered no streams for this activity.
+    var streamsData: Data = Data()
 
     init(
         id: String,
@@ -132,7 +135,8 @@ final class WorkoutRecord {
         aerobicTE: Double? = nil,
         anaerobicTE: Double? = nil,
         detailsJSON: String = "",
-        powerCurveJSON: String = ""
+        powerCurveJSON: String = "",
+        streamsData: Data = Data()
     ) {
         self.id = id
         self.source = source
@@ -157,6 +161,7 @@ final class WorkoutRecord {
         self.anaerobicTE = anaerobicTE
         self.detailsJSON = detailsJSON
         self.powerCurveJSON = powerCurveJSON
+        self.streamsData = streamsData
     }
 }
 
@@ -268,6 +273,9 @@ struct IngestedActivity: Sendable {
     /// Encoded max-mean power curve (`PowerCurve.encode`), "" when the source has
     /// no power stream for this activity.
     let powerCurveJSON: String
+    /// Downsampled metric streams (`WorkoutStreams.encode`), empty when the source
+    /// delivered none.
+    let streamsData: Data
 }
 
 /// The cached, already-computed result of a stored activity — lets a resync reuse
@@ -600,6 +608,7 @@ final class TrainingDataStore {
             winner.anaerobicTE = loser.anaerobicTE
             winner.detailsJSON = loser.detailsJSON
             winner.powerCurveJSON = loser.powerCurveJSON
+            winner.streamsData = loser.streamsData
             if winner.startMinute == nil { winner.startMinute = loser.startMinute }
         }
         context.delete(loser)
@@ -708,7 +717,8 @@ final class TrainingDataStore {
                 isCompleted: true,
                 durationMinutes: a.durationMinutes, distanceKm: scored.distanceKm,
                 tss: scored.tss, tssBasis: scored.basis, aerobicTE: a.aerobicTE, anaerobicTE: a.anaerobicTE,
-                detailsJSON: scored.detailsJSON, powerCurveJSON: a.powerCurveJSON
+                detailsJSON: scored.detailsJSON, powerCurveJSON: a.powerCurveJSON,
+                streamsData: a.streamsData
             )
             context.insert(rec)
         }
@@ -739,6 +749,7 @@ final class TrainingDataStore {
         record.anaerobicTE = a.anaerobicTE
         record.detailsJSON = scored.detailsJSON
         record.powerCurveJSON = a.powerCurveJSON
+        record.streamsData = a.streamsData
         if record.startMinute == nil {
             record.startMinute = WorkoutRecord.clockMinute(fromDetails: scored.detailsJSON)
         }
@@ -1014,6 +1025,7 @@ final class TrainingDataStore {
         plan.anaerobicTE = activity.anaerobicTE
         plan.detailsJSON = activity.detailsJSON
         plan.powerCurveJSON = activity.powerCurveJSON
+        plan.streamsData = activity.streamsData
         if plan.startMinute == nil { plan.startMinute = activity.startMinute }
         plan.setExternalRef(target: Self.completedRefKey, externalId: activity.id)
         context.delete(activity)
@@ -1055,7 +1067,8 @@ final class TrainingDataStore {
             isCompleted: true,
             durationMinutes: plan.durationMinutes, distanceKm: plan.distanceKm,
             tss: plan.tss, tssBasis: plan.tssBasis, aerobicTE: plan.aerobicTE, anaerobicTE: plan.anaerobicTE,
-            detailsJSON: plan.detailsJSON, powerCurveJSON: plan.powerCurveJSON
+            detailsJSON: plan.detailsJSON, powerCurveJSON: plan.powerCurveJSON,
+            streamsData: plan.streamsData
         )
         context.insert(activity)
         plan.isCompleted = false
@@ -1067,6 +1080,7 @@ final class TrainingDataStore {
         plan.anaerobicTE = nil
         plan.detailsJSON = ""
         plan.powerCurveJSON = ""
+        plan.streamsData = Data()
         plan.setExternalRef(target: Self.completedRefKey, externalId: nil)
     }
 
