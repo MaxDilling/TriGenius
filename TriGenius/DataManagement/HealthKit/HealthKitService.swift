@@ -106,8 +106,6 @@ final class HealthKitService {
             name: rec["name"] as? String ?? "Activity",
             durationMinutes: (rec["duration_minutes"] as? NSNumber)?.doubleValue ?? 0,
             distanceKm: (rec["distance_km"] as? NSNumber)?.doubleValue ?? 0,
-            aerobicTE: nil,
-            anaerobicTE: nil,
             detailsJSON: detailsJSON,
             powerCurveJSON: powerCurveJSON,
             streamsData: streamsData

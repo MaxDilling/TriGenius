@@ -109,8 +109,6 @@ actor GarminService {
             "location": activity["locationName"] ?? NSNull(),
             "avg_hr": intOrNull("averageHR"),
             "max_hr": intOrNull("maxHR"),
-            "aerobic_te": Coerce.double(activity["aerobicTrainingEffect"]).map { round1($0) } ?? NSNull(),
-            "anaerobic_te": Coerce.double(activity["anaerobicTrainingEffect"]).map { round1($0) } ?? NSNull(),
             "training_load": intOrNull("activityTrainingLoad"),
             "elevation_gain_m": intOrNull("elevationGain"),
             "elevation_loss_m": intOrNull("elevationLoss")
@@ -131,7 +129,10 @@ actor GarminService {
             data["notes"] = desc
         }
 
-        if ["running", "trail_running", "treadmill_running"].contains(activityType) {
+        // Branch on the sport *family* so every source spelling (road_biking,
+        // gravel_cycling, trail_running, …) gets its per-sport section.
+        let family = SportFamily(sportKey: activityType)
+        if family == .run {
             var running: [String: Any] = [
                 "avg_pace_min_km": orNull(GarminTransform.speedToPace(Coerce.double(activity["averageSpeed"]), distanceM: 1000)),
                 "best_pace_min_km": orNull(GarminTransform.speedToPace(Coerce.double(activity["maxSpeed"]), distanceM: 1000)),
@@ -150,7 +151,7 @@ actor GarminService {
             }
             running["normalized_pace_s_per_km"] = normPaceSecPerKm.map { round1($0) } ?? NSNull()
             data["running"] = running
-        } else if ["cycling", "indoor_cycling", "virtual_ride"].contains(activityType) {
+        } else if family == .bike {
             let avgSpeed = Coerce.double(activity["averageSpeed"]) ?? 0
             var cycling: [String: Any] = [
                 "avg_speed_kmh": avgSpeed > 0 ? round1(avgSpeed * 3.6) : NSNull(),
@@ -169,7 +170,7 @@ actor GarminService {
                 powerCurveJSON = PowerCurve.encode(PowerCurve.maxMeans(
                     segments: GarminTransform.metricSegments(details, key: "directPower")))
             }
-        } else if activityType.lowercased().contains("swim") {
+        } else if family == .swim {
             let poolLengthM = Coerce.double(activity["poolLength"]).map { $0 / 100 }
             var intervals: [[String: Any]]? = nil
             var lengths: [[String: Any]] = []
@@ -260,8 +261,6 @@ actor GarminService {
             name: rec["name"] as? String ?? "Activity",
             durationMinutes: (rec["duration_minutes"] as? NSNumber)?.doubleValue ?? 0,
             distanceKm: (rec["distance_km"] as? NSNumber)?.doubleValue ?? 0,
-            aerobicTE: (rec["aerobic_te"] as? NSNumber)?.doubleValue,
-            anaerobicTE: (rec["anaerobic_te"] as? NSNumber)?.doubleValue,
             detailsJSON: detailsJSON,
             powerCurveJSON: powerCurveJSON,
             streamsData: streamsData

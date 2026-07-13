@@ -99,8 +99,6 @@ final class WorkoutRecord {
     /// load") — surfaced so a fallback-derived score isn't over-trusted. Nil when
     /// not scored. Set alongside `tss` at ingest.
     var tssBasis: String?
-    var aerobicTE: Double?
-    var anaerobicTE: Double?
     /// The full activity record, JSON-encoded — the rich blob the detail UI reads
     /// and the coach's lean `get_workouts` projection is derived from. "" when this
     /// row has no completed activity yet.
@@ -132,8 +130,6 @@ final class WorkoutRecord {
         distanceKm: Double = 0,
         tss: Double? = nil,
         tssBasis: String? = nil,
-        aerobicTE: Double? = nil,
-        anaerobicTE: Double? = nil,
         detailsJSON: String = "",
         powerCurveJSON: String = "",
         streamsData: Data = Data()
@@ -157,8 +153,6 @@ final class WorkoutRecord {
         self.distanceKm = distanceKm
         self.tss = tss
         self.tssBasis = tssBasis
-        self.aerobicTE = aerobicTE
-        self.anaerobicTE = anaerobicTE
         self.detailsJSON = detailsJSON
         self.powerCurveJSON = powerCurveJSON
         self.streamsData = streamsData
@@ -265,8 +259,6 @@ struct IngestedActivity: Sendable {
     /// Source-declared distance (km); a fallback only — the store re-derives the
     /// effective distance (swim cleaning / manual override) when it scores.
     let distanceKm: Double
-    let aerobicTE: Double?
-    let anaerobicTE: Double?
     /// Normalized, *unscored* activity JSON. The store computes TSS + the resolved
     /// distance from this at ingest (see `TrainingDataStore.ingest`).
     let detailsJSON: String
@@ -604,8 +596,6 @@ final class TrainingDataStore {
             winner.distanceKm = loser.distanceKm
             winner.tss = loser.tss
             winner.tssBasis = loser.tssBasis
-            winner.aerobicTE = loser.aerobicTE
-            winner.anaerobicTE = loser.anaerobicTE
             winner.detailsJSON = loser.detailsJSON
             winner.powerCurveJSON = loser.powerCurveJSON
             winner.streamsData = loser.streamsData
@@ -716,7 +706,7 @@ final class TrainingDataStore {
                 startMinute: WorkoutRecord.clockMinute(fromDetails: scored.detailsJSON),
                 isCompleted: true,
                 durationMinutes: a.durationMinutes, distanceKm: scored.distanceKm,
-                tss: scored.tss, tssBasis: scored.basis, aerobicTE: a.aerobicTE, anaerobicTE: a.anaerobicTE,
+                tss: scored.tss, tssBasis: scored.basis,
                 detailsJSON: scored.detailsJSON, powerCurveJSON: a.powerCurveJSON,
                 streamsData: a.streamsData
             )
@@ -745,8 +735,6 @@ final class TrainingDataStore {
         record.distanceKm = scored.distanceKm
         record.tss = scored.tss
         record.tssBasis = scored.basis
-        record.aerobicTE = a.aerobicTE
-        record.anaerobicTE = a.anaerobicTE
         record.detailsJSON = scored.detailsJSON
         record.powerCurveJSON = a.powerCurveJSON
         record.streamsData = a.streamsData
@@ -1021,8 +1009,6 @@ final class TrainingDataStore {
         plan.distanceKm = activity.distanceKm
         plan.tss = activity.tss
         plan.tssBasis = activity.tssBasis
-        plan.aerobicTE = activity.aerobicTE
-        plan.anaerobicTE = activity.anaerobicTE
         plan.detailsJSON = activity.detailsJSON
         plan.powerCurveJSON = activity.powerCurveJSON
         plan.streamsData = activity.streamsData
@@ -1066,7 +1052,7 @@ final class TrainingDataStore {
             startMinute: WorkoutRecord.clockMinute(fromDetails: plan.detailsJSON),
             isCompleted: true,
             durationMinutes: plan.durationMinutes, distanceKm: plan.distanceKm,
-            tss: plan.tss, tssBasis: plan.tssBasis, aerobicTE: plan.aerobicTE, anaerobicTE: plan.anaerobicTE,
+            tss: plan.tss, tssBasis: plan.tssBasis,
             detailsJSON: plan.detailsJSON, powerCurveJSON: plan.powerCurveJSON,
             streamsData: plan.streamsData
         )
@@ -1076,8 +1062,6 @@ final class TrainingDataStore {
         plan.distanceKm = 0
         plan.tss = nil
         plan.tssBasis = nil
-        plan.aerobicTE = nil
-        plan.anaerobicTE = nil
         plan.detailsJSON = ""
         plan.powerCurveJSON = ""
         plan.streamsData = Data()

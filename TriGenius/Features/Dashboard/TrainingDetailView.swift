@@ -8,7 +8,7 @@ import AppKit
 
 // MARK: - Training Detail View
 //
-// Per-activity detail. Summary metrics (duration, distance, TSS, TE, avg HR,
+// Per-activity detail. Summary metrics (duration, distance, TSS, avg HR,
 // calories) come from the stored `WorkoutRecord` / its `detailsJSON`; the
 // time-series charts render the stored `streamsData` streams, source-agnostic.
 
@@ -20,6 +20,7 @@ struct TrainingDetailView: View {
     @State private var showDistanceEdit = false
     @State private var distanceInput = ""
     @State private var showDeleteConfirm = false
+    @State private var showTSSBasis = false
     @State private var showUnlinkConfirm = false
     @State private var showIgnoreConfirm = false
     @Environment(\.dismiss) private var dismiss
@@ -53,12 +54,10 @@ struct TrainingDetailView: View {
                 heroCapsule
                 comparisonCard
                 plannedStructureCard
-                tssBasisNote
                 // coachInsight
                 activityCard
                 zonesCard
                 feelCard
-                computedCard
                 streamsSection
                 swimSection
             }
@@ -69,50 +68,52 @@ struct TrainingDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
-            if record.isPlanned, record.isCompleted {
-                ToolbarItem(placement: .primaryAction) {
-                    Button { showUnlinkConfirm = true } label: {
-                        Label("Unlink actual", systemImage: "personalhotspot.slash")
-                    }
-                }
-            }
-            if !linkCandidates.isEmpty {
-                ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        ForEach(linkCandidates, id: \.id) { plan in
-                            Button {
-                                TrainingDataStore.shared.linkActual(activityId: record.id, toPlanId: plan.id)
-                                dismiss()
-                            } label: {
-                                Text(planMenuLabel(plan))
-                            }
+            ToolbarItem(placement: .primaryAction) {
+                Menu {
+                    if record.isPlanned, record.isCompleted {
+                        Button { showUnlinkConfirm = true } label: {
+                            Label("Unlink actual", systemImage: "personalhotspot.slash")
                         }
+                    }
+                    if !linkCandidates.isEmpty {
+                        Menu {
+                            ForEach(linkCandidates, id: \.id) { plan in
+                                Button {
+                                    TrainingDataStore.shared.linkActual(activityId: record.id, toPlanId: plan.id)
+                                    dismiss()
+                                } label: {
+                                    Text(planMenuLabel(plan))
+                                }
+                            }
+                        } label: {
+                            Label("Link to planned workout", systemImage: "link.badge.plus")
+                        }
+                    }
+                    Button {
+                        distanceInput = String(format: "%.2f", record.distanceKm)
+                        showDistanceEdit = true
                     } label: {
-                        Label("Link to planned workout", systemImage: "link.badge.plus")
+                        Label("Edit distance", systemImage: "pencil")
                     }
-                }
-            }
-            if record.isCompleted, !record.isPlanned {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(role: .destructive) {
-                        showIgnoreConfirm = true
-                    } label: {
-                        Label("Ignore workout", systemImage: "eye.slash")
+                    if record.isCompleted, !record.isPlanned {
+                        Button(role: .destructive) {
+                            showIgnoreConfirm = true
+                        } label: {
+                            Label("Ignore workout", systemImage: "eye.slash")
+                        }
                     }
-                }
-            }
-            if debugModeEnabled {
-                ToolbarItem(placement: .primaryAction) {
-                    Button(action: exportDebugJSON) {
-                        Label("Export workout (JSON)", systemImage: "ladybug")
+                    if debugModeEnabled {
+                        Button(action: exportDebugJSON) {
+                            Label("Export workout (JSON)", systemImage: "ladybug")
+                        }
+                        Button(role: .destructive) {
+                            showDeleteConfirm = true
+                        } label: {
+                            Label("Delete workout", systemImage: "trash")
+                        }
                     }
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Button(role: .destructive) {
-                        showDeleteConfirm = true
-                    } label: {
-                        Label("Delete workout", systemImage: "trash")
-                    }
+                } label: {
+                    Label("More", systemImage: "ellipsis.circle")
                 }
             }
         }
@@ -182,6 +183,9 @@ struct TrainingDetailView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(record.name).font(.headline)
                 HStack(spacing: 4) {
+                    if let time = Coerce.string(details["time"]), !time.isEmpty {
+                        Text(time)
+                    }
                     Text(record.date, style: .date)
                     Text("(\(record.source))")
                 }
@@ -218,20 +222,39 @@ struct TrainingDetailView: View {
                 if index > 0 {
                     Divider().frame(height: 34)
                 }
-                VStack(spacing: Theme.Spacing.xs) {
-                    Text(metric.value)
-                        .font(.title2.weight(.semibold))
-                        .monospacedDigit()
-                        .lineLimit(1).minimumScaleFactor(0.6)
-                    Text(metric.label)
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity)
+                heroCell(metric)
             }
         }
         .padding(.vertical, Theme.Spacing.l)
         .padding(.horizontal, Theme.Spacing.m)
         .glassSurface(cornerRadius: Theme.Radius.l)
+    }
+
+    /// The TSS cell reveals its computation basis in a popover on tap.
+    @ViewBuilder
+    private func heroCell(_ metric: HeroMetric) -> some View {
+        let cell = VStack(spacing: Theme.Spacing.xs) {
+            Text(metric.value)
+                .font(.title2.weight(.semibold))
+                .monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.6)
+            Text(metric.label)
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
+        if metric.label == "TSS", let tssBasis {
+            cell
+                .contentShape(Rectangle())
+                .onTapGesture { showTSSBasis = true }
+                .popover(isPresented: $showTSSBasis, arrowEdge: .top) {
+                    Label("TSS computed from \(tssBasis)", systemImage: "function")
+                        .font(.callout)
+                        .padding()
+                        .presentationCompactAdaptation(.popover)
+                }
+        } else {
+            cell
+        }
     }
 
     // MARK: Planned vs Completed
@@ -340,25 +363,15 @@ struct TrainingDetailView: View {
 
     // MARK: TSS provenance
     //
-    // Surface where the TSS came from. Completed activities derive TSS
-    // from their stored stream data via `TSSCalculator` — we re-run the same
-    // dispatch (read-only) against the current thresholds to label the source.
+    // Surface where the TSS came from (via the hero TSS popover). Completed
+    // activities derive TSS from their stored stream data via `TSSCalculator` —
+    // we re-run the same dispatch (read-only) to label the source.
 
     private var tssBasis: String? {
         guard record.tss != nil else { return nil }
         // As-of the activity's own date — the same basis it was scored with at ingest.
         let snapshot = TrainingDataStore.shared.performanceHistory().snapshot(asOf: record.date)
         return TSSCalculator.compute(details: details, snapshot: snapshot).basis?.label
-    }
-
-    @ViewBuilder
-    private var tssBasisNote: some View {
-        if let tssBasis {
-            Label("TSS computed from \(tssBasis)", systemImage: "function")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, Theme.Spacing.xs)
-        }
     }
 
     // MARK: Coach insight ("Silent AI")
@@ -381,7 +394,8 @@ struct TrainingDetailView: View {
     //
     // The achieved summary, sport-aware. Each row is conditional, so a sparse
     // record (e.g. a HealthKit workout) simply shows fewer rows. Self-computed
-    // normalized values live in `computedCard`; zones + feel are their own cards.
+    // values (normalized pace/power, cleaned swim distance) carry the ƒ icon;
+    // zones + feel are their own cards.
 
     private struct SecondaryMetric: Identifiable {
         let id = UUID()
@@ -397,16 +411,11 @@ struct TrainingDetailView: View {
         let swimming = details["swimming"] as? [String: Any]
 
         if let hr = Coerce.int(details["avg_hr"]) {
-            rows.append(.init(label: "Avg HR", value: "\(hr) bpm", icon: "heart"))
-        }
-        if let hr = Coerce.int(details["max_hr"]) {
-            rows.append(.init(label: "Max HR", value: "\(hr) bpm", icon: "heart.fill"))
-        }
-        if let te = record.aerobicTE {
-            rows.append(.init(label: "Aerobic TE", value: String(format: "%.1f", te), icon: "lungs"))
-        }
-        if let te = record.anaerobicTE {
-            rows.append(.init(label: "Anaerobic TE", value: String(format: "%.1f", te), icon: "bolt.heart"))
+            var value = "\(hr) bpm"
+            if let maxHr = Coerce.int(details["max_hr"]) {
+                value += " (max \(maxHr))"
+            }
+            rows.append(.init(label: "Avg HR", value: value, icon: "heart"))
         }
         if let cadence = Coerce.int(running?["avg_cadence_spm"]) {
             rows.append(.init(label: "Avg Cadence", value: "\(cadence) spm", icon: "figure.run"))
@@ -415,6 +424,12 @@ struct TrainingDetailView: View {
         }
         if let power = Coerce.int(cycling?["avg_power_w"]) ?? Coerce.int(running?["avg_power_w"]) {
             rows.append(.init(label: "Avg Power", value: "\(power) W", icon: "bolt"))
+        }
+        if let np = Coerce.double(cycling?["normalized_power_w"]), np > 0 {
+            rows.append(.init(label: "Normalized Power", value: "\(Int(np)) W", icon: "function"))
+        }
+        if let pace = Coerce.double(running?["normalized_pace_s_per_km"]), pace > 0 {
+            rows.append(.init(label: "Normalized Pace", value: paceLabel(pace), icon: "function"))
         }
         if let speed = Coerce.double(cycling?["avg_speed_kmh"]), speed > 0 {
             var value = String(format: "%.1f km/h", speed)
@@ -428,6 +443,13 @@ struct TrainingDetailView: View {
         }
         if let pace = Coerce.string(swimming?["avg_pace_per_100m"]) {
             rows.append(.init(label: "Avg Pace", value: "\(pace) /100m", icon: "speedometer"))
+        }
+        if let cleaned = Coerce.double(swimming?["cleaned_distance_m"]),
+           let garmin = Coerce.double(swimming?["garmin_distance_m"]), garmin > 0, cleaned > 0 {
+            let pct = Int(((garmin / cleaned) - 1) * 100)
+            rows.append(.init(label: "Cleaned lengths",
+                              value: "\(Int(cleaned)) m (Garmin \(Int(garmin)) m, \(pct >= 0 ? "+" : "")\(pct)%)",
+                              icon: "function"))
         }
         if let gain = Coerce.int(details["elevation_gain_m"]), gain > 0 {
             var value = "↑ \(gain) m"
@@ -521,50 +543,6 @@ struct TrainingDetailView: View {
         case 4:    return "Strong"
         default:   return "Very Strong"
         }
-    }
-
-    // MARK: Computed values (our self-computed TSS inputs) + distance override
-
-    /// The normalized inputs we derive ourselves (vs Garmin's raw values).
-    private var computedRows: [SecondaryMetric] {
-        var rows: [SecondaryMetric] = []
-        if let pace = Coerce.double((details["running"] as? [String: Any])?["normalized_pace_s_per_km"]), pace > 0 {
-            rows.append(.init(label: "Normalized Pace", value: paceLabel(pace), icon: "speedometer"))
-        }
-        if let np = Coerce.double((details["cycling"] as? [String: Any])?["normalized_power_w"]), np > 0 {
-            rows.append(.init(label: "Normalized Power", value: "\(Int(np)) W", icon: "bolt"))
-        }
-        if let swim = details["swimming"] as? [String: Any],
-           let cleaned = Coerce.double(swim["cleaned_distance_m"]),
-           let garmin = Coerce.double(swim["garmin_distance_m"]), garmin > 0, cleaned > 0 {
-            let pct = Int(((garmin / cleaned) - 1) * 100)
-            rows.append(.init(label: "Cleaned lengths",
-                              value: "\(Int(cleaned)) m (Garmin \(Int(garmin)) m, \(pct >= 0 ? "+" : "")\(pct)%)",
-                              icon: "ruler"))
-        }
-        return rows
-    }
-
-    private var computedCard: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            HStack {
-                Text("Computed").font(.headline)
-                Spacer()
-                Button {
-                    distanceInput = String(format: "%.2f", record.distanceKm)
-                    showDistanceEdit = true
-                } label: {
-                    Label("Edit distance", systemImage: "pencil")
-                }
-                .font(.caption)
-                .buttonStyle(.borderless)
-            }
-            metricRow("Distance", String(format: "%.2f km", record.distanceKm), "ruler")
-            ForEach(computedRows) { row in
-                metricRow(row.label, row.value, row.icon)
-            }
-        }
-        .cardSurface()
     }
 
     private func metricRow(_ label: String, _ value: String, _ icon: String) -> some View {
@@ -773,8 +751,6 @@ struct TrainingDetailView: View {
                 "distance_km": record.distanceKm,
             ]
             if let tss = record.tss { completed["tss"] = tss }
-            if let te = record.aerobicTE { completed["aerobic_te"] = te }
-            if let te = record.anaerobicTE { completed["anaerobic_te"] = te }
             dump["completed"] = completed
         }
 

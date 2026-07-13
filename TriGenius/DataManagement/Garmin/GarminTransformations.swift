@@ -80,7 +80,6 @@ nonisolated enum GarminTransform {
         let totalDuration = activities.reduce(0.0) { $0 + (($1["duration_minutes"] as? Double) ?? 0) }
         let totalDistance = activities.reduce(0.0) { $0 + (($1["distance_km"] as? Double) ?? 0) }
         let avgHR = activities.compactMap { $0["avg_hr"] as? Int }
-        let te = activities.compactMap { $0["aerobic_te"] as? Double }
         var out: [String: Any] = [
             "total_activities": activities.count,
             "total_duration_minutes": (totalDuration * 10).rounded() / 10,
@@ -88,7 +87,6 @@ nonisolated enum GarminTransform {
             "sports_breakdown": countBySport(activities)
         ]
         out["avg_heart_rate"] = avgHR.isEmpty ? NSNull() : Int((Double(avgHR.reduce(0, +)) / Double(avgHR.count)).rounded())
-        out["avg_training_effect"] = te.isEmpty ? NSNull() : ((te.reduce(0, +) / Double(te.count)) * 10).rounded() / 10
         return out
     }
 
