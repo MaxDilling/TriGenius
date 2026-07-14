@@ -130,10 +130,12 @@ nonisolated enum GarminWorkoutBuilder {
         var convertedLow = targetLow
         var convertedHigh = targetHigh
 
-        // Pace targets given as sec/km are converted to m/s for Garmin.
+        // Pace targets (sec/100m for swim, sec/km otherwise) are converted to m/s
+        // for Garmin. Faster pace = fewer seconds = higher speed, so bounds invert.
         if targetType == "pace", let low = targetLow, let high = targetHigh, low > 10, high > 10 {
-            convertedLow = 1000.0 / high
-            convertedHigh = 1000.0 / low
+            let reference = SportFamily(sportKey: sport) == .swim ? 100.0 : 1000.0
+            convertedLow = reference / high
+            convertedHigh = reference / low
         }
 
         // Speed targets given as km/h are converted to m/s for Garmin.
