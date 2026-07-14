@@ -19,6 +19,25 @@ import Foundation
 // since CoachBrain appends results in the same order as the calls.
 
 final class OpenAICompatibleBackend: LLMBackend {
+    /// OpenRouter attribution. `HTTP-Referer` is required — its URL is the app's
+    /// identity in OpenRouter's dashboard; without it no app page is created and
+    /// `X-Title` (the display name) is ignored. OpenRouter has no version field,
+    /// so the app version rides along in `User-Agent` (`TriGenius/1.2 (34)`).
+    static var openRouterHeaders: [String: String] {
+        var userAgent = "TriGenius"
+        if let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String {
+            userAgent += "/\(version)"
+        }
+        if let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
+            userAgent += " (\(build))"
+        }
+        return [
+            "HTTP-Referer": "https://github.com/MaxDilling/TriGenius",
+            "X-Title": "TriGenius",
+            "User-Agent": userAgent,
+        ]
+    }
+
     let displayName: String
     let supportsTools = true
     let isAvailable = true

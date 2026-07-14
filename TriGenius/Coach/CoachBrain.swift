@@ -633,7 +633,7 @@ enum BackendFactory {
                 displayName: BackendType.openRouter.rawValue,
                 baseURL: "https://openrouter.ai/api/v1",
                 apiKey: apiKey,
-                extraHeaders: ["X-Title": "TriGenius"],
+                extraHeaders: OpenAICompatibleBackend.openRouterHeaders,
                 model: "deepseek/deepseek-v4-flash"
             )
         case .appleIntelligence:
