@@ -294,16 +294,22 @@ final class ATPToolHandler: CoachToolHandler {
             lines.append("Current period: \(cur.period.label) (week \(cur.periodWeekIndex)) — this week's target \(Int(cur.plannedTSS)) TSS.")
         }
         if let a = events.filter({ $0.priority == .a && $0.date >= today }).sorted(by: { $0.date < $1.date }).first {
-            let wks = max(0, cal.dateComponents([.weekOfYear], from: today, to: a.date).weekOfYear ?? 0)
-            var s = "Next A race: \(a.name) on \(iso(a.date)) (\(wks) wks out)"
+            let days = max(0, cal.dateComponents([.day], from: today, to: a.date).day ?? 0)
+            let countdown = days < 14
+                ? "\(days) day\(days == 1 ? "" : "s") out"
+                : "\(days / 7) wks out"
+            var s = "Next A race: \(a.name) on \(iso(a.date)) (\(countdown))"
             if let t = a.targetCTL { s += ", target CTL \(Int(t))" }
             if let proj = projectedCTL(plan, on: a.date) { s += ", projected CTL \(Int(proj))" }
             lines.append(s + ".")
         }
 
-        if !events.isEmpty {
-            lines.append("Events:")
-            for e in events.sorted(by: { $0.date < $1.date }) {
+        // Past events stay in the store (get_atp shows them) but don't spend
+        // prompt tokens — only what's ahead matters for coaching decisions.
+        let upcoming = events.filter { $0.date >= today }.sorted { $0.date < $1.date }
+        if !upcoming.isEmpty {
+            lines.append("Upcoming events:")
+            for e in upcoming {
                 var s = "• [\(e.priority.rawValue)] \(e.name) — \(e.eventType.discipline.label)/\(e.eventType.label) on \(iso(e.date))"
                 if let t = e.targetCTL { s += " (target CTL \(Int(t)))" }
                 lines.append("  " + s)
@@ -312,6 +318,16 @@ final class ATPToolHandler: CoachToolHandler {
         let warn = plan.weeks.filter(\.rampExceeded).count
         if warn > 0 { lines.append("⚠️ \(warn) week(s) ramp faster than the max ramp rate (\(Int(params.maxRampRate)) CTL/wk).") }
         return lines.joined(separator: "\n")
+    }
+
+    /// True while the ATP's current week is a planned low-volume week (recovery,
+    /// or peak/race/transition) — the training-load prompt section uses this to
+    /// frame low week-to-date numbers as intentional.
+    static func reducedVolumePlanned() -> Bool {
+        guard let plan = ATPEngine.current() else { return false }
+        let today = Calendar.current.startOfDay(for: Date())
+        guard let cur = plan.weeks.first(where: { today >= $0.weekStart && today <= weekEnd($0.weekStart) }) else { return false }
+        return cur.isRecovery || cur.isTaper || !cur.period.isBaseOrBuild
     }
 
     private static func weekEnd(_ weekStart: Date) -> Date {

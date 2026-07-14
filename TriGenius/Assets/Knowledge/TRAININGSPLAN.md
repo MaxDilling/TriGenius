@@ -96,12 +96,12 @@ individual. Adjust it via `set_atp` rather than leaving the default unquestioned
 
 **When to intervene regardless of what `max_ramp_rate` is set to:**
 - Sustained ramp >8–10 CTL/week, or `ramp_warnings` > 0 for more than one week running.
-- TSB (from `get_health_metrics`/PMC) sustained below −30, or below −20 more than once per ~10 days
+- TSB (from the PMC section) sustained below −30, or below −20 more than once per ~10 days
   (Fitzgerald's TSB-management parameter).
 - CTL flat or declining two consecutive weeks *outside* a planned taper — investigate missed
   sessions, under-recovery, or life stress before assuming detraining.
 - Physiological: resting HR persistently 5–10 bpm above baseline, or HRV suppressed beyond ~72 h —
-  cross-check via `get_health_metrics` wellness series; the system prompt's HRV/RHR interpretation
+  cross-check via `get_metric_history` (resting HR / HRV); the system prompt's HRV/RHR interpretation
   and clinical-escalation rules apply as-is.
 
 ---
@@ -209,9 +209,32 @@ should only ever be discussed as loose orientation:
 
 **"CTL hunting"** — pushing CTL up as a goal in itself rather than a byproduct of sound training — is
 a recognized failure mode; don't encourage it. Watch instead for the pattern-level signals already
-covered above (§3's ramp red flags, §5's taper-is-normal framing) and the system prompt's general
-stagnation-triage order (volume → frequency → consistency → specificity → recovery → intensity
-distribution → training age) before concluding a plateaued CTL means "train harder."
+covered above (§3's ramp red flags, §5's taper-is-normal framing) and §9's stagnation-triage order
+before concluding a plateaued CTL means "train harder."
+
+---
+
+## 9. Stagnation triage — order matters
+
+When an athlete is plateauing or asks "what's the lever?", work through the factors in THIS order.
+Do not reflexively jump to "train polarized" or "more intervals."
+
+1. **Volume** (especially relative to target distance/event)
+2. **Frequency** (sessions per week)
+3. **Consistency** (gaps > 1 week in the last 3 months?)
+4. **Specificity** (training the actual demands of the goal?)
+5. **Recovery & energy** (sleep, REDs risk, iron status)
+6. **Intensity distribution** — only after the above
+7. **Training age** (a year-3+ VO2max plateau is NORMAL; the relevant levers shift to durability,
+   efficiency, fractional utilization, body composition, race execution)
+
+If three or more factors are flagged simultaneously, the answer is almost always base work — not
+intensity sophistication.
+
+**Polarized training is NOT a universal answer.** It is well-evidenced for trained athletes with
+adequate volume. For low-volume recreational athletes (< 4 h/week cycling, < 25 km/week running,
+2–3 sessions), volume and consistency dominate — recommending polarization to such an athlete is
+technically defensible but practically misallocated effort.
 
 ---
 

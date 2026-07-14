@@ -25,6 +25,8 @@ final class ProfileRecord {
     var id: String = ProfileRecord.singletonID
     var name: String?
     var goals: [String] = []
+    /// The "why" behind the goals — changes coaching trade-offs, not just tone.
+    var motivation: String?
     var latitude: Double?
     var longitude: Double?
     var onboardingComplete: Bool = false
@@ -59,6 +61,9 @@ final class PreferencesRecord {
     var noRunDays: [String] = []
     var morningWorkouts: Bool?
     var indoorTrainerAvailable: Bool?
+    /// Free-text training likes/dislikes ("Run: likes strides"). Honored by
+    /// default when building workouts — guidance, not binding limitations.
+    var trainingPreferences: [String] = []
 
     init() {}
 }

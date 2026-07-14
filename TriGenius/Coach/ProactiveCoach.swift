@@ -100,16 +100,23 @@ enum ProactiveCoach {
     }
 
     /// The system-prompt section describing the current PMC state + any signals.
-    /// Returns "" when there is no PMC data yet (keeps the prompt clean).
-    static func promptSection(from snapshot: PMCSnapshot?) -> String {
-        guard let s = snapshot else { return "" }
-        var lines = [
-            "=== CURRENT TRAINING LOAD (PMC) ===",
-            "These are locally computed from stored TSS (heuristic; CTL needs >6 weeks of history to be reliable):",
-            "- Fitness (CTL, 42-day): \(rounded(s.ctl))",
-            "- Fatigue (ATL, 7-day): \(rounded(s.atl))",
-            "- Form (TSB = CTL−ATL): \(rounded(s.tsb))"
-        ]
+    /// Returns "" when there is no PMC data yet (keeps the prompt clean). Takes
+    /// the full `PMCResult` so the week-over-week trend rides along and the
+    /// warm-up caveat renders only while the history is actually short.
+    static func promptSection(from result: PMCResult) -> String {
+        guard let s = result.snapshot else { return "" }
+        var state = "Fitness CTL \(rounded(s.ctl))"
+        if let weekAgo = result.value(daysAgo: 7, \.ctl), abs(s.ctl - weekAgo) >= 0.5 {
+            state += " (\(signed(s.ctl - weekAgo)) vs a week ago)"
+        }
+        state += " · Fatigue ATL \(rounded(s.atl)) · Form TSB \(rounded(s.tsb))"
+        if let weekAgo = result.value(daysAgo: 7, \.tsb), abs(s.tsb - weekAgo) >= 0.5 {
+            state += " (was \(rounded(weekAgo)))"
+        }
+        var lines = ["=== CURRENT TRAINING LOAD (PMC) ===", state]
+        if result.points.count < Int(PMCEngine.ctlTimeConstant) {
+            lines.append("Only \(result.points.count) days of training history — CTL hasn't finished its warm-up; treat it as approximate.")
+        }
         let sigs = signals(from: s)
         if !sigs.isEmpty {
             lines.append("\nProactive flags to weave in naturally when relevant (don't lecture):")
@@ -125,17 +132,29 @@ enum ProactiveCoach {
     /// System-prompt section for the source-agnostic derived load metrics
     /// (`TrainingLoadAnalytics`). Mirrors `promptSection(from:)`. Returns "" when
     /// there's no usable data yet, to keep the prompt clean.
-    static func loadPromptSection(_ summary: TrainingLoadSummary) -> String {
+    ///
+    /// The current week is *in progress*, so everything is framed week-to-date
+    /// against absolute baselines — a partial week compared as a percentage
+    /// against complete weeks reads as a collapse every Monday–Wednesday.
+    /// `reducedVolumePlanned` (ATP recovery/taper/race week) makes the section
+    /// say the low numbers are intentional.
+    static func loadPromptSection(_ summary: TrainingLoadSummary, reducedVolumePlanned: Bool = false) -> String {
         guard summary.hasData else { return "" }
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        let dayOfWeek = (cal.dateComponents([.day], from: TrainingVolume.weekStart(of: today), to: today).day ?? 0) + 1
         var lines = [
-            "=== TRAINING LOAD & INJURY SIGNALS ===",
-            "Source-agnostic, locally derived from stored activities (heuristics, not hard thresholds). This week vs trailing 3-week average:"
+            "=== TRAINING LOAD (week to date, day \(dayOfWeek) of 7) ===",
+            "Heuristics, not hard thresholds. Per sport, this week so far vs the trailing 3-week baseline:"
         ]
         for m in summary.perSport where m.currentWeekSessions > 0 || m.avgSessionsPerWeek > 0 {
             lines.append("- " + sportLine(m))
         }
         if let load = summary.load {
-            lines.append("Weekly load step change: this week ~\(rounded(load.currentWeekTSS)) TSS vs last week ~\(rounded(load.priorWeekTSS)) (\(signed(load.weekOverWeekTSSDelta))). Read acute (ATL) vs chronic (CTL) from the PMC section above separately — not as a single ACWR ratio.")
+            lines.append("Last week ~\(rounded(load.priorWeekTSS)) TSS; this week ~\(rounded(load.currentWeekTSS)) so far.")
+        }
+        if reducedVolumePlanned {
+            lines.append("The ATP plans reduced volume this week (recovery/taper/race) — low numbers here are intentional, not a training gap.")
         }
         let sigs = loadSignals(summary)
         if !sigs.isEmpty {
@@ -158,7 +177,7 @@ enum ProactiveCoach {
                 if let p = m.longestProgressionRatio, p > 1.10, let r = m.recentLongest {
                     out.append(ProactiveSignal(severity: .warning, message: "Longest run jumped to \(km(r.distanceKm)) km — >10% over the prior 30-day longest. Single long-run spikes predict injury more than the weekly average; cap long-run growth near 10%.", followUpPrompt: "How should I progress my long run safely from here?"))
                 }
-                if let share = m.longSessionShare, share > 0.35 {
+                if let share = m.longSessionShare, share > 0.35, shareIsMeaningful(m) {
                     out.append(ProactiveSignal(severity: .warning, message: "The long run is \(pct(share)) of weekly run volume (cap ~25–35%) — spread volume across more sessions to lower per-session impact load.", followUpPrompt: "Help me spread my weekly run volume across more sessions."))
                 }
             case .bike:
@@ -176,22 +195,39 @@ enum ProactiveCoach {
         return out
     }
 
-    /// One compact per-sport line for the prompt section.
+    /// One compact per-sport line for the prompt section. Week-to-date volume is
+    /// framed against the absolute 3-week baseline; only an *excess* renders as a
+    /// percentage (a partial week is naturally below average — that's not signal).
+    private static let minSessionsForShare = 3
+
+    /// The long-session share divides by the *current* week's volume, but the
+    /// longest-session window is the last 7 days — it can reach into last week
+    /// and produce shares over 100%. Only meaningful when the longest session is
+    /// actually part of this week and the week has enough sessions to spread
+    /// (one run is always ~100% of volume).
+    private static func shareIsMeaningful(_ m: SportLoadMetrics) -> Bool {
+        guard m.currentWeekSessions >= minSessionsForShare, let recent = m.recentLongest else { return false }
+        return recent.date >= TrainingVolume.weekStart(of: Calendar.current.startOfDay(for: Date()))
+    }
+
     private static func sportLine(_ m: SportLoadMetrics) -> String {
         var parts: [String] = []
+        let sessions = "\(m.currentWeekSessions) session\(m.currentWeekSessions == 1 ? "" : "s")"
         switch m.family {
         case .strength, .other:
-            parts.append("\(m.family.displayName): \(rounded(m.currentWeekDurationMinutes)) min / \(m.currentWeekSessions) sessions this week")
+            parts.append("\(m.family.displayName): \(rounded(m.currentWeekDurationMinutes)) min / \(sessions) so far (3-wk avg \(rounded(m.baselineWeeklyDurationMinutes)) min/wk)")
         default:
-            parts.append("\(m.family.displayName): \(km(m.currentWeekDistanceKm)) km / \(m.currentWeekSessions) sessions this week")
+            parts.append("\(m.family.displayName): \(km(m.currentWeekDistanceKm)) km / \(sessions) so far (3-wk avg \(km(m.baselineWeeklyDistanceKm)) km/wk)")
         }
-        if let r = m.rampRate { parts.append("\(signedPct(r)) vs 3-wk avg") }
+        if let r = m.rampRate, r > 0 { parts.append("already \(signedPct(r)) over the weekly avg") }
         if let recent = m.recentLongest {
             var ls = "longest \(longestText(m.family, recent)) (last 7d)"
             if let base = m.baselineLongest { ls += ", prior-30d max \(longestText(m.family, base))" }
             parts.append(ls)
         }
-        if let share = m.longSessionShare { parts.append("long-session \(pct(share)) of weekly volume") }
+        if let share = m.longSessionShare, shareIsMeaningful(m) {
+            parts.append("long-session \(pct(share)) of weekly volume")
+        }
         parts.append("~\(fmt1(m.avgSessionsPerWeek))×/wk")
         return parts.joined(separator: "; ")
     }

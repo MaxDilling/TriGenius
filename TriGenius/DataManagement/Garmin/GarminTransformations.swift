@@ -55,17 +55,6 @@ nonisolated enum GarminTransform {
         return String(format: "0:%04.1f", rem)
     }
 
-    /// Analyze a simple trend from newest-first values.
-    static func analyzeTrend(_ values: [Double]) -> String {
-        guard values.count >= 3 else { return "Insufficient data" }
-        let recent = values.prefix(3).reduce(0, +) / 3
-        let older = values.suffix(3).reduce(0, +) / 3
-        let diffPct = older > 0 ? ((recent - older) / older) * 100 : 0
-        if diffPct > 5 { return "Improving" }
-        if diffPct < -5 { return "Declining" }
-        return "Stable"
-    }
-
     static func countBySport(_ activities: [[String: Any]]) -> [String: Int] {
         var counts: [String: Int] = [:]
         for a in activities {

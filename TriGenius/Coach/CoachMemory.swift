@@ -171,63 +171,111 @@ final class CoachMemory: ObservableObject {
         return items
     }
 
-    /// `performance` is the latest-per-metric snapshot read from the DB
-    /// (`TrainingDataStore.latestSnapshot()`), the source of truth for FTP/CSS/etc.
-    func contextSummary(performance: PerformanceSnapshot) -> String {
-        var parts = ["=== ATHLETE CONTEXT ==="]
+    /// Feedback older than this leaves the prompt (the rows stay in the DB) —
+    /// the MEMORY prompt section tells the coach to promote anything durable to
+    /// the profile before it ages out.
+    static let feedbackWindowWeeks = 8
 
-        let missing = missingInfo(performance: performance)
+    /// `history` is the full performance-metric time series
+    /// (`TrainingDataStore.performanceHistory()`): the latest values plus the
+    /// as-of-3-months-ago snapshot behind each marker's "was" annotation. Markers
+    /// are step functions (a value holds until replaced), so every "was" value is
+    /// a real stored reading — nothing is interpolated.
+    func contextSummary(history: PerformanceHistory) -> String {
+        let now = history.snapshot(asOf: .distantFuture)
+        let prev = history.snapshot(
+            asOf: Calendar.current.date(byAdding: .month, value: -3, to: Date()) ?? Date()
+        )
+        var parts = ["=== ATHLETE ==="]
+
+        let missing = missingInfo(performance: now)
         if !missing.isEmpty {
             parts.append("\n⚠️ MISSING INFORMATION (please ask the athlete):")
             missing.forEach { parts.append("  - \($0)") }
         }
 
-        parts.append("\n--- Known information ---")
-        if let name = userProfile.name { parts.append("Name: \(name)") }
-        if let ftp = performance.cyclingFTP { parts.append("FTP: \(ftp) W") }
-        if let runFTP = performance.runningFTP { parts.append("Running threshold power: \(runFTP) W") }
-        if let maxHR = performance.maxHR { parts.append("Max HR: \(maxHR) bpm") }
-        if let lthr = performance.lactateThrHR { parts.append("Lactate threshold HR: \(lthr) bpm") }
-        if let ltPace = performance.lactateThrPaceFormatted { parts.append("Lactate threshold pace: \(ltPace)/km") }
-        if let css = performance.cssPaceFormatted { parts.append("CSS: \(css)/100m") }
-        if let vo2 = performance.vo2maxRunning { parts.append("VO2max (running): \(vo2)") }
-        if let vo2c = performance.vo2maxCycling { parts.append("VO2max (cycling): \(vo2c)") }
-        if !userProfile.goals.isEmpty { parts.append("Goals: \(userProfile.goals.joined(separator: ", "))") }
-        if let maxH = weeklyStructure.maxHours { parts.append("Max weekly hours: \(maxH)") }
-        if let rd = weeklyStructure.preferredRestDay { parts.append("Rest day: \(rd)") }
-
-        // Season plan: the ATP (deterministic, in SwiftData) is injected separately
-        // into the system prompt via ATPToolHandler.promptSection — not here.
-
-        // Sport progress
-        let sports = ["swimming", "cycling", "running", "strength"]
-        for sport in sports {
-            let sp = sportProgress.progress(for: sport)
-            guard sp.hasData else { continue }
-            parts.append("\n[\(sport.uppercased())]")
-            if let lvl = sp.currentLevel { parts.append("  Level: \(lvl)") }
-            if !sp.abilities.isEmpty { parts.append("  ✓ Can do: \(sp.abilities.joined(separator: ", "))") }
-            if !sp.limitations.isEmpty {
-                let lims = sp.limitations.map { l -> String in
-                    var s = l.item
-                    if let r = l.reason { s += " (\(r))" }
-                    return s
-                }
-                parts.append("  ✗ Cannot do/Avoid: \(lims.joined(separator: ", "))")
-            }
-            if !sp.injuriesAffecting.isEmpty {
-                let injs = sp.injuriesAffecting.map { "\($0.injury): \($0.impact)" }
-                parts.append("  ⚠️ Injuries: \(injs.joined(separator: "; "))")
-            }
-            if let focus = sp.currentFocus { parts.append("  Focus: \(focus)") }
-            if !sp.equipment.isEmpty { parts.append("  Equipment: \(sp.equipment.joined(separator: ", "))") }
+        var identity: [String] = []
+        if let name = userProfile.name { identity.append(name) }
+        if let maxH = weeklyStructure.maxHours { identity.append("max \(maxH) h/wk") }
+        if let rd = weeklyStructure.preferredRestDay { identity.append("rest day \(rd)") }
+        if !identity.isEmpty { parts.append(identity.joined(separator: " · ")) }
+        if !userProfile.goals.isEmpty {
+            var goals = "Goals: \(userProfile.goals.joined(separator: ", "))"
+            if let m = userProfile.motivation { goals += " — motivation: \(m)" }
+            parts.append(goals)
         }
 
-        // Recent feedback
-        let recent = feedbackHistory.suffix(5)
+        // Physiological markers, each annotated with its 3-months-ago value when
+        // it changed. Garmin running power is deliberately not rendered (its watt
+        // scale isn't comparable to cycling and invites bad comparisons).
+        var markers: [String] = []
+        func marker(_ label: String, _ cur: String?, _ was: String?) {
+            guard let cur else { return }
+            markers.append(was != nil && was != cur ? "\(label) \(cur) (was \(was!))" : "\(label) \(cur)")
+        }
+        marker("FTP", now.cyclingFTP.map { "\($0) W" }, prev.cyclingFTP.map { "\($0) W" })
+        marker("max HR", now.maxHR.map { "\($0) bpm" }, prev.maxHR.map { "\($0) bpm" })
+        marker("LTHR", now.lactateThrHR.map { "\($0) bpm" }, prev.lactateThrHR.map { "\($0) bpm" })
+        marker("LT pace", now.lactateThrPaceFormatted.map { "\($0)/km" }, prev.lactateThrPaceFormatted.map { "\($0)/km" })
+        marker("CSS", now.cssPaceFormatted.map { "\($0)/100m" }, prev.cssPaceFormatted.map { "\($0)/100m" })
+        marker("VO2max run", now.vo2maxRunning.map { String(format: "%.0f", $0) }, prev.vo2maxRunning.map { String(format: "%.0f", $0) })
+        marker("VO2max bike", now.vo2maxCycling.map { String(format: "%.0f", $0) }, prev.vo2maxCycling.map { String(format: "%.0f", $0) })
+        if !markers.isEmpty {
+            parts.append("Markers (current; \"was\" = 3 months ago): " + markers.joined(separator: " · "))
+        }
+
+        let sports = ["swimming", "cycling", "running", "strength"]
+
+        // Hard limits: stated limitations + active injuries — the binding set.
+        var limits: [String] = []
+        for sport in sports {
+            let sp = sportProgress.progress(for: sport)
+            for l in sp.limitations {
+                limits.append("\(sport): \(l.item)" + (l.reason.map { " (\($0))" } ?? ""))
+            }
+            for i in sp.injuriesAffecting {
+                limits.append("\(sport) injury: \(i.injury) — \(i.impact)")
+            }
+        }
+        if !limits.isEmpty {
+            parts.append("\nHARD LIMITS (binding — never prescribe against these):")
+            limits.forEach { parts.append("- \($0)") }
+        }
+
+        // Preferences: guidance the coach honors by default, not hard rules.
+        var prefs = preferences.trainingPreferences
+        if let m = preferences.morningWorkouts { prefs.append(m ? "prefers morning workouts" : "prefers not to train in the morning") }
+        if let t = preferences.indoorTrainerAvailable { prefs.append(t ? "indoor trainer available" : "no indoor trainer") }
+        if !preferences.noSwimDays.isEmpty { prefs.append("no swim on: \(preferences.noSwimDays.joined(separator: ", "))") }
+        if !preferences.noBikeDays.isEmpty { prefs.append("no bike on: \(preferences.noBikeDays.joined(separator: ", "))") }
+        if !preferences.noRunDays.isEmpty { prefs.append("no run on: \(preferences.noRunDays.joined(separator: ", "))") }
+        if !prefs.isEmpty {
+            parts.append("\nPREFERENCES (honor by default; the athlete may override):")
+            prefs.forEach { parts.append("- \($0)") }
+        }
+
+        // Per-sport notes: level / abilities / focus / equipment, one line each.
+        var sportLines: [String] = []
+        for sport in sports {
+            let sp = sportProgress.progress(for: sport)
+            var bits: [String] = []
+            if let lvl = sp.currentLevel { bits.append("level \(lvl)") }
+            if !sp.abilities.isEmpty { bits.append("can do: \(sp.abilities.joined(separator: ", "))") }
+            if let focus = sp.currentFocus { bits.append("focus: \(focus)") }
+            if !sp.equipment.isEmpty { bits.append("equipment: \(sp.equipment.joined(separator: ", "))") }
+            if !bits.isEmpty { sportLines.append("- \(sport): \(bits.joined(separator: "; "))") }
+        }
+        if !sportLines.isEmpty {
+            parts.append("\nSPORT NOTES:")
+            parts.append(contentsOf: sportLines)
+        }
+
+        // Recent feedback, dated, newest first, windowed.
+        let cutoff = Calendar.current.date(byAdding: .weekOfYear, value: -Self.feedbackWindowWeeks, to: Date()) ?? Date()
+        let recent = feedbackHistory.filter { $0.date >= cutoff }.suffix(10).reversed()
         if !recent.isEmpty {
-            parts.append("\nLatest feedback:")
-            recent.forEach { parts.append("  - [\($0.category)] \($0.feedback)") }
+            parts.append("\nRECENT FEEDBACK (last \(Self.feedbackWindowWeeks) weeks, newest first):")
+            recent.forEach { parts.append("- \(DateFormatter.ymd.string(from: $0.date)) [\($0.category)] \($0.feedback)") }
         }
 
         return parts.joined(separator: "\n")
@@ -239,6 +287,8 @@ final class CoachMemory: ObservableObject {
 struct UserProfile {
     var name: String?
     var goals: [String] = []
+    /// The "why" behind the goals — changes coaching trade-offs, not just tone.
+    var motivation: String?
     var coordinates: (lat: Double, lon: Double)?
 
     // Legacy performance/biometric values. Performance metrics (FTP, CSS, VO2max,
@@ -262,6 +312,7 @@ struct UserProfile {
         maxHR = d["max_hr"] as? Int
         cssPace = d["css_pace_per_100m"] as? String
         goals = d["goals"] as? [String] ?? []
+        motivation = d["motivation"] as? String
         vo2max = d["vo2max"] as? Double
         weightKg = d["weight_kg"] as? Double
         lactateThrHR = d["lactate_threshold_hr"] as? Int
@@ -281,6 +332,7 @@ struct UserProfile {
             "goals": goals
         ]
         if let v = name { d["name"] = v }
+        if let v = motivation { d["motivation"] = v }
         if let c = coordinates { d["coordinates"] = ["lat": c.lat, "lon": c.lon] }
         return d
     }
@@ -342,6 +394,9 @@ struct AthletePreferences {
     var noRunDays: [String] = []
     var morningWorkouts: Bool?
     var indoorTrainerAvailable: Bool?
+    /// Free-text training likes/dislikes ("Run: likes strides"). Honored by
+    /// default when building workouts — guidance, not binding limitations.
+    var trainingPreferences: [String] = []
 
     init() {}
 
@@ -351,6 +406,7 @@ struct AthletePreferences {
         noRunDays = d["no_run_days"] as? [String] ?? []
         morningWorkouts = d["morning_workouts"] as? Bool
         indoorTrainerAvailable = d["indoor_trainer_available"] as? Bool
+        trainingPreferences = d["training_preferences"] as? [String] ?? []
     }
 
     func toDict() -> [String: Any] {
@@ -361,6 +417,7 @@ struct AthletePreferences {
         ]
         if let v = morningWorkouts { d["morning_workouts"] = v }
         if let v = indoorTrainerAvailable { d["indoor_trainer_available"] = v }
+        if !trainingPreferences.isEmpty { d["training_preferences"] = trainingPreferences }
         return d
     }
 }

@@ -33,27 +33,18 @@ final class CoachToolRegistry {
 
 // MARK: - Activity / health read handler (source-agnostic)
 //
-// Always registered. Serves `get_health_metrics` and `get_power_curve` from the
-// local store, which merges every enabled read source (Apple Health + Garmin), so
-// the coach sees one unified history regardless of where it came from.
-// (Completed/planned workouts are served by the unified `get_workouts` in
-// `WorkoutSchedulingToolHandler`.)
+// Always registered. Serves `get_power_curve` and `get_metric_history` from the
+// local store, which merges every enabled read source (Apple Health + Garmin),
+// so the coach sees one unified history regardless of where it came from — plus
+// `set_performance_metric`, the coach's write onto the same manual-entry path
+// the Statistics screen uses (the `PerformanceMetric` catalog supplies keys,
+// units and pace↔speed parsing for both). (Completed/planned workouts are
+// served by the unified `get_workouts` in `WorkoutSchedulingToolHandler`.)
 
 @MainActor
 final class ActivityReadToolHandler: CoachToolHandler {
     var definitions: [ToolDefinition] {
         [
-            ToolDefinition(
-                name: "get_health_metrics",
-                description: "Fetch recovery data for the last N days: sleep (duration + stages), resting heart rate and overnight HRV, with a short-term resting-HR trend. Merged across the athlete's connected sources. Secondary signals — weigh against the load/form trend, not in isolation.",
-                parameters: [
-                    "type": "object",
-                    "properties": [
-                        "days": ["type": "integer", "description": "Number of past days to include (1–30). Default 7."]
-                    ],
-                    "required": []
-                ]
-            ),
             ToolDefinition(
                 name: "get_power_curve",
                 description: "Best cycling power (max mean average, watts) per standard duration (1 s – 6 h) over a date range, from the stored per-ride power streams — all sources merged. Each point names the ride that set it. Cycling only.",
@@ -65,16 +56,44 @@ final class ActivityReadToolHandler: CoachToolHandler {
                     ],
                     "required": ["start_date"]
                 ]
+            ),
+            ToolDefinition(
+                name: "get_metric_history",
+                description: "Progression of physiological / wellness markers (FTP, LT pace/HR, CSS, VO2max, max HR, weight, resting HR, HRV, sleep) over time, merged across the athlete's sources. Per metric: `current` (latest value and since when it holds), `summary` (trend and range), and `history` — comma-separated \"YYYY-MM-DD value\" pairs, oldest first, consecutive repeats omitted. Recovery markers (resting HR, HRV, sleep) come daily for ranges up to 14 days and as weekly means beyond. Defaults to the last 6 months; the last 14 days when only recovery markers are requested.",
+                parameters: [
+                    "type": "object",
+                    "properties": [
+                        "metrics": ["type": "array", "items": ["type": "string", "enum": PerformanceMetric.all.map(\.key)], "description": "Metrics to read, one or more."],
+                        "start_date": ["type": "string", "description": "Start date in YYYY-MM-DD format."],
+                        "end_date": ["type": "string", "description": "End date in YYYY-MM-DD format. Defaults to today."]
+                    ],
+                    "required": ["metrics"]
+                ]
+            ),
+            ToolDefinition(
+                name: "set_performance_metric",
+                description: "Record a MEASURED physiological marker the athlete reported (a tested FTP, a measured LTHR, a weigh-in, a tested CSS). Stored as an athlete-confirmed manual value that outranks synced readings on its day; workouts scored from that date on use it. Never write estimates or guesses — only real test results and measurements.",
+                parameters: [
+                    "type": "object",
+                    "properties": [
+                        "metric": ["type": "string", "enum": PerformanceMetric.editable.map(\.key), "description": "Metric to set."],
+                        "value": ["type": "string", "description": "The measured value. A plain number for watts / bpm / kg / ml/kg/min; an m:ss pace for lactate_threshold_speed (per km) and swim_css_speed (per 100 m), e.g. \"4:35\"."],
+                        "date": ["type": "string", "description": "Measurement date in YYYY-MM-DD format. Defaults to today."]
+                    ],
+                    "required": ["metric", "value"]
+                ]
             )
         ]
     }
 
     func execute(name: String, arguments: [String: Any]) async throws -> String {
         switch name {
-        case "get_health_metrics":
-            return await DataSyncCoordinator.shared.healthMetrics(days: Coerce.int(arguments["days"]) ?? 7)
         case "get_power_curve":
             return powerCurve(arguments: arguments)
+        case "get_metric_history":
+            return metricHistory(arguments: arguments)
+        case "set_performance_metric":
+            return setPerformanceMetric(arguments: arguments)
         default:
             return "Unknown read tool: \(name)"
         }
@@ -115,6 +134,189 @@ final class ActivityReadToolHandler: CoachToolHandler {
             "activities_with_power_data": records.count { !$0.powerCurveJSON.isEmpty }
         ])
     }
+
+    private func metricHistory(arguments: [String: Any]) -> String {
+        let requested = (arguments["metrics"] as? [Any])?.compactMap(Coerce.string) ?? []
+        guard !requested.isEmpty else {
+            return "✗ Error: metrics must be a non-empty array of metric keys."
+        }
+        var metrics: [PerformanceMetric] = []
+        for key in requested {
+            guard let m = PerformanceMetric.metric(for: key) else {
+                return "✗ Error: unknown metric '\(key)' — must be one of: \(PerformanceMetric.all.map(\.key).joined(separator: ", "))."
+            }
+            metrics.append(m)
+        }
+        let end: Date
+        if let endStr = arguments["end_date"] as? String {
+            guard let parsed = DateFormatter.ymd.date(from: endStr) else {
+                return "✗ Error: end_date must be a YYYY-MM-DD date."
+            }
+            end = parsed
+        } else {
+            end = Date()
+        }
+        let start: Date
+        if let startStr = arguments["start_date"] as? String {
+            guard let parsed = DateFormatter.ymd.date(from: startStr) else {
+                return "✗ Error: start_date must be a YYYY-MM-DD date."
+            }
+            start = parsed
+        } else if metrics.allSatisfy({ $0.group == .recovery }) {
+            start = Calendar.current.date(byAdding: .day, value: -14, to: end)!
+        } else {
+            start = Calendar.current.date(byAdding: .month, value: -6, to: end)!
+        }
+        guard start <= end else { return "✗ Error: start_date must be on or before end_date." }
+        return String(compactJSON: [
+            "period": ["start": DateFormatter.ymd.string(from: start), "end": DateFormatter.ymd.string(from: end)],
+            "metrics": metrics.map { metricEntry($0, start: start, end: end) }
+        ])
+    }
+
+    /// One metric's response entry. `current` comes from the full series so a
+    /// marker that last changed before the window still reports its live value;
+    /// summary + history come from the window.
+    private func metricEntry(_ metric: PerformanceMetric, start: Date, end: Date) -> [String: Any] {
+        var entry: [String: Any] = ["metric": metric.key]
+        if !metric.unit.isEmpty { entry["unit"] = metric.unit }
+        let all = TrainingDataStore.shared.metricHistory(metric.key)
+        guard !all.isEmpty else {
+            entry["history"] = "no stored values — the athlete's sources have never reported this marker"
+            return entry
+        }
+        entry["current"] = currentLine(metric, series: all)
+        let window = all.filter { $0.date >= start && $0.date <= end }
+        guard let first = window.first else {
+            entry["history"] = "no readings in this period"
+            return entry
+        }
+        // A flat window carries no trend — say so instead of listing repeats.
+        if window.count > 1, window.allSatisfy({ metric.format($0.value) == metric.format(first.value) }) {
+            entry["history"] = "unchanged in this period (\(window.count) readings)"
+            return entry
+        }
+        let weekly = metric.group == .recovery && end.timeIntervalSince(start) > 14.5 * 86_400
+        if weekly { entry["resolution"] = "weekly_mean" }
+        if window.count > 1 { entry["summary"] = summaryLine(metric, window: window) }
+        entry["history"] = dropRepeats(weekly ? weeklyMeans(window) : window, format: metric.format)
+            .map { "\(DateFormatter.ymd.string(from: $0.date)) \(metric.format($0.value))" }
+            .joined(separator: ", ")
+        return entry
+    }
+
+    /// "56 since 2026-05-31 (last reading 2026-07-13)" — since = start of the
+    /// value's current run, so a stable-and-confirmed marker reads differently
+    /// from a stale one.
+    private func currentLine(_ metric: PerformanceMetric, series: [MetricPoint]) -> String {
+        let last = series.last!
+        let display = metric.format(last.value)
+        var since = last.date
+        for p in series.reversed().dropFirst() {
+            guard metric.format(p.value) == display else { break }
+            since = p.date
+        }
+        var line = "\(display) since \(DateFormatter.ymd.string(from: since))"
+        if since != last.date { line += " (last reading \(DateFormatter.ymd.string(from: last.date)))" }
+        return line
+    }
+
+    /// Recovery markers: level + band. Capacity markers: first → last with the
+    /// delta and (past ~6 weeks) a per-month rate, plus the window's extremes.
+    private func summaryLine(_ metric: PerformanceMetric, window: [MetricPoint]) -> String {
+        let values = window.map(\.value)
+        let lo = values.min()!, hi = values.max()!
+        if metric.group == .recovery {
+            let mean = values.reduce(0, +) / Double(values.count)
+            return "mean \(metric.format(mean)), low \(metric.format(lo)), high \(metric.format(hi))"
+        }
+        let first = window.first!, last = window.last!
+        var s = "\(metric.format(first.value)) → \(metric.format(last.value))"
+        if let delta = deltaText(metric, from: first, to: last) { s += " (\(delta))" }
+        // Speed-stored markers display as pace, where the *smaller* speed is the
+        // slower pace — "low/high" would read backwards.
+        s += metric.paceDistanceM == nil
+            ? ", low \(metric.format(lo)), high \(metric.format(hi))"
+            : ", slowest \(metric.format(lo)), fastest \(metric.format(hi))"
+        s += ", \(window.count) readings"
+        return s
+    }
+
+    /// Signed first→last change, with a per-month rate once the readings span
+    /// ~6 weeks (a rate over less is extrapolation). Pace-displayed markers
+    /// delta in pace seconds; nil when the change rounds away.
+    private func deltaText(_ metric: PerformanceMetric, from first: MetricPoint, to last: MetricPoint) -> String? {
+        let months = last.date.timeIntervalSince(first.date) / (30.44 * 86_400)
+        if let dist = metric.paceDistanceM {
+            guard first.value > 0, last.value > 0 else { return nil }
+            let deltaSec = dist / last.value - dist / first.value
+            guard abs(deltaSec) >= 1 else { return nil }
+            var s = String(format: "%+.0fs", deltaSec)
+            if months >= 1.4 { s += String(format: ", %+.1fs/mo", deltaSec / months) }
+            return s
+        }
+        let delta = last.value - first.value
+        let formatted = metric.format(abs(delta))
+        guard delta != 0, Double(formatted) ?? 0 != 0 else { return nil }
+        var s = "\(delta < 0 ? "-" : "+")\(formatted)"
+        if months >= 1.4 { s += String(format: ", %+.1f/mo", delta / months) }
+        return s
+    }
+
+    /// Collapse daily wellness points into one mean per calendar week, labelled
+    /// by the week's start day.
+    private func weeklyMeans(_ points: [MetricPoint]) -> [MetricPoint] {
+        let cal = Calendar.current
+        var byWeek: [Date: [Double]] = [:]
+        for p in points {
+            let week = cal.dateInterval(of: .weekOfYear, for: p.date)?.start ?? p.date
+            byWeek[week, default: []].append(p.value)
+        }
+        return byWeek
+            .map { MetricPoint(date: $0.key, value: $0.value.reduce(0, +) / Double($0.value.count)) }
+            .sorted { $0.date < $1.date }
+    }
+
+    /// Omit points repeating the previous displayed value, always keeping the
+    /// first and last so the window's endpoints stay visible.
+    private func dropRepeats(_ points: [MetricPoint], format: (Double) -> String) -> [MetricPoint] {
+        guard points.count > 2 else { return points }
+        var kept: [MetricPoint] = [points[0]]
+        for p in points.dropFirst().dropLast() where format(p.value) != format(kept.last!.value) {
+            kept.append(p)
+        }
+        kept.append(points.last!)
+        return kept
+    }
+
+    private func setPerformanceMetric(arguments: [String: Any]) -> String {
+        guard let key = arguments["metric"] as? String,
+              let metric = PerformanceMetric.editable.first(where: { $0.key == key }) else {
+            return "✗ Error: metric must be one of: \(PerformanceMetric.editable.map(\.key).joined(separator: ", "))."
+        }
+        guard let raw = Coerce.string(arguments["value"]), let value = metric.parse(raw), value > 0 else {
+            let hint = metric.storageUnit == "m_per_s" ? "an m:ss pace, e.g. \"4:35\"" : "a positive number"
+            return "✗ Error: value for \(key) must be \(hint)."
+        }
+        let date: Date
+        if let dateStr = arguments["date"] as? String {
+            guard let parsed = DateFormatter.ymd.date(from: dateStr) else {
+                return "✗ Error: date must be a YYYY-MM-DD date."
+            }
+            date = parsed
+        } else {
+            date = Date()
+        }
+        guard date <= Date() else { return "✗ Error: date must not be in the future — only record measurements that already happened." }
+        TrainingDataStore.shared.setManualMetric(key: key, value: value, unit: metric.storageUnit, date: date)
+        let display = "\(metric.format(value))\(metric.unit.isEmpty ? "" : " \(metric.unit)")"
+        return String(compactJSON: [
+            "message": "Recorded \(metric.title) \(display). Workouts scored from this date on use it; already-scored past workouts keep their TSS (a re-sync in Settings rescores them).",
+            "metric": key,
+            "value": metric.format(value),
+            "date": DateFormatter.ymd.string(from: date)
+        ])
+    }
 }
 
 // MARK: - Profile Tool Handler
@@ -131,18 +333,21 @@ final class ProfileToolHandler: CoachToolHandler {
         [
             ToolDefinition(
                 name: "update_athlete_profile",
-                description: "Persist athlete profile changes, preferences, goals and sport limitations in long-term memory.",
+                description: "Persist athlete profile changes, preferences, goals and sport limitations in long-term memory. Route each fact correctly: a hard limitation (injury, can't-do) is binding; a like/dislike or scheduling arrangement is a preference (add_preference), not a limitation.",
                 parameters: [
                     "type": "object",
                     "properties": [
                         "name": ["type": "string", "description": "Athlete name."],
                         "add_goal": ["type": "string", "description": "Goal to add."],
                         "remove_goal": ["type": "string", "description": "Goal to remove."],
+                        "motivation": ["type": "string", "description": "The why behind the goals (e.g. \"first triathlon, racing with friends\"). Replaces the stored motivation."],
                         "max_weekly_hours": ["type": "integer", "description": "Maximum training hours per week."],
                         "max_hr": ["type": "integer", "description": "Maximum heart rate in bpm."],
                         "preferred_rest_day": ["type": "string", "description": "Preferred rest day."],
                         "morning_workouts": ["type": "boolean", "description": "Whether morning workouts are preferred."],
                         "indoor_trainer_available": ["type": "boolean", "description": "Whether an indoor trainer is available."],
+                        "add_preference": ["type": "string", "description": "Training like/dislike or arrangement to honor by default, prefixed with the sport where relevant (e.g. \"Run: likes strides on easy runs\", \"Bike: no scheduled sessions — commute covers volume\")."],
+                        "remove_preference": ["type": "string", "description": "Stored preference to remove (exact text from the PREFERENCES list)."],
                         "feedback": ["type": "string", "description": "Athlete feedback to record."],
                         "feedback_category": ["type": "string", "description": "Feedback category: schedule, intensity, recovery, injury, or progress."],
                         "sport": [
@@ -203,7 +408,7 @@ final class ProfileToolHandler: CoachToolHandler {
         case "update_athlete_profile":
             return updateProfile(arguments: arguments)
         case "get_athlete_profile":
-            return memory.contextSummary(performance: TrainingDataStore.shared.latestSnapshot())
+            return memory.contextSummary(history: TrainingDataStore.shared.performanceHistory())
         case "complete_onboarding":
             memory.markOnboardingComplete()
             return "Onboarding marked complete."
@@ -248,6 +453,10 @@ final class ProfileToolHandler: CoachToolHandler {
             memory.updateWeeklyStructure { $0.preferredRestDay = day }
             updates.append("rest day → \(day)")
         }
+        if let motivation = arguments["motivation"] as? String {
+            memory.updateProfile { $0.motivation = motivation }
+            updates.append("motivation → \(motivation)")
+        }
         if let morning = arguments["morning_workouts"] as? Bool {
             memory.updatePreferences { $0.morningWorkouts = morning }
             updates.append("morning workouts → \(morning)")
@@ -255,6 +464,20 @@ final class ProfileToolHandler: CoachToolHandler {
         if let trainer = arguments["indoor_trainer_available"] as? Bool {
             memory.updatePreferences { $0.indoorTrainerAvailable = trainer }
             updates.append("indoor trainer → \(trainer)")
+        }
+        if let pref = arguments["add_preference"] as? String {
+            memory.updatePreferences { p in
+                if !p.trainingPreferences.contains(pref) { p.trainingPreferences.append(pref) }
+            }
+            updates.append("preference added: \(pref)")
+        }
+        if let pref = arguments["remove_preference"] as? String {
+            var found = false
+            memory.updatePreferences { p in
+                found = p.trainingPreferences.contains(pref)
+                p.trainingPreferences.removeAll { $0 == pref }
+            }
+            updates.append(found ? "preference removed: \(pref)" : "preference not found (pass the exact text): \(pref)")
         }
         if let fb = arguments["feedback"] as? String {
             let cat = arguments["feedback_category"] as? String ?? "general"
@@ -351,7 +574,7 @@ final class CalendarToolHandler: CoachToolHandler {
         [
             ToolDefinition(
                 name: "read_calendar_availability",
-                description: "Read the athlete's real-world schedule (busy/free windows) from their device calendar for a date range, so workouts can be planned around busy days. Returns per-day busy minutes and the events on each day. Use this before proposing or rescheduling sessions on specific days.",
+                description: "Read the athlete's real-world schedule (busy/free windows) from their device calendar for a date range. Returns per-day busy minutes and the events on each day. Use ONLY when the athlete has NOT named a day/time, or when planning several days ahead. When the athlete states a time (\"tomorrow 08:00\"), schedule it directly — and treat their own calendar entries about training as plans, never as conflicts.",
                 parameters: [
                     "type": "object",
                     "properties": [
@@ -561,7 +784,7 @@ final class WorkoutFeedbackToolHandler: CoachToolHandler {
 // MARK: - Garmin Tool Handler (Garmin-only read extras)
 //
 // Registered only when Garmin is an active READ source. The source-agnostic reads
-// (`get_health_metrics`/`get_power_curve` in `ActivityReadToolHandler`,
+// (`get_metric_history`/`get_power_curve` in `ActivityReadToolHandler`,
 // `get_workouts` in `WorkoutSchedulingToolHandler`) and planned-workout writes are
 // brand-neutral. What's left here is what is genuinely Garmin-specific: the
 // settings resync.

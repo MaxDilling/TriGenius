@@ -36,6 +36,10 @@ struct PerformanceMetric: Identifiable {
     /// True when a rising value is an improvement (VO2max, FTP, HRV); false where
     /// a lower value is better (pace markers — stored as speed — and resting HR).
     let higherIsBetter: Bool
+    /// Distance (m) the pace display runs over for speed-stored markers (100 for
+    /// CSS, 1000 for LT pace); nil for plain numeric markers. Lets the coach's
+    /// metric tools express deltas of a speed-stored series in pace seconds.
+    var paceDistanceM: Double? = nil
 
     var id: String { key }
 
@@ -54,9 +58,9 @@ struct PerformanceMetric: Identifiable {
         PerformanceMetric(key: "lactate_threshold_hr", title: "LT Heart Rate", group: .performance, accent: .pink,
                           unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true),
         PerformanceMetric(key: "lactate_threshold_speed", title: "LT Pace", group: .performance, accent: .teal,
-                          unit: "/km", storageUnit: "m_per_s", format: paceFromSpeed(1000), parse: speedFromPace(1000), higherIsBetter: true),
+                          unit: "/km", storageUnit: "m_per_s", format: paceFromSpeed(1000), parse: speedFromPace(1000), higherIsBetter: true, paceDistanceM: 1000),
         PerformanceMetric(key: "swim_css_speed", title: "CSS (Swim)", group: .performance, accent: .cyan,
-                          unit: "/100m", storageUnit: "m_per_s", format: paceFromSpeed(100), parse: speedFromPace(100), higherIsBetter: true),
+                          unit: "/100m", storageUnit: "m_per_s", format: paceFromSpeed(100), parse: speedFromPace(100), higherIsBetter: true, paceDistanceM: 100),
         PerformanceMetric(key: "max_hr", title: "Max Heart Rate", group: .performance, accent: .purple,
                           unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true),
         PerformanceMetric(key: "weight_kg", title: "Weight", group: .performance, accent: .brown,
@@ -68,6 +72,8 @@ struct PerformanceMetric: Identifiable {
                           unit: "ms", storageUnit: "ms", format: intFormat, parse: doubleParse, higherIsBetter: true),
         PerformanceMetric(key: "sleep_score", title: "Sleep Score", group: .recovery, accent: .blue,
                           unit: "", storageUnit: "", format: intFormat, parse: doubleParse, higherIsBetter: true),
+        PerformanceMetric(key: "sleep_duration_h", title: "Sleep Duration", group: .recovery, accent: .indigo,
+                          unit: "h", storageUnit: "h", format: oneDecimalFormat, parse: doubleParse, higherIsBetter: true),
     ]
 
     /// The markers the athlete can hand-enter (physiological capacity + weight);

@@ -1768,6 +1768,7 @@ extension TrainingDataStore {
         var p = UserProfile()
         p.name = r.name
         p.goals = r.goals
+        p.motivation = r.motivation
         if let lat = r.latitude, let lon = r.longitude { p.coordinates = (lat, lon) }
         return (p, r.onboardingComplete)
     }
@@ -1796,6 +1797,7 @@ extension TrainingDataStore {
         p.noRunDays = r.noRunDays
         p.morningWorkouts = r.morningWorkouts
         p.indoorTrainerAvailable = r.indoorTrainerAvailable
+        p.trainingPreferences = r.trainingPreferences
         return p
     }
 
@@ -1901,6 +1903,7 @@ extension TrainingDataStore {
     private static func apply(_ p: UserProfile, onboardingComplete: Bool, to r: ProfileRecord) {
         r.name = p.name
         r.goals = p.goals
+        r.motivation = p.motivation
         r.latitude = p.coordinates?.lat
         r.longitude = p.coordinates?.lon
         r.onboardingComplete = onboardingComplete
@@ -1921,6 +1924,7 @@ extension TrainingDataStore {
         r.noRunDays = p.noRunDays
         r.morningWorkouts = p.morningWorkouts
         r.indoorTrainerAvailable = p.indoorTrainerAvailable
+        r.trainingPreferences = p.trainingPreferences
     }
 
     private static func apply(_ p: SportProgress, to r: SportProgressRecord) {
