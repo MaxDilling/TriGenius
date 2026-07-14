@@ -16,9 +16,11 @@ struct TrainingDetailView: View {
     let record: WorkoutRecord
 
     @State private var exportFile: ExportFile?
-    @State private var exportError: String?
+    @State private var actionError: String?
     @State private var showDistanceEdit = false
     @State private var distanceInput = ""
+    @State private var showRenameEdit = false
+    @State private var nameInput = ""
     @State private var showDeleteConfirm = false
     @State private var showTSSBasis = false
     @State private var showUnlinkConfirm = false
@@ -34,6 +36,12 @@ struct TrainingDetailView: View {
         return obj
     }
     private var isHealthKit: Bool { record.source == "healthkit" }
+
+    /// The stored id of this row's completed activity — the row's own id, or the
+    /// fold link when the actuals live on a plan row.
+    private var completedActivityId: String {
+        record.externalRefs[TrainingDataStore.completedRefKey] ?? record.id
+    }
 
     /// Open plans this standalone completed activity could be linked to (same day +
     /// sport family). Empty unless the row is a standalone completed activity.
@@ -90,10 +98,37 @@ struct TrainingDetailView: View {
                         }
                     }
                     Button {
+                        nameInput = record.name
+                        showRenameEdit = true
+                    } label: {
+                        Label("Rename", systemImage: "pencil.line")
+                    }
+                    Button {
                         distanceInput = String(format: "%.2f", record.distanceKm)
                         showDistanceEdit = true
                     } label: {
                         Label("Edit distance", systemImage: "pencil")
+                    }
+                    if debugModeEnabled {
+                        Button(action: exportDebugJSON) {
+                            Label("Export workout (JSON)", systemImage: "ladybug")
+                        }
+                        if completedActivityId.hasPrefix("garmin:") || completedActivityId.hasPrefix("healthkit:") {
+                            Button {
+                                Task {
+                                    let ok = await DataSyncCoordinator.shared.refetchActivity(
+                                        id: completedActivityId, date: record.date)
+                                    if !ok { actionError = "Refetch failed — source unavailable." }
+                                }
+                            } label: {
+                                Label("Refetch from source", systemImage: "arrow.clockwise")
+                            }
+                        }
+                        Button {
+                            TrainingDataStore.shared.rescoreActivity(id: record.id)
+                        } label: {
+                            Label("Recalculate TSS", systemImage: "function")
+                        }
                     }
                     if record.isCompleted, !record.isPlanned {
                         Button(role: .destructive) {
@@ -102,15 +137,10 @@ struct TrainingDetailView: View {
                             Label("Ignore workout", systemImage: "eye.slash")
                         }
                     }
-                    if debugModeEnabled {
-                        Button(action: exportDebugJSON) {
-                            Label("Export workout (JSON)", systemImage: "ladybug")
-                        }
-                        Button(role: .destructive) {
-                            showDeleteConfirm = true
-                        } label: {
-                            Label("Delete workout", systemImage: "trash")
-                        }
+                    Button(role: .destructive) {
+                        showDeleteConfirm = true
+                    } label: {
+                        Label("Delete workout", systemImage: "trash")
                     }
                 } label: {
                     Label("More", systemImage: "ellipsis.circle")
@@ -145,13 +175,25 @@ struct TrainingDetailView: View {
             Text("Removes this workout and stops it from re-syncing — for a duplicate recorded on another device. Restore it anytime from Settings → Ignored workouts.")
         }
         .sheet(item: $exportFile) { file in ShareSheet(items: [file.url]) }
-        .alert("Export failed", isPresented: Binding(
-            get: { exportError != nil },
-            set: { if !$0 { exportError = nil } }
+        .alert("Action failed", isPresented: Binding(
+            get: { actionError != nil },
+            set: { if !$0 { actionError = nil } }
         )) {
-            Button("OK", role: .cancel) { exportError = nil }
+            Button("OK", role: .cancel) { actionError = nil }
         } message: {
-            Text(exportError ?? "")
+            Text(actionError ?? "")
+        }
+        .alert("Rename workout", isPresented: $showRenameEdit) {
+            TextField("Name", text: $nameInput)
+            Button("Cancel", role: .cancel) {}
+            Button("Save") {
+                let trimmed = nameInput.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    TrainingDataStore.shared.renameActivity(id: record.id, name: trimmed)
+                }
+            }
+        } message: {
+            Text("Overrides the workout's name; survives the next sync.")
         }
         .alert("Override distance", isPresented: $showDistanceEdit) {
             TextField("Distance (km)", text: $distanceInput)
@@ -249,6 +291,8 @@ struct TrainingDetailView: View {
                 .popover(isPresented: $showTSSBasis, arrowEdge: .top) {
                     Label("TSS computed from \(tssBasis)", systemImage: "function")
                         .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: 280)
                         .padding()
                         .presentationCompactAdaptation(.popover)
                 }
@@ -785,7 +829,7 @@ struct TrainingDetailView: View {
             try data.write(to: url)
             exportFile = ExportFile(url: url)
         } catch {
-            exportError = error.localizedDescription
+            actionError = error.localizedDescription
         }
     }
 

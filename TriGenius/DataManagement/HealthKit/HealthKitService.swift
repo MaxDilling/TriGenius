@@ -90,6 +90,27 @@ final class HealthKitService {
         return out
     }
 
+    /// One workout by UUID, re-read fresh from Apple Health — the detail view's
+    /// debug refetch. Nil when the workout no longer exists.
+    func fetchActivity(uuid: UUID, history: PerformanceHistory) async throws -> IngestedActivity? {
+        let workout: HKWorkout? = try await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: .workoutType(),
+                predicate: HKQuery.predicateForObject(with: uuid),
+                limit: 1,
+                sortDescriptors: nil
+            ) { _, samples, error in
+                if let error { continuation.resume(throwing: error); return }
+                continuation.resume(returning: (samples as? [HKWorkout])?.first)
+            }
+            store.execute(query)
+        }
+        guard let workout else { return nil }
+        let bounds = HRZones.upperBounds(snapshot: history.snapshot(asOf: workout.startDate))
+        let (rec, powerCurveJSON, streamsData) = try await normalizedRecord(for: workout, hrZoneBounds: bounds)
+        return Self.ingestDTO(from: rec, powerCurveJSON: powerCurveJSON, streamsData: streamsData)
+    }
+
     /// Wrap a normalized record into an unscored `IngestedActivity` (mirrors
     /// `GarminService.ingestDTO`); the store computes TSS + effective distance from
     /// `detailsJSON` at ingest. Nil without an id/date.

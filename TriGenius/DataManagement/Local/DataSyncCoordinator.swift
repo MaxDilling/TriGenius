@@ -203,6 +203,28 @@ final class DataSyncCoordinator {
         return count
     }
 
+    /// Re-fetch one completed activity fresh from its source and re-ingest it
+    /// (upserts in place, refreshing a folded plan's actuals too) — the detail
+    /// view's debug refetch. `id` is the stored completed id (`garmin:…` /
+    /// `healthkit:…`); Garmin re-pulls the activity's whole day force-refreshed.
+    @discardableResult
+    func refetchActivity(id: String, date: Date) async -> Bool {
+        if id.hasPrefix("garmin:") {
+            guard await GarminAuth.shared.isAuthenticated else { return false }
+            let day = DateFormatter.ymd.string(from: date)
+            return await GarminService.shared.backfillActivities(startDate: day, endDate: day, force: true) != nil
+        }
+        if id.hasPrefix("healthkit:") {
+            guard let uuid = UUID(uuidString: TrainingDataStore.rawId(id)),
+                  let dto = try? await HealthKitService.shared.fetchActivity(
+                      uuid: uuid, history: store.performanceHistory())
+            else { return false }
+            store.ingest([dto])
+            return true
+        }
+        return false
+    }
+
     // MARK: - Garmin metric-history sync (wellness + performance + zones)
 
     /// Pull the wellness (sleep/rHR/HRV) + historical performance (FTP, VO2max,
