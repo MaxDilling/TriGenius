@@ -543,10 +543,11 @@ final class DataSyncCoordinator {
 
     /// Create a locally-owned plan from a raw `workout_data` dict (run through
     /// `WorkoutNormalizer` here — the one normalization path) and push it to the
-    /// active write target.
-    func addPlan(workoutData raw: [String: Any], date: Date, startMinute: Int? = nil) async -> PlanWriteOutcome {
+    /// active write target. Rejected (implausible) input is never written.
+    func addPlan(workoutData raw: [String: Any], date: Date, startMinute: Int? = nil) async -> PlanWriteResult {
         let writeTarget = AppSettings.storedWriteTarget()
-        let (workoutData, notes) = WorkoutNormalizer.normalize(raw)
+        let (workoutData, notes, errors) = WorkoutNormalizer.normalize(raw)
+        guard errors.isEmpty else { return .rejected(errors) }
         let id = "local:\(UUID().uuidString)"
         store.ingestScheduled([makePlan(id: id, workoutData: workoutData, date: date)])
         if let startMinute { store.setScheduledStartMinute(id: id, minute: startMinute) }
@@ -555,26 +556,28 @@ final class DataSyncCoordinator {
         if result.success, let ext = result.externalId {
             store.setExternalRef(id: id, target: writeTarget.refKey, externalId: ext)
         }
-        return PlanWriteOutcome(planId: id, name: workoutData["name"] as? String ?? "Workout",
+        return .success(PlanWriteOutcome(planId: id, name: workoutData["name"] as? String ?? "Workout",
                                 notes: notes, targetName: writeTarget.displayName,
-                                pushed: result.success, pushMessage: result.success ? "" : result.message)
+                                pushed: result.success, pushMessage: result.success ? "" : result.message))
     }
 
     /// Merge-update a plan's content from a (possibly partial) `workout_data` dict:
     /// steps are re-normalized when the dict carries `steps`, and the target TSS
     /// recomputed when `steps` or `sport` change (the sport family picks the
     /// threshold the estimate scores against); other fields update only when
-    /// present. Returns nil when no plan with `id` exists.
-    func updatePlan(id: String, workoutData raw: [String: Any]) async -> PlanWriteOutcome? {
+    /// present. Returns nil when no plan with `id` exists. Rejected (implausible)
+    /// edits leave the stored plan untouched.
+    func updatePlan(id: String, workoutData raw: [String: Any]) async -> PlanWriteResult? {
         let writeTarget = AppSettings.storedWriteTarget()
         guard let existing = store.scheduledWorkout(id: id) else { return nil }
         let editsSteps = raw["steps"] != nil
         // Normalize the stored plan overlaid with the edits — never the partial
         // dict alone, or the normalizer invents defaults ("Other", pool length,
         // wrong sport for banding) for fields the plan already has.
-        let (workoutData, notes) = editsSteps
+        let (workoutData, notes, errors) = editsSteps
             ? WorkoutNormalizer.normalize(WorkoutPayloadBuilder.workoutData(from: existing).merging(raw) { _, edit in edit })
-            : (raw, [])
+            : (raw, [], [])
+        guard errors.isEmpty else { return .rejected(errors) }
         let steps = workoutData["steps"] as? [[String: Any]] ?? []
         let targetTSS: Double?? = (editsSteps || raw["sport"] != nil)
             ? .some(PlannedTSS.estimate(compactSteps: editsSteps ? steps : (WorkoutPayloadBuilder.parseSteps(existing.stepsJSON) ?? []),
@@ -604,9 +607,9 @@ final class DataSyncCoordinator {
                 store.setExternalRef(id: id, target: writeTarget.refKey, externalId: ext)
             }
         }
-        return PlanWriteOutcome(planId: id, name: updated.name, notes: notes,
+        return .success(PlanWriteOutcome(planId: id, name: updated.name, notes: notes,
                                 targetName: writeTarget.displayName,
-                                pushed: result.success, pushMessage: result.success ? "" : result.message)
+                                pushed: result.success, pushMessage: result.success ? "" : result.message))
     }
 
     /// Move a plan to a new day locally, then on the active write target (content
@@ -692,6 +695,15 @@ struct PlanWriteOutcome {
     let targetName: String
     let pushed: Bool
     let pushMessage: String
+}
+
+/// Outcome of `addPlan`/`updatePlan`: either the plan was written (locally, at
+/// least), or `WorkoutNormalizer`'s plausibility check rejected it before anything
+/// was stored — the reasons are human-readable, meant to be relayed to the coach
+/// (or the athlete) verbatim.
+enum PlanWriteResult {
+    case success(PlanWriteOutcome)
+    case rejected([String])
 }
 
 extension WorkoutRecord {

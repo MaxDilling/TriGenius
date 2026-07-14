@@ -71,6 +71,12 @@ Only send a distinct `target_low`/`target_high` pair when you deliberately want 
 the automatic band. **Never** send the same value for both — that creates a useless zero-width
 zone.
 
+**Plausibility check.** The app rejects clearly-broken values before scheduling anything
+(e.g. a `pace` of `3` — that's 3 seconds per km, not a real pace). Ranges are generous — real
+elite/ultra targets always fit — so a rejection means the value or unit is wrong, most often
+pace given in the wrong unit (seconds per km/100m, never m/s or minutes) or `target_low`/
+`target_high` swapped. On rejection, fix the value and re-send; don't retry unchanged.
+
 ## 4. Defaults the app fills
 
 These are applied automatically and listed back in the result:

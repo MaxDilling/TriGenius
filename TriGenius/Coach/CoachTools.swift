@@ -1009,15 +1009,19 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                 lines.append("- \(dateStr) — ✗ invalid date (use YYYY-MM-DD)")
                 continue
             }
-            let outcome = await DataSyncCoordinator.shared.addPlan(workoutData: raw, date: date)
-            // The plan exists locally even when the target push failed — card either way.
-            onCard(.workout(id: outcome.planId, caption: "Scheduled"))
-            if outcome.pushed {
-                ok += 1
-                let suffix = outcome.notes.isEmpty ? "" : " (\(outcome.notes.joined(separator: "; ")))"
-                lines.append("- \(dateStr) \(outcome.name) → \(outcome.targetName)\(suffix) [id: \(outcome.planId)]")
-            } else {
-                lines.append("- \(dateStr) \(outcome.name) — saved locally, \(outcome.targetName) push failed: \(outcome.pushMessage) [id: \(outcome.planId)]")
+            switch await DataSyncCoordinator.shared.addPlan(workoutData: raw, date: date) {
+            case .rejected(let errors):
+                lines.append("- \(dateStr) — ✗ rejected (implausible): \(errors.joined(separator: "; "))")
+            case .success(let outcome):
+                // The plan exists locally even when the target push failed — card either way.
+                onCard(.workout(id: outcome.planId, caption: "Scheduled"))
+                if outcome.pushed {
+                    ok += 1
+                    let suffix = outcome.notes.isEmpty ? "" : " (\(outcome.notes.joined(separator: "; ")))"
+                    lines.append("- \(dateStr) \(outcome.name) → \(outcome.targetName)\(suffix) [id: \(outcome.planId)]")
+                } else {
+                    lines.append("- \(dateStr) \(outcome.name) — saved locally, \(outcome.targetName) push failed: \(outcome.pushMessage) [id: \(outcome.planId)]")
+                }
             }
         }
         let mark = ok == items.count ? "✓ " : ""
@@ -1033,8 +1037,15 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
             return "✗ Error: workout_id and workout_data are required."
         }
         let before = DataSyncCoordinator.shared.plannedSnapshot(id: workoutId)
-        guard let outcome = await DataSyncCoordinator.shared.updatePlan(id: workoutId, workoutData: rawWorkout) else {
+        guard let result = await DataSyncCoordinator.shared.updatePlan(id: workoutId, workoutData: rawWorkout) else {
             return "✗ No planned workout found for id \(workoutId). List it with get_workouts first."
+        }
+        let outcome: PlanWriteOutcome
+        switch result {
+        case .rejected(let errors):
+            return "✗ Rejected (implausible): \(errors.joined(separator: "; "))"
+        case .success(let o):
+            outcome = o
         }
         // Diff the stored before/after states — not the tool arguments — so the
         // card shows what actually applied after WorkoutNormalizer.

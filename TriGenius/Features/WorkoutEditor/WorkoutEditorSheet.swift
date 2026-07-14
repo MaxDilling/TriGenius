@@ -27,6 +27,7 @@ struct WorkoutEditorSheet: View {
     private let originalDay: Date?
     private let originalStartMinute: Int?
     @State private var saving = false
+    @State private var validationError: String?
     @Environment(\.dismiss) private var dismiss
 
     @MainActor
@@ -69,6 +70,11 @@ struct WorkoutEditorSheet: View {
         #if os(macOS)
         .frame(minWidth: 480, minHeight: 560)
         #endif
+        .alert("Can't Save Workout", isPresented: Binding(get: { validationError != nil }, set: { if !$0 { validationError = nil } })) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(validationError ?? "")
+        }
     }
 
     // MARK: Basics
@@ -156,7 +162,11 @@ struct WorkoutEditorSheet: View {
         saving = true
         let day = Calendar.current.startOfDay(for: draft.date)
         if let editingId {
-            _ = await DataSyncCoordinator.shared.updatePlan(id: editingId, workoutData: draft.workoutData())
+            if case .rejected(let errors) = await DataSyncCoordinator.shared.updatePlan(id: editingId, workoutData: draft.workoutData()) {
+                validationError = errors.joined(separator: "\n")
+                saving = false
+                return
+            }
             if day != originalDay {
                 _ = await DataSyncCoordinator.shared.movePlan(id: editingId, to: day)
             }
@@ -164,8 +174,12 @@ struct WorkoutEditorSheet: View {
                 _ = TrainingDataStore.shared.setScheduledStartMinute(id: editingId, minute: draft.startMinute)
             }
         } else {
-            _ = await DataSyncCoordinator.shared.addPlan(workoutData: draft.workoutData(), date: day,
-                                                         startMinute: draft.startMinute)
+            if case .rejected(let errors) = await DataSyncCoordinator.shared.addPlan(workoutData: draft.workoutData(), date: day,
+                                                         startMinute: draft.startMinute) {
+                validationError = errors.joined(separator: "\n")
+                saving = false
+                return
+            }
         }
         dismiss()
     }
