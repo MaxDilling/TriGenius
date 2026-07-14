@@ -384,8 +384,8 @@ final class DataSyncCoordinator {
         // they already exist locally (as `local:` rows referencing this Garmin id), so
         // re-mirroring them as separate `garmin:` rows would duplicate them. Their
         // calendar item still names the activity that completed them, though — apply
-        // that authoritative link to the local plan so a heuristic fold that grabbed
-        // the wrong same-day session is corrected.
+        // that authoritative link to the local plan so its actuals fold in (and a
+        // manual mispairing is corrected).
         let ownPushed = store.externalRefIds(target: "garmin", source: "local")
         var ownLinks: [String: String] = [:]
         var foreign: [[String: Any]] = []

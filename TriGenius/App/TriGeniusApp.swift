@@ -52,6 +52,9 @@ struct TriGeniusApp: App {
         // Mirror the iCloud-KVS ignored-workout blacklist into the local store and
         // keep watching for changes from the athlete's other devices.
         IgnoredWorkouts.startSync()
+        // Translate pre-layer workout rows (planned slot, actual date/time,
+        // override layer) before anything reads or syncs the store.
+        TrainingDataStore.shared.migrateWorkoutLayersIfNeeded()
         // Route a tapped notification's follow-up prompt into the chat (unsent).
         NotificationCenterService.shared.onNotificationTap = { [router] prompt in
             router.openChat(prefill: prompt)

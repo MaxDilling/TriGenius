@@ -43,16 +43,17 @@ struct TrainingDetailView: View {
         record.externalRefs[TrainingDataStore.completedRefKey] ?? record.id
     }
 
-    /// Open plans this standalone completed activity could be linked to (same day +
-    /// sport family). Empty unless the row is a standalone completed activity.
+    /// Open plans this standalone completed activity could be linked to, nearest
+    /// planned day first. Empty unless the row is a standalone completed activity.
     private var linkCandidates: [WorkoutRecord] {
         guard record.isCompleted, !record.isPlanned else { return [] }
         return TrainingDataStore.shared.openPlansMatching(activity: record)
     }
 
     private func planMenuLabel(_ plan: WorkoutRecord) -> String {
-        guard plan.targetDurationMinutes > 0 else { return plan.name }
-        return "\(plan.name) · \(Int(plan.targetDurationMinutes)) min"
+        let day = plan.date.formatted(.dateTime.day().month())
+        guard plan.targetDurationMinutes > 0 else { return "\(plan.name) · \(day)" }
+        return "\(plan.name) · \(Int(plan.targetDurationMinutes)) min · \(day)"
     }
 
     var body: some View {

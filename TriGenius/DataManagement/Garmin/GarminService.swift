@@ -347,15 +347,9 @@ actor GarminService {
                 let gid = (activity["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" }
                 if !force, let gid, cache[gid] != nil { continue }   // cache: skip known
                 let (formatted, powerCurveJSON, streamsData) = await formatActivityRecord(activity)
-                var rec = formatted
-                // Preserve a prior manual distance override across a forced re-fetch.
-                if let gid, let cached = cache[gid],
-                   let data = cached.detailsJSON.data(using: .utf8),
-                   let prior = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])?["manual_distance_m"] {
-                    rec["manual_distance_m"] = prior
-                }
-                // TSS + effective distance are scored by the store at ingest.
-                if let dto = ingestDTO(from: rec, powerCurveJSON: powerCurveJSON, streamsData: streamsData) { toIngest.append(dto) }
+                // TSS + effective distance are scored by the store at ingest; the
+                // athlete's manual edits re-apply there from the override layer.
+                if let dto = ingestDTO(from: formatted, powerCurveJSON: powerCurveJSON, streamsData: streamsData) { toIngest.append(dto) }
             }
             await TrainingDataStore.shared.ingest(toIngest)
             return toIngest.count

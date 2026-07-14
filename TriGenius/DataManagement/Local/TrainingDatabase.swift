@@ -48,6 +48,10 @@ final class WorkoutRecord {
     /// Origin of the record ("garmin", "healthkit", "local").
     var source: String = ""
     /// Start-of-day date the workout belongs to (local), used for daily buckets.
+    /// The *effective* date every reader consumes: the planned day while the row is
+    /// an open plan, the actual start day once completed — a plan done a day early
+    /// or late shows (and load-counts) on the day it was actually done. The planned
+    /// slot survives separately in `plannedDate`.
     var date: Date = Date.distantPast
     /// Sport key (e.g. "running", "lap_swimming", "Cycling").
     var sport: String = ""
@@ -56,14 +60,26 @@ final class WorkoutRecord {
     /// Lets a write-target switch re-push a plan that the new target hasn't seen,
     /// without losing the original.
     var externalRefsJSON: String = "{}"
-    /// Local clock start time as minutes after midnight (e.g. 630 = 10:30). For a
-    /// planned row it's the planned time-of-day (day-independent, survives a move);
-    /// for a completed row it's the actual start, set at ingest from the source's
-    /// `"time"` field. Nil → no specific time-of-day (kept in the all-day band).
+    /// Local clock start time as minutes after midnight (e.g. 630 = 10:30). Same
+    /// effective semantics as `date`: the planned time-of-day while open (set from
+    /// the source's `"time"` field once completed). Nil → no specific time-of-day
+    /// (kept in the all-day band).
     var startMinute: Int?
+    /// Athlete edits layered over the source data, JSON-encoded (e.g.
+    /// `manual_distance_m`, `feel`, `rpe`, `notes`). The durable authority for
+    /// manual corrections: re-applied onto the completed section after every
+    /// source write (`applyOverrides`), so a resync can rewrite `detailsJSON`
+    /// blindly without losing them. "{}" when the athlete changed nothing.
+    var overridesJSON: String = "{}"
 
     // MARK: Planned section (present when `isPlanned`)
 
+    /// The day the workout was planned for — owned by the plan, never touched by a
+    /// completion. Backs `unfold` (reopening a plan returns it to its slot) and
+    /// keeps calendar sync from dragging a folded row back to the planned day.
+    var plannedDate: Date?
+    /// Planned time-of-day (minutes after midnight), same lifecycle as `plannedDate`.
+    var plannedStartMinute: Int?
     /// Whether this row carries a plan (targets / structured steps).
     var isPlanned: Bool = false
     /// Planned duration in minutes (0 when unspecified).
@@ -591,15 +607,8 @@ final class TrainingDataStore {
             winner.setExternalRef(target: k, externalId: v)
         }
         if loser.isCompleted && (!winner.isCompleted || (winner.tss == nil && loser.tss != nil)) {
-            winner.isCompleted = true
-            winner.durationMinutes = loser.durationMinutes
-            winner.distanceKm = loser.distanceKm
-            winner.tss = loser.tss
-            winner.tssBasis = loser.tssBasis
-            winner.detailsJSON = loser.detailsJSON
-            winner.powerCurveJSON = loser.powerCurveJSON
-            winner.streamsData = loser.streamsData
-            if winner.startMinute == nil { winner.startMinute = loser.startMinute }
+            if winner.overridesJSON == "{}" { winner.overridesJSON = loser.overridesJSON }
+            Self.applyCompleted(CompletedSection(loser), to: winner)
         }
         context.delete(loser)
     }
@@ -651,6 +660,42 @@ final class TrainingDataStore {
         markChanged()
     }
 
+    /// One-time translation of rows written before the planned/actual/override
+    /// layers existed: give every plan its own `plannedDate`/`plannedStartMinute`,
+    /// move every completed row's `date`/`startMinute` to the activity's real start
+    /// (recovered from the source record in `detailsJSON` — a folded plan otherwise
+    /// sits on the planned day, not the day the workout was done), and lift the
+    /// athlete-edit keys into the override layer. Safe to re-run (e.g. on a second
+    /// device whose CloudKit mirror already carries migrated rows): the planned
+    /// slot is only filled when absent and the completed part is idempotent.
+    func migrateWorkoutLayersIfNeeded() {
+        let flag = "workout_layers_migrated"
+        guard !UserDefaults.standard.bool(forKey: flag) else { return }
+        let rows = (try? context.fetch(FetchDescriptor<WorkoutRecord>())) ?? []
+        for r in rows {
+            if r.isPlanned && r.plannedDate == nil {
+                r.plannedDate = Calendar.current.startOfDay(for: r.date)
+                r.plannedStartMinute = r.startMinute
+            }
+            guard r.isCompleted, let details = Self.jsonObject(r.detailsJSON) else { continue }
+            if let ymd = details["date"] as? String, let actual = DateFormatter.ymd.date(from: ymd) {
+                r.date = actual
+            }
+            if let minute = WorkoutRecord.clockMinute(fromDetails: r.detailsJSON) {
+                r.startMinute = minute
+            }
+            if r.overridesJSON == "{}" {
+                let edits = details.filter { $0.key == "manual_distance_m" || $0.key == "manual_name" }
+                if !edits.isEmpty { r.overridesJSON = Self.jsonString(edits) ?? "{}" }
+            }
+        }
+        if !rows.isEmpty {
+            try? context.save()
+            markChanged()
+        }
+        UserDefaults.standard.set(true, forKey: flag)
+    }
+
     // MARK: - Completed activities
 
     /// Upsert a batch of completed activities (insert new, update existing by id),
@@ -659,137 +704,134 @@ final class TrainingDataStore {
     /// Each activity is scored against `snapshot(asOf: a.date)`, i.e. the thresholds
     /// current on its own date.
     ///
-    /// When an activity matches an open plan (the plan's `associatedActivityId`
-    /// names it, or — failing that — an open plan on the same day for the same sport
-    /// family), the completed section is folded INTO that plan row (TrainingPeaks-
-    /// style planned+actual on one row) and no separate activity row is inserted, so
-    /// the load is never double-counted.
+    /// When an open plan's completion link (`externalRefs["completed"]`, set from
+    /// the provider's calendar or a manual link) names an activity, the completed
+    /// section is folded INTO that plan row (TrainingPeaks-style planned+actual on
+    /// one row) and no separate activity row is inserted, so the load is never
+    /// double-counted. The explicit link is the *only* pairing — there is no
+    /// date/sport matching.
     func ingest(_ activities: [IngestedActivity]) {
         guard !activities.isEmpty else { return }
         let perf = Perf.begin("ingest", "\(activities.count)"); defer { Perf.end(perf) }
         let history = performanceHistory()
         let ignored = IgnoredWorkouts.ids
+        // Plans keyed by their completion link: a folded plan refreshes its actuals
+        // in place on re-sync; an open plan absorbs the linked activity when it
+        // arrives. `externalRefs` is JSON-decoded, so it can't sit in a
+        // `#Predicate` — one fetch + decode pass serves the whole batch.
+        var foldedPlans: [String: WorkoutRecord] = [:]
+        var linkedOpenPlans: [String: WorkoutRecord] = [:]
+        for plan in (try? context.fetch(FetchDescriptor<WorkoutRecord>(
+            predicate: #Predicate { $0.isPlanned }))) ?? [] {
+            guard let aid = plan.externalRefs[Self.completedRefKey] else { continue }
+            if plan.isCompleted { foldedPlans[aid] = plan } else { linkedOpenPlans[aid] = plan }
+        }
         for a in activities {
             // Blacklisted by the athlete → never give it a row (so it stays gone from
             // every surface and never re-syncs). Checked before scoring/folding.
             if ignored.contains(a.id) { continue }
             let scored = Self.score(a, history: history)
             let id = a.id
+            let record: WorkoutRecord
             // 1) Already folded into a completed plan (its actuals live on the plan
-            // row, keyed by `completedRef` — not by this id) → refresh that plan and
-            // drop any stray standalone with this id, never re-insert. Checked before
-            // the id-match so that a duplicate the old fold path left behind self-heals;
-            // without it a same-day re-sync re-creates the standalone the fold absorbed.
-            if let plan = foldedPlan(forActivityId: id, on: a.date) {
-                Self.applyCompleted(scored, of: a, to: plan)
+            // row, keyed by `completedRef` — not by this id) → refresh that plan in
+            // place and drop any stray standalone with this id, never re-insert.
+            if let plan = foldedPlans[id] {
+                record = plan
                 if let stray = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
                     predicate: #Predicate { $0.id == id && !$0.isPlanned })))?.first {
                     context.delete(stray)
                 }
-                continue
-            }
             // 2) An existing row already keyed by this activity id → update in place.
-            if let record = (try? context.fetch(
+            } else if let existing = (try? context.fetch(
                 FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.id == id })))?.first {
-                Self.applyCompleted(scored, of: a, to: record)
-                continue
+                record = existing
+            // 3) An open plan whose completion link names this activity → fold in.
+            } else if let plan = linkedOpenPlans[id] {
+                record = plan
+            // 4) Else a fresh completed-only row.
+            } else {
+                record = WorkoutRecord(id: a.id, source: a.source, date: a.date, sport: a.sport, name: a.name)
+                context.insert(record)
             }
-            // 3) Otherwise try to fold it into a matching open plan.
-            if let plan = matchingOpenPlan(for: a) {
-                Self.applyCompleted(scored, of: a, to: plan)
-                plan.setExternalRef(target: Self.completedRefKey, externalId: a.id)
-                continue
-            }
-            // 4) Else insert a fresh completed-only row.
-            let rec = WorkoutRecord(
-                id: a.id, source: a.source, date: a.date, sport: a.sport, name: a.name,
-                startMinute: WorkoutRecord.clockMinute(fromDetails: scored.detailsJSON),
-                isCompleted: true,
-                durationMinutes: a.durationMinutes, distanceKm: scored.distanceKm,
-                tss: scored.tss, tssBasis: scored.basis,
-                detailsJSON: scored.detailsJSON, powerCurveJSON: a.powerCurveJSON,
-                streamsData: a.streamsData
-            )
-            context.insert(rec)
+            Self.applyCompleted(CompletedSection(a, scored: scored), to: record)
+            applyOverrides(record, history: history)
         }
         dedupeWorkouts()
         try? context.save()
         markChanged()
     }
 
-    /// Apply a scored completed activity onto an existing row (which may be a plan
-    /// gaining its actuals, or a completed row being refreshed). Planned fields are
-    /// left untouched.
-    private static func applyCompleted(_ scored: (tss: Double?, distanceKm: Double, detailsJSON: String, basis: String?),
-                                       of a: IngestedActivity, to record: WorkoutRecord) {
-        // A manual rename outranks the source's name — carried into the fresh
-        // details so it survives re-syncs and refetches.
-        let manualName = jsonObject(record.detailsJSON)?["manual_name"] as? String
-        // Don't downgrade a plan's own date/sport/name to the activity's if it was
-        // user-authored; for a plain completed row these just refresh.
+    /// A row's completed section as one value — the single field list every writer
+    /// (DTO ingest, fold, dedupe merge) copies, so the copies can never drift.
+    private struct CompletedSection {
+        let source: String, date: Date, startMinute: Int?, sport: String, name: String
+        let durationMinutes: Double, distanceKm: Double
+        let tss: Double?, tssBasis: String?
+        let detailsJSON: String, powerCurveJSON: String
+        let streamsData: Data
+
+        init(_ a: IngestedActivity, scored: (tss: Double?, distanceKm: Double, detailsJSON: String, basis: String?)) {
+            source = a.source; date = a.date
+            startMinute = WorkoutRecord.clockMinute(fromDetails: scored.detailsJSON)
+            sport = a.sport; name = a.name
+            durationMinutes = a.durationMinutes; distanceKm = scored.distanceKm
+            tss = scored.tss; tssBasis = scored.basis
+            detailsJSON = scored.detailsJSON; powerCurveJSON = a.powerCurveJSON
+            streamsData = a.streamsData
+        }
+
+        init(_ r: WorkoutRecord) {
+            source = r.source; date = r.date; startMinute = r.startMinute
+            sport = r.sport; name = r.name
+            durationMinutes = r.durationMinutes; distanceKm = r.distanceKm
+            tss = r.tss; tssBasis = r.tssBasis
+            detailsJSON = r.detailsJSON; powerCurveJSON = r.powerCurveJSON
+            streamsData = r.streamsData
+        }
+    }
+
+    /// Write `c` onto `record` — the only place a completed section lands on a row.
+    /// The actual date/start time always win, so a plan done a day early or late
+    /// shows on the day it was actually done (the planned slot survives in
+    /// `plannedDate`/`plannedStartMinute`). A plan keeps its user-authored
+    /// source/sport/name; athlete edits are re-applied afterwards by
+    /// `applyOverrides`.
+    private static func applyCompleted(_ c: CompletedSection, to record: WorkoutRecord) {
         if !record.isPlanned {
-            record.source = a.source
-            record.date = a.date
-            record.sport = a.sport
-            record.name = manualName ?? a.name
+            record.source = c.source
+            record.sport = c.sport
+            record.name = c.name
         }
         record.isCompleted = true
-        record.durationMinutes = a.durationMinutes
-        record.distanceKm = scored.distanceKm
-        record.tss = scored.tss
-        record.tssBasis = scored.basis
-        record.detailsJSON = scored.detailsJSON
-        if let manualName, var details = jsonObject(scored.detailsJSON) {
-            details["manual_name"] = manualName
-            record.detailsJSON = jsonString(details) ?? scored.detailsJSON
-        }
-        record.powerCurveJSON = a.powerCurveJSON
-        record.streamsData = a.streamsData
-        if record.startMinute == nil {
-            record.startMinute = WorkoutRecord.clockMinute(fromDetails: scored.detailsJSON)
-        }
+        record.date = c.date
+        record.startMinute = c.startMinute ?? record.startMinute
+        record.durationMinutes = c.durationMinutes
+        record.distanceKm = c.distanceKm
+        record.tss = c.tss
+        record.tssBasis = c.tssBasis
+        record.detailsJSON = c.detailsJSON
+        record.powerCurveJSON = c.powerCurveJSON
+        record.streamsData = c.streamsData
     }
 
-    /// Find an open plan (`isPlanned && !isCompleted`) this activity completes: first
-    /// by an explicit completion link (`externalRefs["completed"]` == the activity's
-    /// stored id, set from the provider's calendar via `applyProviderCompletions`),
-    /// else the nearest open plan on the same day for the same sport family.
-    private func matchingOpenPlan(for a: IngestedActivity) -> WorkoutRecord? {
-        let cal = Calendar.current
-        let day = cal.startOfDay(for: a.date)
-        let openPlans = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
-            predicate: #Predicate { $0.isPlanned && !$0.isCompleted && $0.date == day }
-        ))) ?? []
-        guard !openPlans.isEmpty else { return nil }
-        // Explicit provider link wins (the plan named this activity as its completion).
-        if let linked = openPlans.first(where: { $0.externalRefs[Self.completedRefKey] == a.id }) {
-            return linked
+    /// Re-materialize the athlete's stored edits (`overridesJSON`) onto a freshly
+    /// written completed section — the durable half of every manual correction, so
+    /// a resync can rewrite the source data blindly without losing them. A name
+    /// override lands on `name`; a distance override re-scores distance + TSS.
+    private func applyOverrides(_ r: WorkoutRecord, history: PerformanceHistory) {
+        guard r.overridesJSON != "{}",
+              let ov = Self.jsonObject(r.overridesJSON), !ov.isEmpty,
+              var details = Self.jsonObject(r.detailsJSON) else { return }
+        for (k, v) in ov { details[k] = v }
+        if let name = ov["manual_name"] as? String { r.name = name }
+        if ov["manual_distance_m"] != nil {
+            let (km, tss, basis) = TSSScoring.score(&details, snapshot: history.snapshot(asOf: r.date))
+            r.distanceKm = km
+            r.tss = tss
+            r.tssBasis = basis
         }
-        // Else same sport family, nearest planned start time.
-        let family = SportFamily(sportKey: a.sport)
-        let candidates = openPlans.filter { SportFamily(sportKey: $0.sport) == family }
-        guard !candidates.isEmpty else { return nil }
-        let actualStart = WorkoutRecord.clockMinute(fromDetails: a.detailsJSON)
-        return candidates.min { lhs, rhs in
-            Self.startGap(lhs.startMinute, actualStart) < Self.startGap(rhs.startMinute, actualStart)
-        }
-    }
-
-    private static func startGap(_ a: Int?, _ b: Int?) -> Int {
-        guard let a, let b else { return Int.max / 2 }
-        return abs(a - b)
-    }
-
-    /// The completed plan that already absorbed the activity `id` (folded, so its
-    /// actuals live on the plan via `completedRef`). `externalRefs` is JSON-decoded,
-    /// so it can't be a `#Predicate`; the day filter (the fold is same-day) bounds the
-    /// scan. Used by ingest to refresh rather than duplicate an already-folded actual.
-    private func foldedPlan(forActivityId id: String, on date: Date) -> WorkoutRecord? {
-        let day = Calendar.current.startOfDay(for: date)
-        let plans = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
-            predicate: #Predicate { $0.isPlanned && $0.isCompleted && $0.date == day }
-        ))) ?? []
-        return plans.first { $0.externalRefs[Self.completedRefKey] == id }
+        r.detailsJSON = Self.jsonString(details) ?? r.detailsJSON
     }
 
     /// `externalRefs` key holding the completed activity a plan was linked to
@@ -815,8 +857,9 @@ final class TrainingDataStore {
 
     /// Cached `(tss, detailsJSON)` for the given ids — a resync passes the ids it is
     /// about to fetch so already-stored workouts can be reused without re-fetching
-    /// their streams / recomputing TSS. Manual swim-distance corrections survive
-    /// resync this way too. Resolves the raw provider id against folded plan rows too.
+    /// their streams / recomputing TSS (purely a fetch-avoidance cache; the
+    /// athlete's manual edits survive independently via the override layer).
+    /// Resolves the raw provider id against folded plan rows too.
     func cachedActivities(ids: Set<String>) -> [String: CachedActivity] {
         guard !ids.isEmpty else { return [:] }
         let all = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
@@ -835,12 +878,11 @@ final class TrainingDataStore {
         return out
     }
 
-    /// Manually override one completed activity's distance (km). Persists the manual
-    /// value in `detailsJSON` (so it survives resync) and recomputes distance + TSS.
+    /// Manually override one completed activity's distance (km). The edit lives in
+    /// the override layer (survives any resync) and recomputes distance + TSS.
     func overrideDistance(activityId: String, distanceKm: Double) {
-        guard let r = activity(id: activityId), var details = Self.jsonObject(r.detailsJSON) else { return }
-        details["manual_distance_m"] = distanceKm * 1000
-        rescore(r, details: &details)
+        guard let r = activity(id: activityId) else { return }
+        setOverrides(["manual_distance_m": distanceKm * 1000], on: r)
     }
 
     /// Re-run TSS + effective-distance scoring on the stored details against the
@@ -861,34 +903,39 @@ final class TrainingDataStore {
         markChanged()
     }
 
-    /// Rename one completed activity. The name persists as `manual_name` in
-    /// `detailsJSON` and outranks the source's name at ingest, so it survives
-    /// re-syncs and refetches.
+    /// Rename one completed activity. The name outranks the source's on every
+    /// re-sync and refetch (override layer).
     func renameActivity(id: String, name: String) {
-        guard let r = activity(id: id), var details = Self.jsonObject(r.detailsJSON) else { return }
-        r.name = name
-        details["manual_name"] = name
-        r.detailsJSON = Self.jsonString(details) ?? r.detailsJSON
-        try? context.save()
-        markChanged()
+        guard let r = activity(id: id) else { return }
+        setOverrides(["manual_name": name], on: r)
     }
 
     /// Record the athlete's subjective feedback (feel 1–5, RPE 1–10, free-text
-    /// note) on a completed activity, stored in `detailsJSON`. Matches the stored id
-    /// or a source-prefixed variant of the raw provider id. Returns false when no
-    /// matching completed workout exists.
+    /// note) on a completed activity. Matches the stored id or a source-prefixed
+    /// variant of the raw provider id. Returns false when no matching completed
+    /// workout exists.
     func setWorkoutFeedback(activityId: String, feel: Int?, rpe: Int?, note: String?) -> Bool {
         let candidates = [activityId, "garmin:\(activityId)", "healthkit:\(activityId)", "local:\(activityId)"]
         guard let r = (try? context.fetch(
-                  FetchDescriptor<WorkoutRecord>(predicate: #Predicate { candidates.contains($0.id) && $0.isCompleted })))?.first,
-              var details = Self.jsonObject(r.detailsJSON) else { return false }
-        if let feel { details["feel"] = feel }
-        if let rpe { details["rpe"] = rpe }
-        if let note { details["notes"] = note }
-        r.detailsJSON = Self.jsonString(details) ?? r.detailsJSON
+            FetchDescriptor<WorkoutRecord>(predicate: #Predicate { candidates.contains($0.id) && $0.isCompleted })))?.first
+        else { return false }
+        var edits: [String: Any] = [:]
+        if let feel { edits["feel"] = feel }
+        if let rpe { edits["rpe"] = rpe }
+        if let note { edits["notes"] = note }
+        setOverrides(edits, on: r)
+        return true
+    }
+
+    /// Merge athlete edits into a row's override layer and re-materialize them
+    /// onto the completed section.
+    private func setOverrides(_ edits: [String: Any], on r: WorkoutRecord) {
+        var ov = Self.jsonObject(r.overridesJSON) ?? [:]
+        for (k, v) in edits { ov[k] = v }
+        r.overridesJSON = Self.jsonString(ov) ?? r.overridesJSON
+        applyOverrides(r, history: performanceHistory())
         try? context.save()
         markChanged()
-        return true
     }
 
     private static func jsonObject(_ s: String) -> [String: Any]? {
@@ -967,7 +1014,9 @@ final class TrainingDataStore {
 
     /// Upsert a batch of planned workouts (insert new, update existing by id).
     /// Dates are normalized to start-of-day. Updating an existing row leaves any
-    /// already-recorded completed section intact (only the plan fields change).
+    /// already-recorded completed section intact (only the plan fields change) —
+    /// including `date`, which on a folded row is the actual day, not the planned
+    /// one still on the provider's calendar.
     func ingestScheduled(_ workouts: [IngestedScheduledWorkout]) {
         guard !workouts.isEmpty else { return }
         let cal = Calendar.current
@@ -977,7 +1026,8 @@ final class TrainingDataStore {
             if let record = (try? context.fetch(
                 FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.id == id })))?.first {
                 record.source = w.source
-                record.date = day
+                record.plannedDate = day
+                if !record.isCompleted { record.date = day }
                 record.sport = w.sport
                 record.name = w.name
                 record.isPlanned = true
@@ -1001,6 +1051,7 @@ final class TrainingDataStore {
                     targetTSS: w.targetTSS,
                     stepsJSON: w.stepsJSON, notes: w.notes, poolLengthMeters: w.poolLengthMeters
                 )
+                rec.plannedDate = day
                 context.insert(rec)
                 if let aid = w.associatedActivityId {
                     rec.setExternalRef(target: Self.completedRefKey, externalId: "\(w.source):\(aid)")
@@ -1028,31 +1079,25 @@ final class TrainingDataStore {
         fold(activity: activity, into: plan)
     }
 
-    /// Fold a standalone completed `activity` into an open `plan`: copy its actuals
-    /// onto the plan, link it (`completedRef`) and drop the standalone — the single
-    /// place a separate completed row collapses into its plan, shared by the
-    /// calendar-driven `foldStandaloneCompleted` and the manual `linkActual`.
+    /// Fold a standalone completed `activity` into an open `plan`: move its actuals
+    /// (and athlete edits) onto the plan row, link it (`completedRef`) and drop the
+    /// standalone — the single place a separate completed row collapses into its
+    /// plan, shared by the calendar-driven `foldStandaloneCompleted` and the manual
+    /// `linkActual`. The plan row moves to the activity's actual date/start time;
+    /// its planned slot stays in `plannedDate`/`plannedStartMinute`.
     private func fold(activity: WorkoutRecord, into plan: WorkoutRecord) {
-        plan.isCompleted = true
-        plan.durationMinutes = activity.durationMinutes
-        plan.distanceKm = activity.distanceKm
-        plan.tss = activity.tss
-        plan.tssBasis = activity.tssBasis
-        plan.detailsJSON = activity.detailsJSON
-        plan.powerCurveJSON = activity.powerCurveJSON
-        plan.streamsData = activity.streamsData
-        if plan.startMinute == nil { plan.startMinute = activity.startMinute }
+        plan.overridesJSON = activity.overridesJSON
+        Self.applyCompleted(CompletedSection(activity), to: plan)
         plan.setExternalRef(target: Self.completedRefKey, externalId: activity.id)
         context.delete(activity)
     }
 
     // MARK: - Manual pairing override
     //
-    // The automatic ingest fold pairs a completed activity to a plan by the
-    // provider's explicit link or a same-day/same-sport/nearest-start heuristic.
-    // When that heuristic picks the wrong actual — e.g. a plan run on the Apple
-    // Watch but a parallel Garmin session ingested first — these two let the
-    // athlete correct it by hand: split the wrong pairing, then attach the right
+    // The automatic ingest fold pairs a completed activity to a plan only by the
+    // provider's explicit completion link. Where no link exists (Apple Watch plans
+    // have no HealthKit→plan link) or it names the wrong session, these two let
+    // the athlete pair by hand: split a wrong pairing, then attach the right
     // activity.
 
     /// Split a folded plan row (`isPlanned && isCompleted`) back into an open plan
@@ -1070,7 +1115,9 @@ final class TrainingDataStore {
     }
 
     /// Split a folded plan back into an open plan + a standalone completed row.
-    /// Does not save; no-op without a completion link.
+    /// The plan returns to its planned slot (`plannedDate`/`plannedStartMinute`);
+    /// the standalone keeps the actual date/time and the athlete's edits. Does not
+    /// save; no-op without a completion link.
     private func unfold(_ plan: WorkoutRecord) {
         guard let activityId = plan.externalRefs[Self.completedRefKey] else { return }
         let activity = WorkoutRecord(
@@ -1078,15 +1125,18 @@ final class TrainingDataStore {
             source: activityId.components(separatedBy: ":").first ?? plan.source,
             date: plan.date, sport: plan.sport,
             name: SportFamily(sportKey: plan.sport).displayName,
-            startMinute: WorkoutRecord.clockMinute(fromDetails: plan.detailsJSON),
+            startMinute: plan.startMinute,
             isCompleted: true,
             durationMinutes: plan.durationMinutes, distanceKm: plan.distanceKm,
             tss: plan.tss, tssBasis: plan.tssBasis,
             detailsJSON: plan.detailsJSON, powerCurveJSON: plan.powerCurveJSON,
             streamsData: plan.streamsData
         )
+        activity.overridesJSON = plan.overridesJSON
         context.insert(activity)
         plan.isCompleted = false
+        plan.date = plan.plannedDate ?? plan.date
+        plan.startMinute = plan.plannedStartMinute
         plan.durationMinutes = 0
         plan.distanceKm = 0
         plan.tss = nil
@@ -1094,16 +1144,16 @@ final class TrainingDataStore {
         plan.detailsJSON = ""
         plan.powerCurveJSON = ""
         plan.streamsData = Data()
+        plan.overridesJSON = "{}"
         plan.setExternalRef(target: Self.completedRefKey, externalId: nil)
     }
 
     /// Apply the provider's authoritative plan→activity completion links to plans
     /// pushed to `target` (`links`: provider workout id → raw activity id). Garmin's
-    /// calendar names the activity that completed each workout; the heuristic ingest
-    /// fold can beat that link to the plan and pick the wrong same-day session, so a
-    /// contradicting fold is undone first (the stray actual re-materializes as a
-    /// standalone row and re-pairs on the next ingest) before the named activity is
-    /// linked and folded in.
+    /// calendar names the activity that completed each workout; a contradicting
+    /// pairing (a manual link to another session, or a link the provider changed)
+    /// is undone first (the stray actual re-materializes as a standalone row and
+    /// re-pairs on the next ingest) before the named activity is linked and folded in.
     func applyProviderCompletions(target: String, links: [String: String]) {
         guard !links.isEmpty else { return }
         let plans = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
@@ -1141,15 +1191,17 @@ final class TrainingDataStore {
         markChanged()
     }
 
-    /// Open plans (`isPlanned && !isCompleted`) on the same day and sport family as
-    /// `activity` — the candidates the detail view offers for a manual link.
+    /// All open plans (`isPlanned && !isCompleted`), nearest planned day to
+    /// `activity` first — the candidates the detail view offers for a manual link.
+    /// Deliberately unfiltered: pairing is the athlete's explicit choice, never a
+    /// date/sport match.
     func openPlansMatching(activity: WorkoutRecord) -> [WorkoutRecord] {
-        let day = Calendar.current.startOfDay(for: activity.date)
         let plans = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
-            predicate: #Predicate { $0.isPlanned && !$0.isCompleted && $0.date == day }
+            predicate: #Predicate { $0.isPlanned && !$0.isCompleted }
         ))) ?? []
-        let family = SportFamily(sportKey: activity.sport)
-        return plans.filter { SportFamily(sportKey: $0.sport) == family }
+        return plans.sorted {
+            abs($0.date.timeIntervalSince(activity.date)) < abs($1.date.timeIntervalSince(activity.date))
+        }
     }
 
     /// Planned workouts in `[from, to]` that are still outstanding (not yet
@@ -1275,7 +1327,9 @@ final class TrainingDataStore {
             FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.id == id })
         ).first
         guard let record else { return nil }
-        record.date = Calendar.current.startOfDay(for: newDate)
+        let day = Calendar.current.startOfDay(for: newDate)
+        record.plannedDate = day
+        if !record.isCompleted { record.date = day }
         try? context.save()
         markChanged()
         return record
@@ -1341,7 +1395,8 @@ final class TrainingDataStore {
             FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.id == id })
         ).first
         guard let record else { return nil }
-        record.startMinute = minute
+        record.plannedStartMinute = minute
+        if !record.isCompleted { record.startMinute = minute }
         try? context.save()
         markChanged()
         return record
@@ -1358,6 +1413,8 @@ final class TrainingDataStore {
             record.targetDurationMinutes = 0
             record.targetTSS = nil
             record.stepsJSON = "[]"
+            record.plannedDate = nil
+            record.plannedStartMinute = nil
         } else {
             context.delete(record)
         }
@@ -1424,7 +1481,8 @@ final class TrainingDataStore {
             if let r = try? context.fetch(
                 FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.id == id })
             ).first {
-                r.startMinute = minute
+                r.plannedStartMinute = minute
+                if !r.isCompleted { r.startMinute = minute }
             }
         }
         if !preservedStart.isEmpty { try? context.save() }
