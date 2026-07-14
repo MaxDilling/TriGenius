@@ -332,7 +332,7 @@ final class AppSettings: ObservableObject {
                 displayName: BackendType.openRouter.rawValue,
                 baseURL: "https://openrouter.ai/api/v1",
                 apiKey: openRouterAPIKey,
-                extraHeaders: ["X-Title": "TriGenius"],
+                extraHeaders: OpenAICompatibleBackend.openRouterHeaders,
                 model: openRouterModel
             )
         case .appleIntelligence:
