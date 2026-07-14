@@ -35,6 +35,9 @@ nonisolated enum CoachActivityProjection {
     static func summary(_ details: [String: Any], tss: Double?, tssBasis: String?) -> [String: Any] {
         var out: [String: Any] = [:]
         pick(commonKeys, from: details, into: &out)
+        // One id key across both get_workouts sections: completed rows expose
+        // `workout_id` too, so every id-taking tool reads the same field.
+        if let id = out.removeValue(forKey: "id") { out["workout_id"] = id }
         if let tss { out["tss"] = tss }
         if let tssBasis { out["tss_basis"] = tssBasis }
         for (sport, keys) in sportKeys {

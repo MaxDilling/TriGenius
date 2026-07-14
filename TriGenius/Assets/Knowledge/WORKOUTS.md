@@ -161,7 +161,7 @@ The result reports each item (`✓ Scheduled 5/5 …`) with the defaults/bands a
 
 To change a session that is already scheduled, use `modify_workout` — don't delete and recreate.
 
-1. Call `get_workouts` for the date range. Each `scheduled[]` item already has a `workout_id` and a
+1. Call `get_workouts` for the date range. Each `planned[]` item already has a `workout_id` and a
    `workout_data` object — you can pass that object straight back into `modify_workout`.
 2. Call `modify_workout` with that `workout_id` and a `workout_data` object containing your changes:
    - **Replace the structure:** include a full `steps` array (same rules as §2–§4; single targets get
@@ -208,8 +208,8 @@ Example — fix just the description, keep the steps:
 4. Adjust later: `get_workouts` to see what's scheduled and get each `workout_id`, then
    `modify_workout` (change content), `move_workout` (change date), or `delete_workout`.
 
-`get_workouts` returns Garmin workouts; `read_calendar_availability` returns the device calendar
-(meetings, life) — they are different tools, don't confuse them.
+`get_workouts` returns training workouts (all sources merged); `read_calendar_availability` returns
+the device calendar (meetings, life) — they are different tools, don't confuse them.
 
 ## 8. Reminders
 

@@ -30,7 +30,6 @@ final class CoachMemory: ObservableObject {
     @Published private(set) var preferences: AthletePreferences
     @Published private(set) var sportProgress: SportProgressMap
     @Published private(set) var feedbackHistory: [FeedbackEntry]
-    @Published private(set) var onboardingComplete: Bool
 
     // MARK: - Init
 
@@ -38,9 +37,7 @@ final class CoachMemory: ObservableObject {
     /// writer of those rows, so the in-memory copy is authoritative.
     init() {
         let store = TrainingDataStore.shared
-        let (profile, onboarding) = store.coachProfile()
-        userProfile = profile
-        onboardingComplete = onboarding
+        userProfile = store.coachProfile()
         weeklyStructure = store.coachWeeklyStructure()
         preferences = store.coachPreferences()
         sportProgress = store.coachSportProgress()
@@ -53,7 +50,7 @@ final class CoachMemory: ObservableObject {
     /// `importJSON`'s restore. The per-section mutators below persist incrementally.
     private func persistAll() {
         TrainingDataStore.shared.replaceCoachMemory(
-            profile: userProfile, onboardingComplete: onboardingComplete,
+            profile: userProfile,
             weeklyStructure: weeklyStructure, preferences: preferences,
             sportProgress: sportProgress, feedback: feedbackHistory)
     }
@@ -67,7 +64,6 @@ final class CoachMemory: ObservableObject {
         preferences = AthletePreferences()
         sportProgress = SportProgressMap()
         feedbackHistory = []
-        onboardingComplete = false
         persistAll()
     }
 
@@ -87,7 +83,6 @@ final class CoachMemory: ObservableObject {
         preferences = (raw["preferences"] as? [String: Any]).map { AthletePreferences(from: $0) } ?? AthletePreferences()
         sportProgress = (raw["sport_progress"] as? [String: Any]).map { SportProgressMap(from: $0) } ?? SportProgressMap()
         feedbackHistory = (raw["feedback_history"] as? [[String: Any]] ?? []).compactMap(FeedbackEntry.init(from:))
-        onboardingComplete = raw["onboarding_complete"] as? Bool ?? false
         persistAll()
     }
 
@@ -111,8 +106,7 @@ final class CoachMemory: ObservableObject {
             "weekly_structure": weeklyStructure.toDict(),
             "preferences": preferences.toDict(),
             "sport_progress": sportProgress.toDict(),
-            "feedback_history": feedbackHistory.map { $0.toDict() },
-            "onboarding_complete": onboardingComplete
+            "feedback_history": feedbackHistory.map { $0.toDict() }
         ]
         if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]),
            let str = String(data: data, encoding: .utf8) {
@@ -125,7 +119,7 @@ final class CoachMemory: ObservableObject {
 
     func updateProfile(_ update: (inout UserProfile) -> Void) {
         update(&userProfile)
-        TrainingDataStore.shared.saveCoachProfile(userProfile, onboardingComplete: onboardingComplete)
+        TrainingDataStore.shared.saveCoachProfile(userProfile)
     }
 
     func updateWeeklyStructure(_ update: (inout WeeklyStructure) -> Void) {
@@ -150,11 +144,6 @@ final class CoachMemory: ObservableObject {
         feedbackHistory.append(entry)
         if feedbackHistory.count > 50 { feedbackHistory.removeFirst() }
         TrainingDataStore.shared.appendCoachFeedback(entry, cap: 50)
-    }
-
-    func markOnboardingComplete() {
-        onboardingComplete = true
-        TrainingDataStore.shared.saveCoachProfile(userProfile, onboardingComplete: true)
     }
 
     // MARK: - Context summary for LLM
@@ -188,6 +177,8 @@ final class CoachMemory: ObservableObject {
         )
         var parts = ["=== ATHLETE ==="]
 
+        parts.append("[xxxx] tags on entries below are internal removal ids for the update tools — never show or mention them to the athlete.")
+
         let missing = missingInfo(performance: now)
         if !missing.isEmpty {
             parts.append("\n⚠️ MISSING INFORMATION (please ask the athlete):")
@@ -200,7 +191,7 @@ final class CoachMemory: ObservableObject {
         if let rd = weeklyStructure.preferredRestDay { identity.append("rest day \(rd)") }
         if !identity.isEmpty { parts.append(identity.joined(separator: " · ")) }
         if !userProfile.goals.isEmpty {
-            var goals = "Goals: \(userProfile.goals.joined(separator: ", "))"
+            var goals = "Goals: \(userProfile.goals.map { "[\(MemoryRef.id($0))] \($0)" }.joined(separator: ", "))"
             if let m = userProfile.motivation { goals += " — motivation: \(m)" }
             parts.append(goals)
         }
@@ -231,10 +222,10 @@ final class CoachMemory: ObservableObject {
         for sport in sports {
             let sp = sportProgress.progress(for: sport)
             for l in sp.limitations {
-                limits.append("\(sport): \(l.item)" + (l.reason.map { " (\($0))" } ?? ""))
+                limits.append("[\(l.refId)] \(sport): \(l.item)" + (l.reason.map { " (\($0))" } ?? ""))
             }
             for i in sp.injuriesAffecting {
-                limits.append("\(sport) injury: \(i.injury) — \(i.impact)")
+                limits.append("[\(i.refId)] \(sport) injury: \(i.injury) — \(i.impact)")
             }
         }
         if !limits.isEmpty {
@@ -243,15 +234,9 @@ final class CoachMemory: ObservableObject {
         }
 
         // Preferences: guidance the coach honors by default, not hard rules.
-        var prefs = preferences.trainingPreferences
-        if let m = preferences.morningWorkouts { prefs.append(m ? "prefers morning workouts" : "prefers not to train in the morning") }
-        if let t = preferences.indoorTrainerAvailable { prefs.append(t ? "indoor trainer available" : "no indoor trainer") }
-        if !preferences.noSwimDays.isEmpty { prefs.append("no swim on: \(preferences.noSwimDays.joined(separator: ", "))") }
-        if !preferences.noBikeDays.isEmpty { prefs.append("no bike on: \(preferences.noBikeDays.joined(separator: ", "))") }
-        if !preferences.noRunDays.isEmpty { prefs.append("no run on: \(preferences.noRunDays.joined(separator: ", "))") }
-        if !prefs.isEmpty {
+        if !preferences.trainingPreferences.isEmpty {
             parts.append("\nPREFERENCES (honor by default; the athlete may override):")
-            prefs.forEach { parts.append("- \($0)") }
+            preferences.trainingPreferences.forEach { parts.append("- [\(MemoryRef.id($0))] \($0)") }
         }
 
         // Per-sport notes: level / abilities / focus / equipment, one line each.
@@ -389,36 +374,40 @@ struct WeeklyStructure {
 }
 
 struct AthletePreferences {
-    var noSwimDays: [String] = []
-    var noBikeDays: [String] = []
-    var noRunDays: [String] = []
-    var morningWorkouts: Bool?
-    var indoorTrainerAvailable: Bool?
     /// Free-text training likes/dislikes ("Run: likes strides"). Honored by
-    /// default when building workouts — guidance, not binding limitations.
+    /// default when building workouts — guidance, not binding limitations. The
+    /// one uniform preference list: former structured fields (morning workouts,
+    /// indoor trainer, no-X-days) fold into it as plain entries so every
+    /// preference is removable the same way.
     var trainingPreferences: [String] = []
 
     init() {}
 
     init(from d: [String: Any]) {
-        noSwimDays = d["no_swim_days"] as? [String] ?? []
-        noBikeDays = d["no_bike_days"] as? [String] ?? []
-        noRunDays = d["no_run_days"] as? [String] ?? []
-        morningWorkouts = d["morning_workouts"] as? Bool
-        indoorTrainerAvailable = d["indoor_trainer_available"] as? Bool
         trainingPreferences = d["training_preferences"] as? [String] ?? []
+        trainingPreferences.append(contentsOf: Self.foldLegacyFields(
+            morningWorkouts: d["morning_workouts"] as? Bool,
+            indoorTrainerAvailable: d["indoor_trainer_available"] as? Bool,
+            noSwimDays: d["no_swim_days"] as? [String] ?? [],
+            noBikeDays: d["no_bike_days"] as? [String] ?? [],
+            noRunDays: d["no_run_days"] as? [String] ?? []))
     }
 
     func toDict() -> [String: Any] {
-        var d: [String: Any] = [
-            "no_swim_days": noSwimDays,
-            "no_bike_days": noBikeDays,
-            "no_run_days": noRunDays
-        ]
-        if let v = morningWorkouts { d["morning_workouts"] = v }
-        if let v = indoorTrainerAvailable { d["indoor_trainer_available"] = v }
-        if !trainingPreferences.isEmpty { d["training_preferences"] = trainingPreferences }
-        return d
+        ["training_preferences": trainingPreferences]
+    }
+
+    /// Render pre-fold structured preference fields (legacy imports and
+    /// pre-migration store rows) as the plain-text entries they map to.
+    static func foldLegacyFields(morningWorkouts: Bool?, indoorTrainerAvailable: Bool?,
+                                 noSwimDays: [String], noBikeDays: [String], noRunDays: [String]) -> [String] {
+        var entries: [String] = []
+        if let v = morningWorkouts { entries.append(v ? "prefers morning workouts" : "prefers not to train in the morning") }
+        if let v = indoorTrainerAvailable { entries.append(v ? "indoor trainer available" : "no indoor trainer") }
+        if !noSwimDays.isEmpty { entries.append("no swim on: \(noSwimDays.joined(separator: ", "))") }
+        if !noBikeDays.isEmpty { entries.append("no bike on: \(noBikeDays.joined(separator: ", "))") }
+        if !noRunDays.isEmpty { entries.append("no run on: \(noRunDays.joined(separator: ", "))") }
+        return entries
     }
 }
 
@@ -506,6 +495,8 @@ nonisolated struct Limitation: Codable {
         if let r = reason { d["reason"] = r }
         return d
     }
+
+    var refId: String { MemoryRef.id(item + "|" + (reason ?? "")) }
 }
 
 nonisolated struct InjuryImpact: Codable {
@@ -518,6 +509,26 @@ nonisolated struct InjuryImpact: Codable {
     }
 
     func toDict() -> [String: Any] { ["injury": injury, "impact": impact] }
+
+    var refId: String { MemoryRef.id(injury + "|" + impact) }
+}
+
+// MARK: - Removal handles
+
+/// Stable, token-cheap removal handles for profile entries: a 4-hex-char FNV-1a
+/// hash of the entry's content, rendered as "[ab12]" next to each removable item
+/// in the prompt context and accepted by the remove_* tool fields. Content-derived,
+/// so a handle never shifts when other entries are added or removed — no get
+/// round-trip before a remove.
+nonisolated enum MemoryRef {
+    static func id(_ text: String) -> String {
+        var hash: UInt32 = 2_166_136_261
+        for byte in text.utf8 {
+            hash ^= UInt32(byte)
+            hash = hash &* 16_777_619
+        }
+        return String(format: "%04x", (hash >> 16) ^ (hash & 0xFFFF))
+    }
 }
 
 nonisolated struct FeedbackEntry {

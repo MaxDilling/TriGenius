@@ -32,21 +32,24 @@ final class ReminderToolHandler: CoachToolHandler {
             ToolDefinition(
                 name: "set_reminder",
                 description: """
-                Create or update a push reminder. Omit 'id' to create a new one; pass an existing 'id' to update it. \
+                Create, update or delete a push reminder. Omit 'id' to create (needs 'kind' and 'time'); pass an existing \
+                'id' to update it; pass 'id' plus delete:true to remove it. \
                 Static kinds (check_in, weekly_review, custom) fire at the exact configured time even when the app is closed. \
                 Dynamic kinds (todays_workout, sleep_advice) compose their text from current data and are delivered around \
-                the configured time during a background refresh (timing is approximate). Use 'message' for the custom kind.
+                the configured time during a background refresh (timing is approximate). Use 'message' for the custom kind. \
+                Quiet hours are managed by the athlete in Settings.
                 """,
                 parameters: [
                     "type": "object",
                     "properties": [
-                        "id": ["type": "string", "description": "Existing reminder id to update. Omit to create a new reminder."],
+                        "id": ["type": "string", "description": "Existing reminder id to update or delete. Omit to create a new reminder."],
+                        "delete": ["type": "boolean", "description": "Pass true with 'id' to remove that reminder."],
                         "kind": [
                             "type": "string",
                             "enum": ["check_in", "weekly_review", "custom", "todays_workout", "sleep_advice"],
-                            "description": "What the reminder is about."
+                            "description": "What the reminder is about. Required when creating."
                         ],
-                        "time": ["type": "string", "description": "Local time of day in 24h HH:MM format, e.g. '07:00'."],
+                        "time": ["type": "string", "description": "Local time of day in 24h HH:MM format, e.g. '07:00'. Required when creating."],
                         "weekdays": [
                             "type": "array",
                             "items": [
@@ -58,27 +61,6 @@ final class ReminderToolHandler: CoachToolHandler {
                         "enabled": ["type": "boolean", "description": "Whether the reminder is active. Default true."],
                         "message": ["type": "string", "description": "Notification text for the 'custom' kind (ignored for other kinds)."]
                     ],
-                    "required": ["kind"]
-                ]
-            ),
-            ToolDefinition(
-                name: "delete_reminder",
-                description: "Delete a configured reminder by its id.",
-                parameters: [
-                    "type": "object",
-                    "properties": ["id": ["type": "string", "description": "The reminder id to delete."]],
-                    "required": ["id"]
-                ]
-            ),
-            ToolDefinition(
-                name: "set_quiet_hours",
-                description: "Set or clear the quiet-hours window during which TriGenius suppresses notifications (proactive alerts and dynamic reminders). Pass both 'start' and 'end' as HH:MM to set, or omit both to clear.",
-                parameters: [
-                    "type": "object",
-                    "properties": [
-                        "start": ["type": "string", "description": "Quiet-hours start, 24h HH:MM (e.g. '22:00'). Omit to clear."],
-                        "end": ["type": "string", "description": "Quiet-hours end, 24h HH:MM (e.g. '07:00'). Omit to clear."]
-                    ],
                     "required": []
                 ]
             )
@@ -89,8 +71,6 @@ final class ReminderToolHandler: CoachToolHandler {
         switch name {
         case "get_reminders": return getReminders()
         case "set_reminder": return await setReminder(arguments)
-        case "delete_reminder": return await deleteReminder(arguments)
-        case "set_quiet_hours": return await setQuietHours(arguments)
         default: return "Unknown reminder tool: \(name)"
         }
     }
@@ -107,12 +87,25 @@ final class ReminderToolHandler: CoachToolHandler {
     }
 
     private func setReminder(_ args: [String: Any]) async -> String {
-        guard let kindRaw = args["kind"] as? String, let kind = ReminderKind(rawValue: kindRaw) else {
-            return "✗ Error: 'kind' must be one of check_in, weekly_review, custom, todays_workout, sleep_advice."
-        }
-
         let store = ReminderStore.shared
         let existing = (args["id"] as? String).flatMap { id in store.rules.first { $0.id == id } }
+
+        if args["delete"] as? Bool == true {
+            guard let existing else {
+                return "✗ Error: pass the 'id' of an existing reminder to delete (see get_reminders)."
+            }
+            store.delete(id: existing.id)
+            await ReminderScheduler.shared.reconcile()
+            return "✓ Deleted reminder \(existing.id)"
+        }
+
+        let kindRaw = args["kind"] as? String
+        if let kindRaw, ReminderKind(rawValue: kindRaw) == nil {
+            return "✗ Error: 'kind' must be one of check_in, weekly_review, custom, todays_workout, sleep_advice."
+        }
+        guard let kind = kindRaw.flatMap(ReminderKind.init(rawValue:)) ?? existing?.kind else {
+            return "✗ Error: 'kind' is required when creating a reminder."
+        }
 
         // Time is required when creating; optional (keep current) when updating.
         var hour = existing?.hour
@@ -161,33 +154,6 @@ final class ReminderToolHandler: CoachToolHandler {
 
         let verb = existing == nil ? "Created" : "Updated"
         return "✓ \(verb) reminder\n\(String(compactJSON: Self.ruleDict(rule)))"
-    }
-
-    private func deleteReminder(_ args: [String: Any]) async -> String {
-        guard let id = args["id"] as? String else { return "✗ Error: 'id' is required." }
-        guard ReminderStore.shared.rules.contains(where: { $0.id == id }) else {
-            return "✗ Error: no reminder with id '\(id)'."
-        }
-        ReminderStore.shared.delete(id: id)
-        await ReminderScheduler.shared.reconcile()
-        return "✓ Deleted reminder \(id)"
-    }
-
-    private func setQuietHours(_ args: [String: Any]) async -> String {
-        let store = ReminderStore.shared
-        let startStr = args["start"] as? String
-        let endStr = args["end"] as? String
-
-        if startStr == nil, endStr == nil {
-            store.setQuietHours(start: nil, end: nil)
-            return "✓ Quiet hours cleared"
-        }
-        guard let startStr, let endStr,
-              let start = Self.parseTime(startStr), let end = Self.parseTime(endStr) else {
-            return "✗ Error: pass both 'start' and 'end' as 24h HH:MM, or omit both to clear."
-        }
-        store.setQuietHours(start: start.0 * 60 + start.1, end: end.0 * 60 + end.1)
-        return "✓ Quiet hours set \(startStr)–\(endStr)"
     }
 
     // MARK: - Helpers

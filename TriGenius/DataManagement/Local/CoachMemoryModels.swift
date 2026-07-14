@@ -29,6 +29,8 @@ final class ProfileRecord {
     var motivation: String?
     var latitude: Double?
     var longitude: Double?
+    /// Retained for the append-only CloudKit schema; no longer read — the
+    /// onboarding prompt section now gates purely on missing profile data.
     var onboardingComplete: Bool = false
 
     init() {}
@@ -56,6 +58,9 @@ final class WeeklyStructureRecord {
 final class PreferencesRecord {
     static let singletonID = "coach_preferences"
     var id: String = PreferencesRecord.singletonID
+    // The structured fields below are retained for the append-only CloudKit
+    // schema only: the read path folds any pre-fold values into
+    // `trainingPreferences` as plain entries, and the next save clears them.
     var noSwimDays: [String] = []
     var noBikeDays: [String] = []
     var noRunDays: [String] = []

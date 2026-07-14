@@ -1760,17 +1760,17 @@ extension TrainingDataStore {
 
     // MARK: Reads
 
-    /// The athlete profile plus the onboarding flag. Defaults when no row exists.
-    func coachProfile() -> (profile: UserProfile, onboardingComplete: Bool) {
+    /// The athlete profile. Defaults when no row exists.
+    func coachProfile() -> UserProfile {
         guard let r = try? context.fetch(FetchDescriptor<ProfileRecord>()).first else {
-            return (UserProfile(), false)
+            return UserProfile()
         }
         var p = UserProfile()
         p.name = r.name
         p.goals = r.goals
         p.motivation = r.motivation
         if let lat = r.latitude, let lon = r.longitude { p.coordinates = (lat, lon) }
-        return (p, r.onboardingComplete)
+        return p
     }
 
     func coachWeeklyStructure() -> WeeklyStructure {
@@ -1792,12 +1792,12 @@ extension TrainingDataStore {
             return AthletePreferences()
         }
         var p = AthletePreferences()
-        p.noSwimDays = r.noSwimDays
-        p.noBikeDays = r.noBikeDays
-        p.noRunDays = r.noRunDays
-        p.morningWorkouts = r.morningWorkouts
-        p.indoorTrainerAvailable = r.indoorTrainerAvailable
         p.trainingPreferences = r.trainingPreferences
+        // Pre-fold structured fields surface as plain entries; the next save
+        // clears them on the row so a removed entry can't resurrect.
+        p.trainingPreferences.append(contentsOf: AthletePreferences.foldLegacyFields(
+            morningWorkouts: r.morningWorkouts, indoorTrainerAvailable: r.indoorTrainerAvailable,
+            noSwimDays: r.noSwimDays, noBikeDays: r.noBikeDays, noRunDays: r.noRunDays))
         return p
     }
 
@@ -1828,11 +1828,11 @@ extension TrainingDataStore {
 
     // MARK: Writes (one section each, mirroring CoachMemory's mutators)
 
-    func saveCoachProfile(_ p: UserProfile, onboardingComplete: Bool) {
+    func saveCoachProfile(_ p: UserProfile) {
         let r = (try? context.fetch(FetchDescriptor<ProfileRecord>()).first) ?? {
             let new = ProfileRecord(); context.insert(new); return new
         }()
-        Self.apply(p, onboardingComplete: onboardingComplete, to: r)
+        Self.apply(p, to: r)
         try? context.save(); markChanged()
     }
 
@@ -1874,7 +1874,7 @@ extension TrainingDataStore {
     /// Full restore from an imported coach_memory.json — wipe every coach-memory
     /// row, then write the supplied state. Matches `importJSON`'s replace-not-merge
     /// semantics. Leaves the time-series / ATP rows untouched.
-    func replaceCoachMemory(profile: UserProfile, onboardingComplete: Bool,
+    func replaceCoachMemory(profile: UserProfile,
                             weeklyStructure: WeeklyStructure, preferences: AthletePreferences,
                             sportProgress: SportProgressMap, feedback: [FeedbackEntry]) {
         try? context.delete(model: ProfileRecord.self)
@@ -1883,7 +1883,7 @@ extension TrainingDataStore {
         try? context.delete(model: SportProgressRecord.self)
         try? context.delete(model: FeedbackRecord.self)
 
-        let pr = ProfileRecord(); Self.apply(profile, onboardingComplete: onboardingComplete, to: pr)
+        let pr = ProfileRecord(); Self.apply(profile, to: pr)
         context.insert(pr)
         let wr = WeeklyStructureRecord(); Self.apply(weeklyStructure, to: wr); context.insert(wr)
         let prefR = PreferencesRecord(); Self.apply(preferences, to: prefR); context.insert(prefR)
@@ -1900,13 +1900,12 @@ extension TrainingDataStore {
 
     // MARK: Struct ↔ record mapping
 
-    private static func apply(_ p: UserProfile, onboardingComplete: Bool, to r: ProfileRecord) {
+    private static func apply(_ p: UserProfile, to r: ProfileRecord) {
         r.name = p.name
         r.goals = p.goals
         r.motivation = p.motivation
         r.latitude = p.coordinates?.lat
         r.longitude = p.coordinates?.lon
-        r.onboardingComplete = onboardingComplete
     }
 
     private static func apply(_ w: WeeklyStructure, to r: WeeklyStructureRecord) {
@@ -1919,12 +1918,12 @@ extension TrainingDataStore {
     }
 
     private static func apply(_ p: AthletePreferences, to r: PreferencesRecord) {
-        r.noSwimDays = p.noSwimDays
-        r.noBikeDays = p.noBikeDays
-        r.noRunDays = p.noRunDays
-        r.morningWorkouts = p.morningWorkouts
-        r.indoorTrainerAvailable = p.indoorTrainerAvailable
         r.trainingPreferences = p.trainingPreferences
+        // Clear the pre-fold structured fields the read path folded in — leaving
+        // them set would re-append the folded entries after a removal.
+        r.noSwimDays = []; r.noBikeDays = []; r.noRunDays = []
+        r.morningWorkouts = nil
+        r.indoorTrainerAvailable = nil
     }
 
     private static func apply(_ p: SportProgress, to r: SportProgressRecord) {

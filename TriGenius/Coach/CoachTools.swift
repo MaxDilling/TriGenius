@@ -47,7 +47,7 @@ final class ActivityReadToolHandler: CoachToolHandler {
         [
             ToolDefinition(
                 name: "get_power_curve",
-                description: "Best cycling power (max mean average, watts) per standard duration (1 s – 6 h) over a date range, from the stored per-ride power streams — all sources merged. Each point names the ride that set it. Cycling only.",
+                description: "Best cycling power (max mean average, watts) at the coaching-relevant durations (5s sprint to 60min threshold, plus the longest effort on record) over a date range, from the stored per-ride power streams — all sources merged. Each point names the ride that set it. Cycling only.",
                 parameters: [
                     "type": "object",
                     "properties": [
@@ -120,19 +120,20 @@ final class ActivityReadToolHandler: CoachToolHandler {
         guard !points.isEmpty else {
             return "No cycling power data between \(period["start"]!) and \(period["end"]!). Rides store their power curve at ingest; a per-source re-sync in Settings backfills older history."
         }
-        let curve: [[String: Any]] = points.map { p in
-            ["duration_seconds": p.durationSeconds,
-             "duration_label": PowerCurve.durationLabel(p.durationSeconds),
-             "power_w": Int(p.watts.rounded()),
-             "activity_id": p.activityId,
-             "activity_name": p.activityName,
-             "activity_date": DateFormatter.ymd.string(from: p.date)]
-        }
-        return String(compactJSON: [
-            "period": period,
-            "curve": curve,
-            "activities_with_power_data": records.count { !$0.powerCurveJSON.isEmpty }
-        ])
+        // The full 30-point chart grid is chart resolution, not coaching signal:
+        // serve only the durations a coach reasons about, plus the longest
+        // effort on record (which anchors endurance judgement).
+        let coachDurations: Set<Int> = [5, 15, 60, 180, 300, 420, 1200, 3600]
+        let longest = points.map(\.durationSeconds).max()
+        let curve: [[String: Any]] = points
+            .filter { coachDurations.contains($0.durationSeconds) || $0.durationSeconds == longest }
+            .map { p in
+                ["duration": PowerCurve.durationLabel(p.durationSeconds),
+                 "watts": Int(p.watts.rounded()),
+                 "ride": p.activityName,
+                 "date": DateFormatter.ymd.string(from: p.date)]
+            }
+        return String(compactJSON: ["period": period, "curve": curve])
     }
 
     private func metricHistory(arguments: [String: Any]) -> String {
@@ -333,56 +334,47 @@ final class ProfileToolHandler: CoachToolHandler {
         [
             ToolDefinition(
                 name: "update_athlete_profile",
-                description: "Persist athlete profile changes, preferences, goals and sport limitations in long-term memory. Route each fact correctly: a hard limitation (injury, can't-do) is binding; a like/dislike or scheduling arrangement is a preference (add_preference), not a limitation.",
+                description: "Persist general athlete facts in long-term memory: identity, goals, weekly structure, training preferences and feedback. Sport-specific facts (abilities, limitations, injuries, equipment) go through update_sport_profile instead. remove_* fields take the [xxxx] id shown next to the entry in your athlete context.",
                 parameters: [
                     "type": "object",
                     "properties": [
                         "name": ["type": "string", "description": "Athlete name."],
                         "add_goal": ["type": "string", "description": "Goal to add."],
-                        "remove_goal": ["type": "string", "description": "Goal to remove."],
+                        "remove_goal": ["type": "string", "description": "Id ([xxxx] in the athlete context) of the goal to remove."],
                         "motivation": ["type": "string", "description": "The why behind the goals (e.g. \"first triathlon, racing with friends\"). Replaces the stored motivation."],
                         "max_weekly_hours": ["type": "integer", "description": "Maximum training hours per week."],
-                        "max_hr": ["type": "integer", "description": "Maximum heart rate in bpm."],
                         "preferred_rest_day": ["type": "string", "description": "Preferred rest day."],
-                        "morning_workouts": ["type": "boolean", "description": "Whether morning workouts are preferred."],
-                        "indoor_trainer_available": ["type": "boolean", "description": "Whether an indoor trainer is available."],
-                        "add_preference": ["type": "string", "description": "Training like/dislike or arrangement to honor by default, prefixed with the sport where relevant (e.g. \"Run: likes strides on easy runs\", \"Bike: no scheduled sessions — commute covers volume\")."],
-                        "remove_preference": ["type": "string", "description": "Stored preference to remove (exact text from the PREFERENCES list)."],
+                        "add_preference": ["type": "string", "description": "Training like/dislike or arrangement to honor by default, prefixed with the sport where relevant (e.g. \"Run: likes strides on easy runs\", \"prefers not to train in the morning\")."],
+                        "remove_preference": ["type": "string", "description": "Id ([xxxx] in the athlete context) of the preference to remove."],
                         "feedback": ["type": "string", "description": "Athlete feedback to record."],
-                        "feedback_category": ["type": "string", "description": "Feedback category: schedule, intensity, recovery, injury, or progress."],
-                        "sport": [
-                            "type": "string",
-                            "enum": ["swimming", "cycling", "running", "strength"],
-                            "description": "Sport to update for sport-specific fields."
-                        ],
-                        "add_sport_ability": ["type": "string", "description": "Ability the athlete has for the selected sport."],
-                        "add_sport_limitation": ["type": "string", "description": "Limitation to persist for the selected sport."],
-                        "sport_limitation_reason": ["type": "string", "description": "Optional reason for the limitation."],
-                        "set_sport_level": ["type": "string", "description": "Sport level: beginner, intermediate, or advanced."],
-                        "set_sport_focus": ["type": "string", "description": "Current training focus for the sport."],
-                        "add_sport_equipment": ["type": "string", "description": "Equipment available for the sport."],
-                        "add_sport_injury": ["type": "string", "description": "Injury affecting the sport."],
-                        "add_sport_injury_impact": ["type": "string", "description": "Impact of the injury on training."]
+                        "feedback_category": ["type": "string", "description": "Feedback category: schedule, intensity, recovery, injury, or progress."]
                     ],
                     "required": []
                 ]
             ),
             ToolDefinition(
-                name: "get_athlete_profile",
-                description: "Retrieve the current athlete profile, preferences and sport-specific progress from memory. For the season plan use get_atp.",
+                name: "update_sport_profile",
+                description: "Persist sport-specific athlete facts: level, focus, abilities, equipment, limitations and injuries. A limitation or injury is a HARD LIMIT (binding); a like/dislike belongs in update_athlete_profile's add_preference instead. To update an existing limitation/injury, remove it by id and add the new wording in the same call. remove_* fields take the [xxxx] id shown next to the entry in your athlete context.",
                 parameters: [
                     "type": "object",
-                    "properties": [:],
-                    "required": []
-                ]
-            ),
-            ToolDefinition(
-                name: "complete_onboarding",
-                description: "Mark onboarding as finished. Call this once the key athlete info (name, goals, weekly hours, max HR) has been gathered and saved via update_athlete_profile. After this the onboarding flow is no longer shown.",
-                parameters: [
-                    "type": "object",
-                    "properties": [:],
-                    "required": []
+                    "properties": [
+                        "sport": [
+                            "type": "string",
+                            "enum": ["swimming", "cycling", "running", "strength"],
+                            "description": "The sport to update."
+                        ],
+                        "level": ["type": "string", "description": "Sport level: beginner, intermediate, or advanced."],
+                        "focus": ["type": "string", "description": "Current training focus for the sport."],
+                        "add_ability": ["type": "string", "description": "Ability the athlete has (e.g. \"freestyle (25m)\")."],
+                        "add_equipment": ["type": "string", "description": "Equipment available for the sport."],
+                        "add_limitation": ["type": "string", "description": "Binding limitation to persist (a can't-do or must-not)."],
+                        "limitation_reason": ["type": "string", "description": "Optional reason for the limitation."],
+                        "remove_limitation": ["type": "string", "description": "Id ([xxxx] in the athlete context) of the limitation to remove."],
+                        "add_injury": ["type": "string", "description": "Injury affecting the sport. Requires injury_impact."],
+                        "injury_impact": ["type": "string", "description": "How the injury constrains training right now."],
+                        "remove_injury": ["type": "string", "description": "Id ([xxxx] in the athlete context) of the injury entry to remove (resolved, or replaced by an updated entry)."]
+                    ],
+                    "required": ["sport"]
                 ]
             ),
             ToolDefinition(
@@ -407,11 +399,8 @@ final class ProfileToolHandler: CoachToolHandler {
         switch name {
         case "update_athlete_profile":
             return updateProfile(arguments: arguments)
-        case "get_athlete_profile":
-            return memory.contextSummary(history: TrainingDataStore.shared.performanceHistory())
-        case "complete_onboarding":
-            memory.markOnboardingComplete()
-            return "Onboarding marked complete."
+        case "update_sport_profile":
+            return updateSportProfile(arguments: arguments)
         case "read_knowledge":
             let topic = arguments["topic"] as? String ?? ""
             return knowledgeSummary(for: topic)
@@ -422,6 +411,7 @@ final class ProfileToolHandler: CoachToolHandler {
 
     private func updateProfile(arguments: [String: Any]) -> String {
         var updates: [String] = []
+        var errors: [String] = []
 
         if let name = arguments["name"] as? String {
             memory.updateProfile { $0.name = name }
@@ -433,37 +423,25 @@ final class ProfileToolHandler: CoachToolHandler {
             }
             updates.append("added goal: \(goal)")
         }
-        if let goal = arguments["remove_goal"] as? String {
-            memory.updateProfile { p in p.goals.removeAll { $0 == goal } }
-            updates.append("removed goal: \(goal)")
-        }
-        if let hours = arguments["max_weekly_hours"] as? Int {
-            memory.updateWeeklyStructure { $0.maxHours = hours }
-            updates.append("max weekly hours → \(hours)")
-        }
-        if let maxHR = arguments["max_hr"] as? Int {
-            // Max HR is a performance value: store it in the DB time series
-            // alongside FTP/CSS/etc., not in the profile JSON.
-            TrainingDataStore.shared.ingestMetrics([
-                IngestedMetric(metricKey: "max_hr", value: Double(maxHR), unit: "bpm", source: "manual", date: Date())
-            ])
-            updates.append("max HR → \(maxHR)")
-        }
-        if let day = arguments["preferred_rest_day"] as? String {
-            memory.updateWeeklyStructure { $0.preferredRestDay = day }
-            updates.append("rest day → \(day)")
+        if let ref = arguments["remove_goal"] as? String {
+            if let goal = memory.userProfile.goals.first(where: { MemoryRef.id($0) == ref }) {
+                memory.updateProfile { p in p.goals.removeAll { $0 == goal } }
+                updates.append("removed goal: \(goal)")
+            } else {
+                errors.append("remove_goal: no goal with id [\(ref)]")
+            }
         }
         if let motivation = arguments["motivation"] as? String {
             memory.updateProfile { $0.motivation = motivation }
             updates.append("motivation → \(motivation)")
         }
-        if let morning = arguments["morning_workouts"] as? Bool {
-            memory.updatePreferences { $0.morningWorkouts = morning }
-            updates.append("morning workouts → \(morning)")
+        if let hours = arguments["max_weekly_hours"] as? Int {
+            memory.updateWeeklyStructure { $0.maxHours = hours }
+            updates.append("max weekly hours → \(hours)")
         }
-        if let trainer = arguments["indoor_trainer_available"] as? Bool {
-            memory.updatePreferences { $0.indoorTrainerAvailable = trainer }
-            updates.append("indoor trainer → \(trainer)")
+        if let day = arguments["preferred_rest_day"] as? String {
+            memory.updateWeeklyStructure { $0.preferredRestDay = day }
+            updates.append("rest day → \(day)")
         }
         if let pref = arguments["add_preference"] as? String {
             memory.updatePreferences { p in
@@ -471,66 +449,95 @@ final class ProfileToolHandler: CoachToolHandler {
             }
             updates.append("preference added: \(pref)")
         }
-        if let pref = arguments["remove_preference"] as? String {
-            var found = false
-            memory.updatePreferences { p in
-                found = p.trainingPreferences.contains(pref)
-                p.trainingPreferences.removeAll { $0 == pref }
+        if let ref = arguments["remove_preference"] as? String {
+            if let pref = memory.preferences.trainingPreferences.first(where: { MemoryRef.id($0) == ref }) {
+                memory.updatePreferences { p in p.trainingPreferences.removeAll { $0 == pref } }
+                updates.append("preference removed: \(pref)")
+            } else {
+                errors.append("remove_preference: no preference with id [\(ref)]")
             }
-            updates.append(found ? "preference removed: \(pref)" : "preference not found (pass the exact text): \(pref)")
         }
         if let fb = arguments["feedback"] as? String {
             let cat = arguments["feedback_category"] as? String ?? "general"
             memory.addFeedback(fb, category: cat)
             updates.append("feedback recorded")
         }
+        return Self.report(updates: updates, errors: errors)
+    }
 
-        // Sport-specific updates
-        if let sport = arguments["sport"] as? String {
-            if let ability = arguments["add_sport_ability"] as? String {
-                memory.updateSportProgress(sport: sport) { sp in
-                    if !sp.abilities.contains(ability) { sp.abilities.append(ability) }
-                }
-                updates.append("[\(sport)] ability: \(ability)")
+    private func updateSportProfile(arguments: [String: Any]) -> String {
+        guard let sport = arguments["sport"] as? String,
+              ["swimming", "cycling", "running", "strength"].contains(sport) else {
+            return "✗ Error: sport must be one of swimming, cycling, running, strength."
+        }
+        var updates: [String] = []
+        var errors: [String] = []
+
+        if let lvl = arguments["level"] as? String {
+            memory.updateSportProgress(sport: sport) { $0.currentLevel = lvl }
+            updates.append("level: \(lvl)")
+        }
+        if let focus = arguments["focus"] as? String {
+            memory.updateSportProgress(sport: sport) { $0.currentFocus = focus }
+            updates.append("focus: \(focus)")
+        }
+        if let ability = arguments["add_ability"] as? String {
+            memory.updateSportProgress(sport: sport) { sp in
+                if !sp.abilities.contains(ability) { sp.abilities.append(ability) }
             }
-            if let lim = arguments["add_sport_limitation"] as? String {
-                let reason = arguments["sport_limitation_reason"] as? String
-                memory.updateSportProgress(sport: sport) { sp in
-                    var d: [String: Any] = ["item": lim]
-                    if let r = reason { d["reason"] = r }
-                    if let limitation = Limitation(from: d) {
-                        sp.limitations.append(limitation)
-                    }
-                }
-                updates.append("[\(sport)] limitation: \(lim)")
+            updates.append("ability: \(ability)")
+        }
+        if let eq = arguments["add_equipment"] as? String {
+            memory.updateSportProgress(sport: sport) { sp in
+                if !sp.equipment.contains(eq) { sp.equipment.append(eq) }
             }
-            if let lvl = arguments["set_sport_level"] as? String {
-                memory.updateSportProgress(sport: sport) { $0.currentLevel = lvl }
-                updates.append("[\(sport)] level: \(lvl)")
+            updates.append("equipment: \(eq)")
+        }
+        if let lim = arguments["add_limitation"] as? String {
+            let reason = arguments["limitation_reason"] as? String
+            memory.updateSportProgress(sport: sport) { sp in
+                var d: [String: Any] = ["item": lim]
+                if let r = reason { d["reason"] = r }
+                if let limitation = Limitation(from: d) { sp.limitations.append(limitation) }
             }
-            if let sfocus = arguments["set_sport_focus"] as? String {
-                memory.updateSportProgress(sport: sport) { $0.currentFocus = sfocus }
-                updates.append("[\(sport)] focus: \(sfocus)")
-            }
-            if let eq = arguments["add_sport_equipment"] as? String {
-                memory.updateSportProgress(sport: sport) { sp in
-                    if !sp.equipment.contains(eq) { sp.equipment.append(eq) }
-                }
-                updates.append("[\(sport)] equipment: \(eq)")
-            }
-            if let injury = arguments["add_sport_injury"] as? String,
-               let impact = arguments["add_sport_injury_impact"] as? String {
-                memory.updateSportProgress(sport: sport) { sp in
-                    sp.injuriesAffecting.append(InjuryImpact(from: ["injury": injury, "impact": impact])!)
-                }
-                updates.append("[\(sport)] injury impact: \(injury)")
+            updates.append("limitation: \(lim)")
+        }
+        if let ref = arguments["remove_limitation"] as? String {
+            if let hit = memory.sportProgress.progress(for: sport).limitations.first(where: { $0.refId == ref }) {
+                memory.updateSportProgress(sport: sport) { sp in sp.limitations.removeAll { $0.refId == ref } }
+                updates.append("removed limitation: \(hit.item)")
+            } else {
+                errors.append("remove_limitation: no \(sport) limitation with id [\(ref)]")
             }
         }
-
-        if updates.isEmpty {
-            return "No updates provided."
+        if let injury = arguments["add_injury"] as? String {
+            if let impact = arguments["injury_impact"] as? String,
+               let entry = InjuryImpact(from: ["injury": injury, "impact": impact]) {
+                memory.updateSportProgress(sport: sport) { $0.injuriesAffecting.append(entry) }
+                updates.append("injury: \(injury)")
+            } else {
+                errors.append("add_injury needs injury_impact — not saved")
+            }
         }
-        return "Profile updated: \(updates.joined(separator: ", "))"
+        if let ref = arguments["remove_injury"] as? String {
+            if let hit = memory.sportProgress.progress(for: sport).injuriesAffecting.first(where: { $0.refId == ref }) {
+                memory.updateSportProgress(sport: sport) { sp in sp.injuriesAffecting.removeAll { $0.refId == ref } }
+                updates.append("removed injury: \(hit.injury)")
+            } else {
+                errors.append("remove_injury: no \(sport) injury with id [\(ref)]")
+            }
+        }
+        return Self.report(updates: updates.map { "[\(sport)] \($0)" }, errors: errors)
+    }
+
+    /// One result line per outcome: what saved, and — explicitly — what didn't.
+    /// A silently dropped field is unrecoverable for the model, so every ignored
+    /// or failed field is named.
+    private static func report(updates: [String], errors: [String]) -> String {
+        var lines: [String] = []
+        if !updates.isEmpty { lines.append("✓ Saved: " + updates.joined(separator: ", ")) }
+        if !errors.isEmpty { lines.append("✗ " + errors.joined(separator: "; ")) }
+        return lines.isEmpty ? "No recognized fields provided — nothing saved." : lines.joined(separator: "\n")
     }
 
     /// Maps a topic to its knowledge file (in `Assets/Knowledge/`).
@@ -740,16 +747,16 @@ final class WorkoutFeedbackToolHandler: CoachToolHandler {
         [
             ToolDefinition(
                 name: "log_workout_feedback",
-                description: "Record the athlete's subjective feedback on a completed activity, mirroring Garmin's post-workout prompt. Pass the activity's `id` from get_workouts (status `completed`). `feel` is a 1–5 scale (1 = very weak, 3 = normal, 5 = very strong), `rpe` is the session perceived effort on a 1–10 scale (Borg CR10), and `note` is an optional free-text comment. Stored locally on the activity and surfaced by get_workouts. Provide at least one of feel / rpe / note.",
+                description: "Record the athlete's subjective feedback on a completed activity, mirroring Garmin's post-workout prompt. Pass the activity's `workout_id` from get_workouts (status `completed`). `feel` is a 1–5 scale (1 = very weak, 3 = normal, 5 = very strong), `rpe` is the session perceived effort on a 1–10 scale (Borg CR10), and `note` is an optional free-text comment. Stored locally on the activity and surfaced by get_workouts. Provide at least one of feel / rpe / note.",
                 parameters: [
                     "type": "object",
                     "properties": [
-                        "activity_id": ["type": "string", "description": "Activity id from get_workouts (status completed)."],
+                        "workout_id": ["type": "string", "description": "Workout id from get_workouts (status completed)."],
                         "feel": ["type": "integer", "description": "How the session felt, 1–5 (1 very weak … 5 very strong)."],
                         "rpe": ["type": "integer", "description": "Session perceived effort, 1–10 (Borg CR10)."],
                         "note": ["type": "string", "description": "Optional free-text comment on the session."]
                     ],
-                    "required": ["activity_id"]
+                    "required": ["workout_id"]
                 ]
             )
         ]
@@ -757,8 +764,8 @@ final class WorkoutFeedbackToolHandler: CoachToolHandler {
 
     func execute(name: String, arguments: [String: Any]) async throws -> String {
         guard name == "log_workout_feedback" else { return "Unknown feedback tool: \(name)" }
-        guard let id = Coerce.string(arguments["activity_id"]), !id.isEmpty else {
-            return "✗ Error: activity_id is required."
+        guard let id = Coerce.string(arguments["workout_id"]), !id.isEmpty else {
+            return "✗ Error: workout_id is required."
         }
         let feel = Coerce.int(arguments["feel"])
         let rpe = Coerce.int(arguments["rpe"])
@@ -878,14 +885,14 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
         [
             ToolDefinition(
                 name: "get_workouts",
-                description: "List the athlete's workouts, lean and TSS-focused. `status` selects what comes back: \"completed\" (finished activities, each with its `tss` and how it was derived `tss_basis`), \"planned\" (open, editable sessions — each carries the `workout_id` + `workout_data` that modify_workout / move_workout / delete_workout need), or \"all\" (both). Optional `sport` filter and `from`/`to` range (defaults: completed → last 14 days, planned → next 28). `detailed: true` adds the per-lap/interval breakdown for completed workouts (capped to 5 rows). (For the athlete's real-world busy/free time, use read_calendar_availability instead.)",
+                description: "List the athlete's workouts, lean and TSS-focused. `status` selects what comes back: \"completed\" (finished activities, each with its `tss` and how it was derived `tss_basis`), \"planned\" (open, editable sessions — each carries a ready-to-reuse `workout_data`), or \"all\" (both). Every row has a `workout_id` — the id modify_workout / move_workout / delete_workout / log_workout_feedback need. Optional `sport` filter and `start_date`/`end_date` range (defaults: completed → last 14 days, planned → next 28). `detailed: true` adds the per-lap/interval breakdown for completed workouts (capped to 5 rows). (For the athlete's real-world busy/free time, use read_calendar_availability instead.)",
                 parameters: [
                     "type": "object",
                     "properties": [
                         "status": ["type": "string", "enum": ["completed", "planned", "all"], "description": "Which workouts to return. Default \"all\"."],
                         "sport": ["type": "string", "enum": ["running", "cycling", "swimming", "strength"], "description": "Optional sport filter."],
-                        "from": ["type": "string", "description": "Start date in YYYY-MM-DD format (optional)."],
-                        "to": ["type": "string", "description": "End date in YYYY-MM-DD format (optional)."],
+                        "start_date": ["type": "string", "description": "Start date in YYYY-MM-DD format (optional)."],
+                        "end_date": ["type": "string", "description": "End date in YYYY-MM-DD format (optional)."],
                         "limit": ["type": "integer", "description": "Max rows per section. Default 20; forced to 5 when detailed."],
                         "detailed": ["type": "boolean", "description": "Include the per-lap breakdown of completed workouts (default false)."]
                     ],
@@ -894,7 +901,7 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
             ),
             ToolDefinition(
                 name: "delete_workout",
-                description: "Delete a scheduled Garmin workout by ID.",
+                description: "Delete a PLANNED workout by its workout_id (from get_workouts, status planned) — locally and from every device/service it was pushed to. Completed activities cannot be deleted.",
                 parameters: [
                     "type": "object",
                     "properties": ["workout_id": ["type": "string", "description": "Workout ID from get_workouts."]],
@@ -935,8 +942,7 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                     "type": "object",
                     "properties": [
                         "workout_id": ["type": "string", "description": "Workout ID from get_workouts."],
-                        "to_date": ["type": "string", "description": "Target date in YYYY-MM-DD format."],
-                        "from_date": ["type": "string", "description": "Optional current date (from get_workouts) — speeds up the lookup."]
+                        "to_date": ["type": "string", "description": "Target date in YYYY-MM-DD format."]
                     ],
                     "required": ["workout_id", "to_date"]
                 ]
@@ -967,8 +973,8 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
             return await DataSyncCoordinator.shared.workouts(
                 status: (arguments["status"] as? String) ?? "all",
                 sport: arguments["sport"] as? String,
-                from: (arguments["from"] as? String).flatMap(DateFormatter.ymd.date(from:)),
-                to: (arguments["to"] as? String).flatMap(DateFormatter.ymd.date(from:)),
+                from: (arguments["start_date"] as? String).flatMap(DateFormatter.ymd.date(from:)),
+                to: (arguments["end_date"] as? String).flatMap(DateFormatter.ymd.date(from:)),
                 limit: Coerce.int(arguments["limit"]) ?? 20,
                 detailed: arguments["detailed"] as? Bool ?? false
             )
@@ -1072,13 +1078,15 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
             return "✗ Error: workout_id is required."
         }
         // Snapshot first — after the delete there is nothing left to describe.
-        let before = DataSyncCoordinator.shared.plannedSnapshot(id: workoutId)
+        // It doubles as the existence check: never confirm a delete that found
+        // nothing (a typo'd id, or a completed activity's id).
+        guard let before = DataSyncCoordinator.shared.plannedSnapshot(id: workoutId) else {
+            return "✗ No planned workout found for id \(workoutId). List planned workouts with get_workouts first — completed activities cannot be deleted."
+        }
         // Delete from every provider the plan reached (not just the active write
         // target), then drop it locally.
         await DataSyncCoordinator.shared.deletePlan(id: workoutId)
-        if let before {
-            onCard(.workoutDeleted(name: before.name, sport: before.sport, date: before.date))
-        }
+        onCard(.workoutDeleted(name: before.name, sport: before.sport, date: before.date))
         return "✓ Deleted workout \(workoutId)."
     }
 
