@@ -722,13 +722,16 @@ final class TrainingDataStore {
     /// left untouched.
     private static func applyCompleted(_ scored: (tss: Double?, distanceKm: Double, detailsJSON: String, basis: String?),
                                        of a: IngestedActivity, to record: WorkoutRecord) {
+        // A manual rename outranks the source's name — carried into the fresh
+        // details so it survives re-syncs and refetches.
+        let manualName = jsonObject(record.detailsJSON)?["manual_name"] as? String
         // Don't downgrade a plan's own date/sport/name to the activity's if it was
         // user-authored; for a plain completed row these just refresh.
         if !record.isPlanned {
             record.source = a.source
             record.date = a.date
             record.sport = a.sport
-            record.name = a.name
+            record.name = manualName ?? a.name
         }
         record.isCompleted = true
         record.durationMinutes = a.durationMinutes
@@ -736,6 +739,10 @@ final class TrainingDataStore {
         record.tss = scored.tss
         record.tssBasis = scored.basis
         record.detailsJSON = scored.detailsJSON
+        if let manualName, var details = jsonObject(scored.detailsJSON) {
+            details["manual_name"] = manualName
+            record.detailsJSON = jsonString(details) ?? scored.detailsJSON
+        }
         record.powerCurveJSON = a.powerCurveJSON
         record.streamsData = a.streamsData
         if record.startMinute == nil {
@@ -831,14 +838,36 @@ final class TrainingDataStore {
     /// Manually override one completed activity's distance (km). Persists the manual
     /// value in `detailsJSON` (so it survives resync) and recomputes distance + TSS.
     func overrideDistance(activityId: String, distanceKm: Double) {
-        guard let r = (try? context.fetch(
-                  FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.id == activityId })))?.first,
-              var details = Self.jsonObject(r.detailsJSON) else { return }
+        guard let r = activity(id: activityId), var details = Self.jsonObject(r.detailsJSON) else { return }
         details["manual_distance_m"] = distanceKm * 1000
+        rescore(r, details: &details)
+    }
+
+    /// Re-run TSS + effective-distance scoring on the stored details against the
+    /// thresholds current on the activity's date — no refetch, so already-fetched
+    /// data picks up algorithm/threshold changes.
+    func rescoreActivity(id: String) {
+        guard let r = activity(id: id), var details = Self.jsonObject(r.detailsJSON) else { return }
+        rescore(r, details: &details)
+    }
+
+    private func rescore(_ r: WorkoutRecord, details: inout [String: Any]) {
         let (km, tss, basis) = TSSScoring.score(&details, snapshot: performanceHistory().snapshot(asOf: r.date))
         r.distanceKm = km
         r.tss = tss
         r.tssBasis = basis
+        r.detailsJSON = Self.jsonString(details) ?? r.detailsJSON
+        try? context.save()
+        markChanged()
+    }
+
+    /// Rename one completed activity. The name persists as `manual_name` in
+    /// `detailsJSON` and outranks the source's name at ingest, so it survives
+    /// re-syncs and refetches.
+    func renameActivity(id: String, name: String) {
+        guard let r = activity(id: id), var details = Self.jsonObject(r.detailsJSON) else { return }
+        r.name = name
+        details["manual_name"] = name
         r.detailsJSON = Self.jsonString(details) ?? r.detailsJSON
         try? context.save()
         markChanged()
@@ -1029,9 +1058,8 @@ final class TrainingDataStore {
     /// Split a folded plan row (`isPlanned && isCompleted`) back into an open plan
     /// and a standalone completed activity. The actual is re-materialized as its own
     /// row keyed by the completion id (`externalRefs["completed"]`), so it is
-    /// preserved and re-upserts in place on the next provider sync (which re-heals
-    /// the source/name the plan overrode at fold time); the plan returns to open.
-    /// No-op unless the row is a folded plan carrying a completion link.
+    /// preserved and re-upserts in place on the next provider sync; the plan
+    /// returns to open. No-op unless the row is a folded plan carrying a completion link.
     func unlinkActual(planId: String) {
         guard let plan = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
             predicate: #Predicate { $0.id == planId && $0.isPlanned && $0.isCompleted }
@@ -1048,7 +1076,8 @@ final class TrainingDataStore {
         let activity = WorkoutRecord(
             id: activityId,
             source: activityId.components(separatedBy: ":").first ?? plan.source,
-            date: plan.date, sport: plan.sport, name: plan.name,
+            date: plan.date, sport: plan.sport,
+            name: SportFamily(sportKey: plan.sport).displayName,
             startMinute: WorkoutRecord.clockMinute(fromDetails: plan.detailsJSON),
             isCompleted: true,
             durationMinutes: plan.durationMinutes, distanceKm: plan.distanceKm,
