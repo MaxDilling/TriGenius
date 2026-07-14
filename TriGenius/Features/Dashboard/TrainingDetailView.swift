@@ -95,6 +95,11 @@ struct TrainingDetailView: View {
                     } label: {
                         Label("Edit distance", systemImage: "pencil")
                     }
+                    if debugModeEnabled {
+                        Button(action: exportDebugJSON) {
+                            Label("Export workout (JSON)", systemImage: "ladybug")
+                        }
+                    }
                     if record.isCompleted, !record.isPlanned {
                         Button(role: .destructive) {
                             showIgnoreConfirm = true
@@ -102,15 +107,10 @@ struct TrainingDetailView: View {
                             Label("Ignore workout", systemImage: "eye.slash")
                         }
                     }
-                    if debugModeEnabled {
-                        Button(action: exportDebugJSON) {
-                            Label("Export workout (JSON)", systemImage: "ladybug")
-                        }
-                        Button(role: .destructive) {
-                            showDeleteConfirm = true
-                        } label: {
-                            Label("Delete workout", systemImage: "trash")
-                        }
+                    Button(role: .destructive) {
+                        showDeleteConfirm = true
+                    } label: {
+                        Label("Delete workout", systemImage: "trash")
                     }
                 } label: {
                     Label("More", systemImage: "ellipsis.circle")
