@@ -527,7 +527,7 @@ enum BackendFactory {
                 baseURL: "https://openrouter.ai/api/v1",
                 apiKey: apiKey,
                 extraHeaders: OpenAICompatibleBackend.openRouterHeaders,
-                model: "deepseek/deepseek-v4-flash"
+                model: "openrouter/auto"
             )
         case .appleIntelligence:
             return FoundationModelBackendFactory.make()

@@ -186,13 +186,15 @@ final class AppSettings: ObservableObject {
     /// A curated shortlist of tool-capable OpenRouter model ids. OpenRouter
     /// exposes hundreds; these are the ones worth defaulting to for the coach.
     static let availableOpenRouterModels = [
-        "openai/gpt-oss-120b:free",
-        "google/gemma-4-31b-it:free",
+        "openrouter/auto",
+        "openrouter/auto:online",
         "deepseek/deepseek-v4-flash",
         "deepseek/deepseek-v4-pro",
-        "z-ai/glm-5.2",
-        "google/gemini-3-flash-preview",
+        "deepseek/deepseek-v4-pro:online",
         "meta-llama/llama-4-maverick",
+        "z-ai/glm-5.2",
+        "openai/gpt-oss-120b:free",
+        "google/gemma-4-31b-it:free",
 
     ]
 
