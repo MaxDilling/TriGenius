@@ -55,9 +55,18 @@ struct ToolResultRecord {
 
 // MARK: - LLM Completion
 
+/// One web-search citation (`url_citation` annotation) attached to a reply.
+struct WebCitation: Equatable {
+    let title: String?
+    let url: String
+}
+
 struct LLMCompletion {
     let text: String?
     let toolCalls: [ToolCallRecord]
+    /// Web-search citations the provider reported for this turn — surfaced as
+    /// a globe badge on the chat bubble whose popover lists the sources.
+    var webCitations: [WebCitation] = []
 
     var hasToolCalls: Bool { !toolCalls.isEmpty }
 }
@@ -66,6 +75,9 @@ struct LLMCompletion {
 enum LLMStreamEvent {
     /// A chunk of newly generated assistant text (a delta, not cumulative).
     case text(String)
+    /// A chunk of the model's reasoning trace (a delta) — models that don't
+    /// emit reasoning never produce this event.
+    case reasoning(String)
     /// Terminal event: the full completion, including any tool calls. The
     /// CoachBrain loop needs this to decide whether to run another iteration.
     case completed(LLMCompletion)

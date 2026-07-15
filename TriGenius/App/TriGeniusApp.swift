@@ -84,6 +84,9 @@ struct TriGeniusApp: App {
     }
 
     private func applyBackend(to brain: CoachBrain) {
+        // Web search only on the OpenRouter backend — the on-device backend must
+        // not leak chat-derived queries to a cloud provider.
+        brain.setWebSearch(enabled: settings.selectedBackend == .openRouter && settings.openRouterWebSearch)
         brain.setSources(read: settings.readSources, write: settings.writeTarget)
         brain.setBackend(settings.makeBackend())
         // Re-push upcoming plans to the (possibly newly chosen) write target.

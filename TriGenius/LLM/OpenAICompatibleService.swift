@@ -19,6 +19,8 @@ import Foundation
 // since CoachBrain appends results in the same order as the calls.
 
 final class OpenAICompatibleBackend: LLMBackend {
+    static let openRouterBaseURL = "https://openrouter.ai/api/v1"
+
     /// OpenRouter attribution. `HTTP-Referer` is required — its URL is the app's
     /// identity in OpenRouter's dashboard; without it no app page is created and
     /// `X-Title` (the display name) is ignored. OpenRouter has no version field,
@@ -46,17 +48,22 @@ final class OpenAICompatibleBackend: LLMBackend {
     private let apiKey: String?
     private let extraHeaders: [String: String]
     private let timeout: TimeInterval
+    private let webSearch: Bool
     private(set) var model: String
 
     /// `baseURL` must include the API version suffix the provider serves under
     /// (`/v1`). `apiKey` is nil for keyless local servers. `extraHeaders` carries
-    /// provider-specific niceties (e.g. OpenRouter's `X-Title`).
+    /// provider-specific niceties (e.g. OpenRouter's `X-Title`). `webSearch`
+    /// attaches OpenRouter's `web` plugin (billed per search; OpenRouter-only) —
+    /// set only by the `web_search` tool's nested one-shot call, never on the
+    /// coach conversation itself.
     init(
         displayName: String,
         baseURL: String,
         apiKey: String? = nil,
         extraHeaders: [String: String] = [:],
         model: String,
+        webSearch: Bool = false,
         timeout: TimeInterval = 180
     ) {
         self.displayName = displayName
@@ -65,6 +72,7 @@ final class OpenAICompatibleBackend: LLMBackend {
         self.apiKey = apiKey
         self.extraHeaders = extraHeaders
         self.timeout = timeout
+        self.webSearch = webSearch
         self.model = model.isEmpty ? "local-model" : model
     }
 
@@ -118,6 +126,7 @@ final class OpenAICompatibleBackend: LLMBackend {
                     }
 
                     var fullText = ""
+                    var citations: [WebCitation] = []
                     // Tool calls stream in fragments keyed by `index`; accumulate
                     // name + argument-string deltas until the stream ends.
                     var toolAccum: [Int: StreamingToolCall] = [:]
@@ -133,6 +142,12 @@ final class OpenAICompatibleBackend: LLMBackend {
                         guard let data = payload.data(using: .utf8) else { continue }
 
                         let delta = Self.parseStreamDelta(from: data)
+                        for citation in delta.citations where !citations.contains(where: { $0.url == citation.url }) {
+                            citations.append(citation)
+                        }
+                        if let reasoning = delta.reasoning, !reasoning.isEmpty {
+                            continuation.yield(.reasoning(reasoning))
+                        }
                         if let text = delta.text, !text.isEmpty {
                             fullText += text
                             continuation.yield(.text(text))
@@ -149,7 +164,8 @@ final class OpenAICompatibleBackend: LLMBackend {
                     let toolCalls = Self.finalize(toolAccum)
                     continuation.yield(.completed(LLMCompletion(
                         text: fullText.isEmpty ? nil : fullText,
-                        toolCalls: toolCalls
+                        toolCalls: toolCalls,
+                        webCitations: citations
                     )))
                     continuation.finish()
                 } catch {
@@ -194,6 +210,12 @@ final class OpenAICompatibleBackend: LLMBackend {
 
         if !tools.isEmpty {
             body["tools"] = tools.map(openAIToolDict(from:))
+        }
+
+        if webSearch {
+            // `max_results` kept low to keep the summarizer's prompt lean —
+            // Exa bills per request, not per result.
+            body["plugins"] = [["id": "web", "max_results": 5]]
         }
 
         request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
@@ -310,8 +332,22 @@ final class OpenAICompatibleBackend: LLMBackend {
 
         return LLMCompletion(
             text: (text?.isEmpty ?? true) ? nil : text,
-            toolCalls: toolCalls
+            toolCalls: toolCalls,
+            webCitations: Self.parseCitations(message["annotations"])
         )
+    }
+
+    /// Web-search results (the `web` plugin or an `:online` model) arrive as
+    /// `url_citation` annotations on the message / stream delta.
+    private static func parseCitations(_ annotations: Any?) -> [WebCitation] {
+        guard let annotations = annotations as? [[String: Any]] else { return [] }
+        return annotations.compactMap { raw in
+            guard raw["type"] as? String == "url_citation",
+                  let citation = raw["url_citation"] as? [String: Any],
+                  let url = citation["url"] as? String
+            else { return nil }
+            return WebCitation(title: citation["title"] as? String, url: url)
+        }
     }
 
     /// One streaming SSE chunk decoded into a text delta and any tool-call
@@ -323,7 +359,7 @@ final class OpenAICompatibleBackend: LLMBackend {
             let first = choices.first,
             let delta = first["delta"] as? [String: Any]
         else {
-            return StreamDelta(text: nil, toolFragments: [])
+            return StreamDelta(text: nil, reasoning: nil, toolFragments: [], citations: [])
         }
 
         let text = delta["content"] as? String
@@ -343,7 +379,12 @@ final class OpenAICompatibleBackend: LLMBackend {
             }
         }
 
-        return StreamDelta(text: text, toolFragments: fragments)
+        return StreamDelta(
+            text: text,
+            reasoning: delta["reasoning"] as? String,
+            toolFragments: fragments,
+            citations: parseCitations(delta["annotations"])
+        )
     }
 
     private static func finalize(_ accum: [Int: StreamingToolCall]) -> [ToolCallRecord] {
@@ -368,7 +409,9 @@ final class OpenAICompatibleBackend: LLMBackend {
 
 private struct StreamDelta {
     let text: String?
+    let reasoning: String?
     let toolFragments: [ToolFragment]
+    let citations: [WebCitation]
 }
 
 private struct ToolFragment {

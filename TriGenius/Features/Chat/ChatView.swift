@@ -4,7 +4,8 @@ import Combine
 // MARK: - Chat Message Model
 
 struct ChatMessage: Identifiable {
-    enum Author { case user, coach, tool }
+    /// `.thinking` rows (Debug Mode) carry the model's streamed reasoning trace.
+    enum Author { case user, coach, tool, thinking }
     var id = UUID()
     let author: Author
     var text: String
@@ -14,6 +15,9 @@ struct ChatMessage: Identifiable {
     /// Set for auto-emitted card rows (plan mutations) — rendered as a
     /// `ChatCardView` instead of a text bubble.
     var card: ChatCard? = nil
+    /// The reply pulled in live web-search results — shows a globe badge whose
+    /// popover lists these sources.
+    var webCitations: [WebCitation] = []
 
     var isUser: Bool { author == .user }
 }
@@ -41,6 +45,10 @@ final class ChatViewModel {
     /// starts a fresh bubble *below* it — keeping tool calls and reply text in
     /// the chronological order they actually occurred.
     private var currentCoachID: UUID?
+
+    /// The thinking row (Debug Mode) currently receiving reasoning deltas.
+    /// Reset alongside `currentCoachID`, so each model turn gets its own row.
+    private var currentThinkingID: UUID?
 
     /// Computed once at init — avoids re-running brain.greeting() (memory
     /// access + Calendar allocation) on every body re-evaluation / keystroke.
@@ -72,6 +80,20 @@ final class ChatViewModel {
             // Close the current coach segment: any reply text that streams in
             // after this tool call belongs in a new bubble *below* it.
             self.currentCoachID = nil
+            self.currentThinkingID = nil
+        }
+        // Debug Mode: stream the model's reasoning into a collapsed thinking
+        // row above the reply (the handler only fires when Debug Mode is on).
+        brain.reasoningHandler = { [weak self] delta in
+            guard let self else { return }
+            if let id = self.currentThinkingID,
+               let idx = self.messages.firstIndex(where: { $0.id == id }) {
+                self.messages[idx].text += delta
+            } else {
+                let id = UUID()
+                self.currentThinkingID = id
+                self.messages.append(ChatMessage(id: id, author: .thinking, text: delta, timestamp: Date()))
+            }
         }
         // Fires on every tool execution (not debug-gated): bring the thinking
         // indicator back while tools run between streamed text segments.
@@ -139,6 +161,7 @@ final class ChatViewModel {
         isResponding = true
         isThinking = true
         currentCoachID = nil
+        currentThinkingID = nil
         respondTask = Task { [weak self] in
             await self?.deliver(text)
         }
@@ -169,6 +192,13 @@ final class ChatViewModel {
         // Fallback: if no partial ever arrived, show the final text.
         if !produced && !final.isEmpty {
             messages.append(ChatMessage(author: .coach, text: final, timestamp: Date()))
+        }
+        // Web citations are only known once the turn completes — badge the
+        // reply's final text bubble with the sources.
+        let citations = brain.lastReplyWebCitations
+        if !citations.isEmpty,
+           let idx = messages.lastIndex(where: { $0.author == .coach && $0.card == nil }) {
+            messages[idx].webCitations = citations
         }
         isThinking = false
         isResponding = false
@@ -207,6 +237,7 @@ final class ChatViewModel {
         case .user: return "user"
         case .coach: return "coach"
         case .tool: return "tool"
+        case .thinking: return "thinking"
         }
     }
 }
@@ -251,6 +282,8 @@ struct CoachChatView: View {
                                     ChatCardView(card: card)
                                 } else if message.author == .tool {
                                     ToolCallBubble(message: message)
+                                } else if message.author == .thinking {
+                                    ThinkingBubble(message: message)
                                 } else {
                                     MessageBubble(
                                         message: message,
@@ -464,14 +497,104 @@ private struct MessageBubble: View {
                     }
                 }
 
-                Text(message.timestamp, style: .time)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 4)
+                HStack(spacing: 4) {
+                    if !message.webCitations.isEmpty {
+                        WebSourcesBadge(citations: message.webCitations)
+                    }
+                    Text(message.timestamp, style: .time)
+                }
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .padding(.horizontal, 4)
             }
 
             if !message.isUser { Spacer(minLength: 40) }
         }
+    }
+}
+
+// MARK: - Web Sources Badge
+
+/// Globe next to a reply's timestamp when it pulled in web-search results.
+/// Hovering (macOS / iPad pointer) or tapping opens a popover listing the
+/// cited sources as links. OpenRouter never exposes the search query itself —
+/// the citations are all the provenance there is.
+private struct WebSourcesBadge: View {
+    let citations: [WebCitation]
+    @State private var showSources = false
+
+    var body: some View {
+        Image(systemName: "globe")
+            .contentShape(Rectangle())
+            .onTapGesture { showSources = true }
+            .onHover { if $0 { showSources = true } }
+            .popover(isPresented: $showSources, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Web sources")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(.secondary)
+                    ForEach(citations, id: \.url) { citation in
+                        if let url = URL(string: citation.url) {
+                            Link(citation.title?.isEmpty == false ? citation.title! : citation.url, destination: url)
+                                .font(.caption)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+                .padding(12)
+                .frame(maxWidth: 320, alignment: .leading)
+                .presentationCompactAdaptation(.popover)
+            }
+    }
+}
+
+// MARK: - Thinking Bubble (Debug Mode)
+
+/// The model's reasoning trace, one collapsed row per turn. Collapsed it shows
+/// only a live character count while the trace streams in; expanding reveals
+/// the full text.
+private struct ThinkingBubble: View {
+    let message: ChatMessage
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.15)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "brain")
+                        .font(.caption2)
+                    Text("thinking · \(message.text.count)")
+                        .font(.system(.caption, design: .monospaced))
+                        .fontWeight(.semibold)
+                    Spacer()
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.caption2)
+                }
+                .foregroundStyle(.purple)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                Text(message.text)
+                    .font(.system(.caption2, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.purple.opacity(0.08))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.purple.opacity(0.25), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .padding(.horizontal, 8)
     }
 }
 

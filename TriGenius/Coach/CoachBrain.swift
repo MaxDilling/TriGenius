@@ -43,7 +43,7 @@ Refer to sports medicine, never diagnose: REDs flags (weight loss + performance 
 - `log_workout_feedback`: record the athlete's subjective `feel` (1–5), `rpe` (1–10), and/or a `note` on a completed activity (`workout_id` from `get_workouts` with status `completed`) when they tell you how a session went
 - `update_athlete_profile`: persist general facts — name, goals, motivation, weekly hours, rest day, preferences, feedback
 - `update_sport_profile`: persist sport-specific facts — abilities, level, focus, equipment, limitations, injuries. Route correctly: an injury or can't-do is a hard limitation here; a like/dislike or arrangement is a preference (`update_athlete_profile` → `add_preference`)
-- `read_calendar_availability`: ONLY when the athlete has NOT named a day/time, or when planning several days ahead. When the athlete states a time ("tomorrow 08:00"), schedule it — don't check, don't ask. Their own calendar entries about training are plans, not conflicts
+- `read_calendar_availability`: ONLY when the athlete has NOT named a day/time, or when planning several days ahead. When the athlete states a time ("tomorrow 08:00"), schedule it — don't check, don't ask. Their own calendar entries about training are plans, not conflicts{web_search_tool}
 
 === BUILDING WORKOUTS ===
 
@@ -123,6 +123,14 @@ final class CoachBrain {
     /// moved / deleted workout), so the chat UI can render it inline.
     var chatCardHandler: ((ChatCard) -> Void)?
 
+    /// Web-search citations accumulated across the turns of the last completed
+    /// reply — read by the chat to badge the bubble with the sources.
+    private(set) var lastReplyWebCitations: [WebCitation] = []
+
+    /// Called with the model's streamed reasoning deltas when Debug Mode is on,
+    /// so the chat can render them as a collapsed thinking row.
+    var reasoningHandler: ((String) -> Void)?
+
     /// True for self-managing backends (Apple FM) that stream one cumulative
     /// transcript per turn — the chat must not split bubbles on card arrival there.
     var backendManagesConversation: Bool { backend.managesOwnConversation }
@@ -135,6 +143,9 @@ final class CoachBrain {
     private(set) var readSources: Set<DataSource>
     /// Where planned workouts are written (single active target).
     private(set) var writeTarget: WriteTarget
+    /// Whether the OpenRouter-backed `web_search` tool is registered (Settings
+    /// toggle, only while the active backend is OpenRouter).
+    private(set) var webSearchEnabled = false
 
     private let maxToolIterations = 8
 
@@ -176,7 +187,25 @@ final class CoachBrain {
         registry.register(WorkoutFeedbackToolHandler())
         // Always-on: configurable push reminders ("Erweiterte Reminder").
         registry.register(ReminderToolHandler())
+        // Live web lookup via a nested OpenRouter call; its sources feed the
+        // reply's globe badge alongside any the backend reports itself.
+        if webSearchEnabled {
+            registry.register(WebSearchToolHandler(onCitations: { [weak self] citations in
+                guard let self else { return }
+                for citation in citations where !self.lastReplyWebCitations.contains(where: { $0.url == citation.url }) {
+                    self.lastReplyWebCitations.append(citation)
+                }
+            }))
+        }
         toolRegistry = registry
+    }
+
+    /// Register/unregister the `web_search` tool. No conversation reset: the
+    /// caller (`applyBackend`) always follows up with `setBackend`, which resets.
+    func setWebSearch(enabled: Bool) {
+        guard enabled != webSearchEnabled else { return }
+        webSearchEnabled = enabled
+        configureTools()
     }
 
     /// Apply the latest read sources + write target. Rebuilds the tool registry and
@@ -243,6 +272,7 @@ final class CoachBrain {
     func sendMessage(_ text: String, onPartial: @escaping (String) -> Void = { _ in }) async -> String {
         isThinking = true
         errorMessage = nil
+        lastReplyWebCitations = []
         defer { isThinking = false }
 
         conversationHistory.append(.user(text))
@@ -346,6 +376,8 @@ final class CoachBrain {
                 case .text(let delta):
                     streamedText += delta
                     onPartial(streamedText)
+                case .reasoning(let delta):
+                    if isDebugEnabled() { reasoningHandler?(delta) }
                 case .completed(let result):
                     completion = result
                 }
@@ -357,6 +389,10 @@ final class CoachBrain {
 
             guard let completion else {
                 return "Sorry, I couldn't generate a response."
+            }
+
+            for citation in completion.webCitations where !lastReplyWebCitations.contains(where: { $0.url == citation.url }) {
+                lastReplyWebCitations.append(citation)
             }
 
             if completion.hasToolCalls {
@@ -478,12 +514,19 @@ final class CoachBrain {
         let needsOnboarding = !memory.missingInfo(performance: history.snapshot(asOf: .distantFuture)).isEmpty
         let onboarding = needsOnboarding ? ONBOARDING_SECTION : ""
 
+        // The web_search bullet renders only while the tool is registered — a
+        // ~70B model must never see instructions for a tool it doesn't have.
+        let webSearchLine = webSearchEnabled
+            ? "\n- `web_search`: look up current real-world info (event dates, registration/ticket availability, results, gear). The query must be self-contained — include event name, year and location from the conversation, never a bare follow-up. Relay the returned sources as markdown links in your reply"
+            : ""
+
         return SYSTEM_PROMPT_TEMPLATE
             .replacingOccurrences(of: "{current_date}", with: date)
             .replacingOccurrences(of: "{current_time}", with: time)
             .replacingOccurrences(of: "{athlete_context}", with: memory.contextSummary(history: history))
             .replacingOccurrences(of: "{pmc_context}", with: pmcContext)
             .replacingOccurrences(of: "{onboarding_section}", with: onboarding)
+            .replacingOccurrences(of: "{web_search_tool}", with: webSearchLine)
             .replacingOccurrences(of: "{data_source_section}", with: dataSourceSection)
     }
 
@@ -524,7 +567,7 @@ enum BackendFactory {
         case .openRouter:
             return OpenAICompatibleBackend(
                 displayName: BackendType.openRouter.rawValue,
-                baseURL: "https://openrouter.ai/api/v1",
+                baseURL: OpenAICompatibleBackend.openRouterBaseURL,
                 apiKey: apiKey,
                 extraHeaders: OpenAICompatibleBackend.openRouterHeaders,
                 model: "openrouter/auto"

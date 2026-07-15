@@ -122,6 +122,11 @@ final class AppSettings: ObservableObject {
     @Published var openRouterModel: String {
         didSet { UserDefaults.standard.set(openRouterModel, forKey: "openrouter_model") }
     }
+    /// Give the coach the `web_search` tool (a nested OpenRouter call with the
+    /// `web` plugin, billed per search). Persisted under `openrouter_web_search`.
+    @Published var openRouterWebSearch: Bool {
+        didSet { UserDefaults.standard.set(openRouterWebSearch, forKey: "openrouter_web_search") }
+    }
     /// Active read sources (parallel). Persisted as a CSV under `read_sources`.
     @Published var readSources: Set<DataSource> {
         didSet {
@@ -187,10 +192,8 @@ final class AppSettings: ObservableObject {
     /// exposes hundreds; these are the ones worth defaulting to for the coach.
     static let availableOpenRouterModels = [
         "openrouter/auto",
-        "openrouter/auto:online",
         "deepseek/deepseek-v4-flash",
         "deepseek/deepseek-v4-pro",
-        "deepseek/deepseek-v4-pro:online",
         "meta-llama/llama-4-maverick",
         "z-ai/glm-5.2",
         "openai/gpt-oss-120b:free",
@@ -206,7 +209,8 @@ final class AppSettings: ObservableObject {
         selectedBackend = BackendType(rawValue: savedBackend) ?? .appleIntelligence
         useAppleCloudCompute = UserDefaults.standard.bool(forKey: "use_apple_cloud_compute")
         cloudAIConsent = UserDefaults.standard.bool(forKey: "cloud_ai_consent")
-        openRouterModel = UserDefaults.standard.string(forKey: "openrouter_model") ?? Self.availableOpenRouterModels[0]
+        openRouterModel = Self.storedOpenRouterModel()
+        openRouterWebSearch = UserDefaults.standard.bool(forKey: "openrouter_web_search")
         readSources = Self.loadReadSources()
         metricsSource = Self.loadMetricsSource()
         writeTarget = Self.loadWriteTarget()
@@ -318,6 +322,11 @@ final class AppSettings: ObservableObject {
     static func storedMetricsSource() -> DataSource { loadMetricsSource() }
     /// Write target as seen by non-SwiftUI callers.
     static func storedWriteTarget() -> WriteTarget { loadWriteTarget() }
+    /// OpenRouter model id as seen by non-SwiftUI callers (the web_search tool —
+    /// read at execute time, so a model change applies without re-registering).
+    static func storedOpenRouterModel() -> String {
+        UserDefaults.standard.string(forKey: "openrouter_model") ?? availableOpenRouterModels[0]
+    }
 
     var isConfigured: Bool {
         switch selectedBackend {
@@ -332,7 +341,7 @@ final class AppSettings: ObservableObject {
         case .openRouter:
             return OpenAICompatibleBackend(
                 displayName: BackendType.openRouter.rawValue,
-                baseURL: "https://openrouter.ai/api/v1",
+                baseURL: OpenAICompatibleBackend.openRouterBaseURL,
                 apiKey: openRouterAPIKey,
                 extraHeaders: OpenAICompatibleBackend.openRouterHeaders,
                 model: openRouterModel
@@ -710,6 +719,14 @@ struct SettingsView: View {
                 }
             }
             .onChange(of: settings.openRouterModel) { onBackendChanged() }
+
+            Toggle("Web search", isOn: $settings.openRouterWebSearch)
+                .onChange(of: settings.openRouterWebSearch) { onBackendChanged() }
+            if settings.openRouterWebSearch {
+                Text("The coach can look things up on the live web when a question needs current information (billed per search by OpenRouter; queries also reach the search provider). Replies that used the web show a globe.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             if settings.openRouterAPIKey.isEmpty {
                 Label("API key required for OpenRouter", systemImage: "exclamationmark.triangle.fill")
