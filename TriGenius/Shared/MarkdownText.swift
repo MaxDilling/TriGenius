@@ -116,9 +116,9 @@ struct MarkdownText: View {
 
         private func headingFont(_ level: Int) -> Font {
             switch level {
-            case 1: return .title3
-            case 2: return .headline
-            default: return .subheadline
+            case 1: return .title2
+            case 2: return .title3
+            default: return .headline
             }
         }
     }
