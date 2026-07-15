@@ -235,22 +235,24 @@ nonisolated enum GarminTransform {
         return zip(speeds, grades).map { (speed: $0, grade: $1, seconds: 1.0) }
     }
 
-    /// Flatten a swim's lap DTOs into the ACTIVE pool lengths (idle/rest lengths
-    /// carry no distance and are skipped) for `SwimLengthCleaner`.
-    static func activeSwimLengths(_ lapDTOs: [[String: Any]]) -> [SwimLength] {
-        var out: [SwimLength] = []
-        for lap in lapDTOs {
-            guard let lengths = lap["lengthDTOs"] as? [[String: Any]] else { continue }
-            for l in lengths {
-                let dur = Coerce.double(l["duration"]) ?? 0
-                let dist = Coerce.double(l["distance"]) ?? 0
-                guard dur > 0, dist > 0 else { continue }
-                out.append(SwimLength(durationSeconds: dur,
-                                      strokes: Int(Coerce.double(l["totalNumberOfStrokes"]) ?? 0),
-                                      distanceMeters: dist))
-            }
+    /// The ACTIVE pool lengths within a single lap (idle/rest lengths carry no
+    /// distance and are skipped) for `SwimLengthCleaner`.
+    static func activeSwimLengths(_ lap: [String: Any]) -> [SwimLength] {
+        guard let lengths = lap["lengthDTOs"] as? [[String: Any]] else { return [] }
+        return lengths.compactMap { l in
+            let dur = Coerce.double(l["duration"]) ?? 0
+            let dist = Coerce.double(l["distance"]) ?? 0
+            guard dur > 0, dist > 0 else { return nil }
+            return SwimLength(durationSeconds: dur,
+                              strokes: Int(Coerce.double(l["totalNumberOfStrokes"]) ?? 0),
+                              distanceMeters: dist)
         }
-        return out
+    }
+
+    /// Flatten a swim's lap DTOs into the ACTIVE pool lengths, whole-activity,
+    /// for `SwimLengthCleaner`.
+    static func activeSwimLengths(_ lapDTOs: [[String: Any]]) -> [SwimLength] {
+        lapDTOs.flatMap(activeSwimLengths(_:))
     }
 
     // MARK: - Metric-history range parsers
@@ -366,16 +368,31 @@ nonisolated enum GarminTransform {
         }
     }
 
-    /// Build normalized swim interval data from Garmin lap DTOs.
+    /// Build normalized swim interval data from Garmin lap DTOs. Each active lap's
+    /// length count/distance comes from `SwimLengthCleaner` (missed wall-turns
+    /// recovered by splitting, phantom fragments merged away), not Garmin's raw
+    /// per-lap fields — the same correction behind the Lengths card and TSS scoring,
+    /// so the interval table (and the coach's `get_workouts`, which relays it
+    /// unchanged) never disagrees with them.
     static func buildSwimIntervals(_ lapDTOs: [[String: Any]], poolLengthM: Double?) -> [[String: Any]] {
+        var cleanedByLapIndex: [Int: SwimCleanResult] = [:]
+        if let pool = poolLengthM, pool > 0 {
+            let groups = lapDTOs.map { activeSwimLengths($0) }
+            let nonEmptyIndices = groups.indices.filter { !groups[$0].isEmpty }
+            if let cleaned = SwimLengthCleaner.cleanGrouped(nonEmptyIndices.map { groups[$0] }, poolLengthMeters: pool) {
+                cleanedByLapIndex = Dictionary(uniqueKeysWithValues: zip(nonEmptyIndices, cleaned))
+            }
+        }
+
         var intervals: [[String: Any]] = []
         var cumulativeTime = 0.0
         var cumulativeDistance = 0.0
         var activeIntervalNum = 0
 
-        for lap in lapDTOs {
+        for (lapIndex, lap) in lapDTOs.enumerated() {
             let duration = Coerce.double(lap["duration"]) ?? 0
-            var distance = Coerce.double(lap["distance"]) ?? 0
+            let garminDistance = Coerce.double(lap["distance"]) ?? 0
+            var distance = garminDistance
             let numActiveLengths = Int(Coerce.double(lap["numberOfActiveLengths"]) ?? 0)
             let isRest = distance == 0 && numActiveLengths == 0
 
@@ -409,15 +426,16 @@ nonisolated enum GarminTransform {
             }
 
             activeIntervalNum += 1
-            cumulativeDistance += distance
 
             let lengths = lap["lengthDTOs"] as? [[String: Any]] ?? []
             let activeLengths = lengths.filter { ($0["swimStroke"] as? String)?.isEmpty == false }
-            let numLengths = activeLengths.isEmpty ? numActiveLengths : activeLengths.count
+            let rawNumLengths = activeLengths.isEmpty ? numActiveLengths : activeLengths.count
+            let numLengths = cleanedByLapIndex[lapIndex]?.cleanedLengthCount ?? rawNumLengths
 
-            if distance == 0, let pool = poolLengthM, numLengths > 0 {
+            if let pool = poolLengthM, numLengths > 0 {
                 distance = Double(numLengths) * pool
             }
+            cumulativeDistance += distance
 
             var strokeName = "mixed"
             var strokeId: Int? = nil
@@ -463,6 +481,10 @@ nonisolated enum GarminTransform {
             entry["stroke_id"] = strokeId ?? NSNull()
             entry["lengths"] = numLengths
             entry["distance_m"] = distance != 0 ? (distance * 10).rounded() / 10 : 0
+            // Garmin's own per-lap claim, kept alongside the cleaned values above —
+            // same provenance pattern as the whole-activity garmin/cleaned_distance_m.
+            entry["garmin_lengths"] = rawNumLengths
+            entry["garmin_distance_m"] = garminDistance != 0 ? (garminDistance * 10).rounded() / 10 : 0
             entry["time_sec"] = duration != 0 ? (duration * 10).rounded() / 10 : 0
             entry["time_formatted"] = formatSplitTime(duration) ?? NSNull()
             entry["cumulative_time_sec"] = (cumulativeTime * 10).rounded() / 10

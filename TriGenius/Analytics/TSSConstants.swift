@@ -66,6 +66,13 @@ nonisolated enum TSSConstants {
     static let swimSpeedCeilingMPS = 1.3     // no pool length faster than this
     static let swimFragmentStrokeFraction = 0.65   // strokes < 65% of full-length median
     static let swimFragmentTimeFraction = 0.60     // fallback when strokes missing
+    /// Missed wall-turn (two-plus real lengths recorded as one) — BOTH time and
+    /// strokes must exceed this multiple of the full-length median (conservative:
+    /// either signal alone could be a genuinely slow/hard length). Validated against
+    /// real per-length FIT data: plausible single lengths never exceed 1.17× the
+    /// median on either measure, genuinely merged ones start at 1.87×.
+    static let swimMergedStrokeMultiple = 1.6      // strokes > 160% of full-length median
+    static let swimMergedTimeMultiple = 1.6        // time > 160% of full-length median
     /// Floor IF for very slow technique/drill swims (pace-IF collapses there but
     /// time in the water is still load); ≈ 40 TSS/h.
     static let swimDefaultIF = 0.63

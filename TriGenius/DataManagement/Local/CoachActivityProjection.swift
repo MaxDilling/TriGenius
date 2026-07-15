@@ -49,6 +49,11 @@ nonisolated enum CoachActivityProjection {
         return out
     }
 
+    /// Per-interval keys dropped even in `detail`: Garmin's raw per-lap claim
+    /// (kept in storage/UI for provenance, alongside the cleaned values the coach
+    /// already gets) isn't training-relevant and would just add noise here.
+    private static let intervalProvenanceKeys = ["garmin_lengths", "garmin_distance_m"]
+
     /// The summary plus the per-lap breakdown (swim `intervals`) for a single
     /// drilled-into workout.
     static func detail(_ details: [String: Any], tss: Double?, tssBasis: String?) -> [String: Any] {
@@ -56,7 +61,7 @@ nonisolated enum CoachActivityProjection {
         if let swim = details["swimming"] as? [String: Any],
            let intervals = swim["intervals"] as? [[String: Any]], !intervals.isEmpty {
             var sub = out["swimming"] as? [String: Any] ?? [:]
-            sub["intervals"] = intervals
+            sub["intervals"] = intervals.map { $0.filter { !intervalProvenanceKeys.contains($0.key) } }
             out["swimming"] = sub
         }
         return out

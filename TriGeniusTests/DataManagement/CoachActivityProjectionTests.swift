@@ -48,6 +48,18 @@ private let swim: [String: Any] = [
     #expect(sub?["lengths"] == nil)   // compute-only, stays out even in detail
 }
 
+@Test func detail_dropsPerIntervalGarminProvenance() {
+    var withProvenance = swim
+    var swimming = withProvenance["swimming"] as? [String: Any] ?? [:]
+    swimming["intervals"] = [["interval": 1, "distance_m": 100, "garmin_distance_m": 75, "garmin_lengths": 3]]
+    withProvenance["swimming"] = swimming
+    let out = CoachActivityProjection.detail(withProvenance, tss: 42, tssBasis: nil)
+    let interval = ((out["swimming"] as? [String: Any])?["intervals"] as? [[String: Any]])?.first
+    #expect(interval?["distance_m"] as? Int == 100)
+    #expect(interval?["garmin_distance_m"] == nil)
+    #expect(interval?["garmin_lengths"] == nil)
+}
+
 @Test func summary_runKeepsNormalizedPaceDropsBest() {
     let run: [String: Any] = [
         "id": "g:2", "sport": "running", "duration_minutes": 50, "distance_km": 10,

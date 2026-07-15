@@ -698,6 +698,11 @@ struct TrainingDetailView: View {
                                 .font(.caption2)
                                 .foregroundStyle(.secondary)
                                 .help("Rejoined a wrongly-split length")
+                        } else if length.splitFromMerged {
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .help("Split from a length that missed a wall-turn")
                         } else {
                             Text("")
                         }

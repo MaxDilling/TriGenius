@@ -25,6 +25,9 @@ nonisolated enum TSSScoring {
             if let cleaned = SwimLengthCleaner.clean(SwimLengthCleaner.lengths(from: raw), poolLengthMeters: pool) {
                 swimming["cleaned_distance_m"] = round1(Double(cleaned.cleanedLengthCount) * pool)
                 swimming["swim_time_s"] = round1(cleaned.swimTimeSeconds)
+                // Overrides Garmin's raw activeLengths so the coach's compact
+                // summary (`total_lengths`) agrees with the Lengths card.
+                swimming["total_lengths"] = cleaned.cleanedLengthCount
                 details["swimming"] = swimming
             }
         }
