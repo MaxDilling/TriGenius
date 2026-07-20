@@ -32,6 +32,12 @@ final class AppleFoundationModelBackend: LLMBackend {
     /// Persistent session — `nil` until the first turn after a reset, then reused.
     private var session: LanguageModelSession?
 
+    /// Prior conversation to rehydrate into the next session build (set by
+    /// `seedTranscript`, e.g. after a restart or a mid-chat backend switch).
+    /// Consumed and cleared when the session is created, so the on-device model
+    /// keeps context that would otherwise live only in the discarded session.
+    private var pendingSeed: [ConversationTurn] = []
+
     /// Runs the actual tool handler. Set by CoachBrain via `setToolExecutor`.
     private var toolExecutor: (@Sendable (String, String) async -> String)?
 
@@ -43,6 +49,10 @@ final class AppleFoundationModelBackend: LLMBackend {
 
     func resetConversation() {
         session = nil
+    }
+
+    func seedTranscript(_ turns: [ConversationTurn]) {
+        pendingSeed = turns
     }
 
     func respond(
@@ -119,14 +129,51 @@ final class AppleFoundationModelBackend: LLMBackend {
         let bridged: [any Tool] = try tools.map {
             try CoachToolBridge(definition: $0, executor: executor)
         }
-        // The system prompt is baked into the session instructions ONCE — it is
-        // not re-sent each turn. CoachBrain rebuilds the session (resetConversation)
-        // when the data source / profile changes so instructions stay current.
-        let session: LanguageModelSession = useCloud
-            ? LanguageModelSession(model: PrivateCloudComputeLanguageModel(), tools: bridged, instructions: systemPrompt)
-            : LanguageModelSession(model: SystemLanguageModel.default, tools: bridged, instructions: systemPrompt)
+        // The system prompt is baked into the session ONCE — it is not re-sent each
+        // turn. CoachBrain rebuilds the session (resetConversation) when the data
+        // source / profile changes so instructions stay current, re-seeding the
+        // prior turns so context survives. A blank-slate session uses `instructions:`;
+        // a restored/switched-into one rehydrates from a Transcript of the seed.
+        let session: LanguageModelSession
+        if pendingSeed.isEmpty {
+            session = useCloud
+                ? LanguageModelSession(model: PrivateCloudComputeLanguageModel(), tools: bridged, instructions: systemPrompt)
+                : LanguageModelSession(model: SystemLanguageModel.default, tools: bridged, instructions: systemPrompt)
+        } else {
+            let transcript = Self.makeTranscript(systemPrompt: systemPrompt, seed: pendingSeed)
+            session = useCloud
+                ? LanguageModelSession(model: PrivateCloudComputeLanguageModel(), tools: bridged, transcript: transcript)
+                : LanguageModelSession(model: SystemLanguageModel.default, tools: bridged, transcript: transcript)
+            pendingSeed = []
+        }
         self.session = session
         return session
+    }
+
+    /// Rebuild a `Transcript` from the persisted text turns: a leading
+    /// instructions entry (the system prompt) then one prompt/response entry per
+    /// user/assistant turn. Tool turns aren't in the seed (we persist text only),
+    /// so the transcript is clean prompt/response pairs.
+    private static func makeTranscript(systemPrompt: String, seed: [ConversationTurn]) -> Transcript {
+        var entries: [Transcript.Entry] = [
+            .instructions(Transcript.Instructions(
+                segments: [.text(Transcript.TextSegment(content: systemPrompt))],
+                toolDefinitions: []
+            ))
+        ]
+        for turn in seed {
+            let text = turn.parts.compactMap { part -> String? in
+                if case .text(let t) = part { return t }
+                return nil
+            }.joined(separator: "\n")
+            guard !text.isEmpty else { continue }
+            let segment = Transcript.Segment.text(Transcript.TextSegment(content: text))
+            switch turn.role {
+            case .user: entries.append(.prompt(Transcript.Prompt(segments: [segment])))
+            case .assistant: entries.append(.response(Transcript.Response(segments: [segment])))
+            }
+        }
+        return Transcript(entries: entries)
     }
 
     private func ensureAvailable() throws {

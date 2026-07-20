@@ -1,5 +1,8 @@
 import SwiftUI
 import Combine
+#if os(iOS)
+import UIKit
+#endif
 
 // MARK: - Chat Message Model
 
@@ -57,6 +60,43 @@ final class ChatViewModel {
     init(brain: CoachBrain) {
         self.brain = brain
         self.greeting = brain.greeting()
+        // Restore the persisted transcript (text + cards). The brain restored its
+        // own LLM context in its init; here we rebuild the visible bubbles.
+        self.messages = Self.restoredMessages()
+        self.showGreeting = messages.isEmpty
+    }
+
+    /// Rebuild the chat bubbles from the persisted session — user/coach text and
+    /// coach card rows (tool/thinking rows and citation badges aren't persisted).
+    private static func restoredMessages() -> [ChatMessage] {
+        ChatStore.shared.turns.map { saved in
+            if let card = saved.card {
+                return ChatMessage(author: .coach, text: "", timestamp: saved.timestamp, card: card)
+            }
+            return ChatMessage(author: saved.role == "user" ? .user : .coach,
+                               text: saved.text, timestamp: saved.timestamp)
+        }
+    }
+
+    /// Serialize the current transcript to the persisted session. Keeps user/coach
+    /// text and card rows; drops Debug-Mode tool/thinking rows and the citation badge.
+    private func persist() {
+        let saved: [SavedTurn] = messages.compactMap { msg in
+            switch msg.author {
+            case .user:
+                guard !msg.text.isEmpty else { return nil }
+                return SavedTurn(role: "user", text: msg.text, timestamp: msg.timestamp)
+            case .coach:
+                if let card = msg.card {
+                    return SavedTurn(role: "assistant", text: "", timestamp: msg.timestamp, card: card)
+                }
+                guard !msg.text.isEmpty else { return nil }
+                return SavedTurn(role: "assistant", text: msg.text, timestamp: msg.timestamp)
+            case .tool, .thinking:
+                return nil
+            }
+        }
+        ChatStore.shared.save(saved)
     }
 
     /// Wire this view model up as the brain's tool-event observer. Called from
@@ -155,9 +195,34 @@ final class ChatViewModel {
         respondTask?.cancel()
     }
 
+    #if os(iOS)
+    /// UIKit background task held for the duration of a send, so iOS grants ~30s
+    /// of runtime after the app is backgrounded (e.g. the phone auto-locks while
+    /// the athlete waits) — enough for a short reply to finish, or to return to
+    /// the foreground and keep streaming.
+    private var bgTask: UIBackgroundTaskIdentifier = .invalid
+
+    private func beginBackgroundTask() {
+        endBackgroundTask()
+        bgTask = UIApplication.shared.beginBackgroundTask(withName: "coach-reply") { [weak self] in
+            // Expiration is delivered on the main thread; end the task so iOS can
+            // suspend. Whatever streamed is already kept by the cancellation path.
+            MainActor.assumeIsolated { self?.endBackgroundTask() }
+        }
+    }
+
+    private func endBackgroundTask() {
+        guard bgTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(bgTask)
+        bgTask = .invalid
+    }
+    #endif
+
     private func send(_ text: String) {
         showGreeting = false
         messages.append(ChatMessage(author: .user, text: text, timestamp: Date()))
+        // Persist the question immediately so a crash mid-reply doesn't lose it.
+        persist()
         isResponding = true
         isThinking = true
         currentCoachID = nil
@@ -168,6 +233,11 @@ final class ChatViewModel {
     }
 
     private func deliver(_ text: String) async {
+        #if os(iOS)
+        // Keep the reply streaming across a brief lock/background (~30s of grace).
+        beginBackgroundTask()
+        defer { endBackgroundTask() }
+        #endif
         var produced = false
 
         // `onPartial` delivers cumulative text for the current segment. The
@@ -203,6 +273,8 @@ final class ChatViewModel {
         isThinking = false
         isResponding = false
         respondTask = nil
+        // Persist the completed turn (reply text + any cards) for the next launch.
+        persist()
     }
 
     func reset() {

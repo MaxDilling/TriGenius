@@ -133,6 +133,12 @@ protocol LLMBackend: AnyObject {
     /// data-source change, and manual reset.
     func resetConversation()
 
+    /// Seed prior conversation context ahead of the next session build. Only
+    /// self-managing backends need it (Apple FM rebuilds its `Transcript` from
+    /// these turns so a restored/switched-into session keeps context); stateless
+    /// backends resend `conversationHistory` every turn and ignore it.
+    func seedTranscript(_ turns: [ConversationTurn])
+
     /// Optionally warm up the model ahead of the first turn. No-op by default.
     func prewarm(systemPrompt: String, tools: [ToolDefinition])
 
@@ -213,6 +219,8 @@ extension LLMBackend {
     }
 
     func resetConversation() {}
+
+    func seedTranscript(_ turns: [ConversationTurn]) {}
 
     func setToolExecutor(_ executor: @escaping @Sendable (String, String) async -> String) {}
 

@@ -160,6 +160,39 @@ final class CoachBrain {
         self.backend = NoAPIKeyBackend()
 
         configureTools()
+        // Restore a persisted session (survives app restart, cleared only by the
+        // Reset button or 24h expiry). Only text turns are LLM context; a self-
+        // managing backend re-seeds from these via setBackend → reseedBackend.
+        conversationHistory = Self.restoredHistory()
+    }
+
+    /// Rebuild `conversationHistory` from the persisted chat session — text turns
+    /// only, consecutive same-role turns merged into one (a single coach reply can
+    /// span multiple UI bubbles split by tool calls / cards).
+    private static func restoredHistory() -> [ConversationTurn] {
+        var turns: [ConversationTurn] = []
+        for saved in ChatStore.shared.turns where saved.card == nil && !saved.text.isEmpty {
+            let isUser = saved.role == "user"
+            if let last = turns.last, (last.role == .user) == isUser,
+               case .text(let prev)? = last.parts.first {
+                turns[turns.count - 1] = isUser
+                    ? .user(prev + "\n" + saved.text)
+                    : .assistantText(prev + "\n" + saved.text)
+            } else {
+                turns.append(isUser ? .user(saved.text) : .assistantText(saved.text))
+            }
+        }
+        return turns
+    }
+
+    /// Refresh the backend's session without losing the conversation: tears down
+    /// any live session and re-seeds the prior turns. No-op for stateless cloud
+    /// backends (they resend `conversationHistory` each turn); for Apple FM it
+    /// rebuilds the session so instructions/tools stay current *and* context
+    /// (the persisted history) is restored.
+    private func reseedBackend() {
+        backend.resetConversation()
+        backend.seedTranscript(conversationHistory)
     }
 
     /// (Re)build the tool registry for the active read sources + write target. The
@@ -209,13 +242,14 @@ final class CoachBrain {
     }
 
     /// Apply the latest read sources + write target. Rebuilds the tool registry and
-    /// resets the conversation only when something actually changed.
+    /// refreshes the backend session (new tools/instructions) *without* wiping the
+    /// conversation — the chat clears only on the Reset button or 24h expiry.
     func setSources(read: Set<DataSource>, write: WriteTarget) {
         guard read != readSources || write != writeTarget else { return }
         readSources = read
         writeTarget = write
         configureTools()
-        reset()
+        reseedBackend()
     }
 
     // MARK: - Backend management
@@ -231,7 +265,10 @@ final class CoachBrain {
             await self?.executeToolJSON(name: name, argumentsJSON: argumentsJSON)
                 ?? "Tool error: coach unavailable."
         }
-        reset()
+        // Preserve the conversation across a model switch: seed the new backend
+        // with the existing history (Apple FM rebuilds its session from it; cloud
+        // backends resend it each turn anyway).
+        reseedBackend()
     }
 
     var availableTools: [ToolDefinition] {
@@ -468,9 +505,12 @@ final class CoachBrain {
         return "\(timeGreeting), \(name)!\nHow can I help you today?"
     }
 
+    /// The only full wipe — the athlete's explicit Reset. Clears the persisted
+    /// session too, so it doesn't reappear on next launch.
     func reset() {
         conversationHistory = []
         errorMessage = nil
+        ChatStore.shared.clear()
         // Rebuild the persistent session next turn with a fresh system prompt
         // (current date + latest profile/data-source context).
         backend.resetConversation()
