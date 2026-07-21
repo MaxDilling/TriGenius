@@ -25,10 +25,6 @@ nonisolated enum GarminTransform {
         DateFormatter.ymd.date(from: ymd)
     }
 
-    static func ymd(_ date: Date) -> String {
-        DateFormatter.ymd.string(from: date)
-    }
-
     /// Convert speed in m/s into pace (mm:ss) for the requested reference distance.
     static func speedToPace(_ speedMps: Double?, distanceM: Double = 1000) -> String? {
         guard let speedMps, speedMps > 0 else { return nil }

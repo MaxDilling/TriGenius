@@ -1,13 +1,11 @@
 import Foundation
-import Synchronization
 
 // MARK: - Garmin Connect API Client
 //
 // Low-level connectapi layer (bearer auth + endpoint helpers), mirroring the
 // subset of the Python `garminconnect.Garmin` methods used by the service.
 //
-// A `nonisolated` Sendable class, not an actor: it holds no state needing a
-// serial executor beyond the display-name cache (guarded by a `Mutex`), and its
+// A `nonisolated` Sendable class, not an actor: it holds no mutable state, and its
 // methods are pure async I/O. Keeping it off any actor means the raw `[String:
 // Any]` JSON it returns never crosses an isolation boundary into `GarminService`.
 
@@ -27,8 +25,6 @@ nonisolated final class GarminClient: Sendable {
         config.urlCache = nil
         return URLSession(configuration: config)
     }()
-
-    private let cachedDisplayName = Mutex<String?>(nil)
 
     private init() {}
 
@@ -82,23 +78,12 @@ nonisolated final class GarminClient: Sendable {
         s.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? s
     }
 
-    // MARK: - Profile / display name
-
-    func displayName() async throws -> String {
-        if let cached = cachedDisplayName.withLock({ $0 }) { return cached }
-        let profile = try await connectapi("/userprofile-service/socialProfile") as? [String: Any]
-        let name = profile?["displayName"] as? String ?? profile?["userName"] as? String ?? ""
-        cachedDisplayName.withLock { $0 = name }
-        return name
-    }
+    // MARK: - Profile
 
     func fullName() async throws -> String? {
         let profile = try await connectapi("/userprofile-service/socialProfile") as? [String: Any]
-        if let display = profile?["displayName"] as? String { cachedDisplayName.withLock { $0 = display } }
         return profile?["fullName"] as? String
     }
-
-    func clearProfileCache() { cachedDisplayName.withLock { $0 = nil } }
 
     // MARK: - Activities
 
@@ -144,12 +129,6 @@ nonisolated final class GarminClient: Sendable {
         return result as? [String: Any] ?? [:]
     }
 
-    // MARK: - Settings
-
-    func getCyclingFtp() async throws -> Any? {
-        try await connectapi("/biometric-service/biometric/latestFunctionalThresholdPower/CYCLING")
-    }
-
     // MARK: - Workouts
 
     func uploadWorkout(_ json: [String: Any]) async throws -> [String: Any]? {
@@ -188,9 +167,5 @@ nonisolated final class GarminClient: Sendable {
     /// `associatedActivityId` Garmin sets once the session is completed.
     func getScheduledWorkout(scheduleId: String) async throws -> [String: Any]? {
         try await connectapi("/workout-service/schedule/\(scheduleId)") as? [String: Any]
-    }
-
-    func getAdaptiveTrainingPlan(id: Int) async throws -> [String: Any]? {
-        try await connectapi("/trainingplan-service/trainingplan/\(id)") as? [String: Any]
     }
 }

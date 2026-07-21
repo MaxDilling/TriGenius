@@ -382,10 +382,9 @@ final class DataSyncCoordinator {
         return out
     }
 
-    /// Map the legacy/exported profile scalars (FTP, CSS, VO2max, lactate-threshold
-    /// HR, max HR, weight, HR/power zones) into time-series metric records. Shared by
-    /// the one-time `coach_memory.json` migration (`TriGeniusApp.seedPerformanceMetricsIfNeeded`)
-    /// and the manual JSON import. Marked `source: "manual"` — these are athlete-supplied.
+    /// Map the imported profile scalars (FTP, CSS, VO2max, lactate-threshold HR, max
+    /// HR, weight, HR/power zones) into time-series metric records, for the manual
+    /// `coach_memory.json` import. Marked `source: "manual"` — these are athlete-supplied.
     static func metrics(fromProfile p: UserProfile, date: Date) -> [IngestedMetric] {
         var out: [IngestedMetric] = []
         if let ftp = p.ftp {

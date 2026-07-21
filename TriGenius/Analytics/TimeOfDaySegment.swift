@@ -47,22 +47,6 @@ enum TimeOfDaySegment: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var shortLabel: String {
-        switch self {
-        case .morning: return "AM"
-        case .midday: return "Mid"
-        case .evening: return "PM"
-        }
-    }
-
-    var icon: String {
-        switch self {
-        case .morning: return "sunrise"
-        case .midday: return "sun.max"
-        case .evening: return "sunset"
-        }
-    }
-
     /// The segment a minute-of-day falls into, if any (nil outside active hours).
     static func containing(minute: Int) -> TimeOfDaySegment? {
         allCases.first { $0.range.contains(minute) }
@@ -121,10 +105,5 @@ enum DaySegments {
             }
         }
         return out
-    }
-
-    /// The first completely-free segment of the day, in chronological order.
-    static func firstFreeSegment(_ states: [TimeOfDaySegment: SegmentState]) -> TimeOfDaySegment? {
-        TimeOfDaySegment.allCases.first { states[$0] == .free }
     }
 }

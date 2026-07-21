@@ -7,8 +7,8 @@ import Combine
 // the coach reasons over. Backed by SwiftData rows (`CoachMemoryModels.swift`) so it
 // rides the one CloudKit sync; this class is the `@MainActor` façade that assembles
 // those rows into the value structs the app consumes and writes mutations back.
-// Snake_case keys (`init(from:)` / `toDict()`) match the legacy coach_memory.json,
-// which the launch migration imports once and which import/export still round-trips.
+// Snake_case keys (`init(from:)` / `toDict()`) so the coach_memory.json import/export
+// round-trips.
 
 /// Errors surfaced by `CoachMemory.importJSON`.
 enum MemoryImportError: LocalizedError {
@@ -90,13 +90,6 @@ final class CoachMemory: ObservableObject {
 
     /// Path of the SwiftData store now backing coach memory (debug display).
     var storageFilePath: String { TrainingDataStore.shared.storeFilePath }
-
-    /// The pre-migration coach_memory.json location, read once by the launch
-    /// migration into the store rows.
-    static var legacyFileURL: URL? {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
-            .appendingPathComponent("coach_memory.json")
-    }
 
     /// The current in-memory state serialized as pretty-printed JSON.
     /// Falls back to the on-disk file if serialization fails.
@@ -276,11 +269,11 @@ struct UserProfile {
     var motivation: String?
     var coordinates: (lat: Double, lon: Double)?
 
-    // Legacy performance/biometric values. Performance metrics (FTP, CSS, VO2max,
-    // lactate-threshold HR, max HR, weight and HR/power zones) now live in the
-    // SwiftData time series (`PerformanceMetricRecord`); these are parsed from an
-    // existing `coach_memory.json` only so the one-time seed can migrate them into
-    // the DB, and are no longer written back (see `toDict()`).
+    // Performance/biometric values. Performance metrics (FTP, CSS, VO2max,
+    // lactate-threshold HR, max HR, weight and HR/power zones) live in the SwiftData
+    // time series (`PerformanceMetricRecord`); these are parsed from an imported
+    // `coach_memory.json` only so the manual import can lift them into the DB, and
+    // are no longer written back (see `toDict()`).
     var ftp: Int?
     var cssPace: String?
     var vo2max: Double?
@@ -446,11 +439,6 @@ struct SportProgress {
     var maxContinuous: String?
     var equipment: [String] = []
     var notes: String?
-
-    var hasData: Bool {
-        currentLevel != nil || !abilities.isEmpty || !limitations.isEmpty ||
-        !injuriesAffecting.isEmpty || currentFocus != nil || !equipment.isEmpty
-    }
 
     init() {}
 

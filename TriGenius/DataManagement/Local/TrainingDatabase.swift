@@ -490,7 +490,7 @@ final class TrainingDataStore {
     }
 
     /// Every `@Model` the store owns: the workout/metric time series, the ATP
-    /// inputs, and the coach-memory rows (migrated out of `coach_memory.json`).
+    /// inputs, and the coach-memory rows.
     static let schema = Schema([
         WorkoutRecord.self, PerformanceMetricRecord.self,
         ATPConfig.self, ATPEvent.self, ATPWeekOverride.self,
@@ -1749,9 +1749,9 @@ extension TrainingDataStore {
 
 // MARK: - Coach-memory store API
 //
-// The athlete's prompt context, migrated out of coach_memory.json into the rows
-// in `CoachMemoryModels.swift` so it rides the same CloudKit sync. Kept here (like
-// the ATP API) so it can reach the store's private `context` / `markChanged()`.
+// The athlete's prompt context, stored as the rows in `CoachMemoryModels.swift` so
+// it rides the same CloudKit sync. Kept here (like the ATP API) so it can reach the
+// store's private `context` / `markChanged()`.
 // `CoachMemory` is the façade that maps these rows to the value structs the app
 // consumes; `deleteAllData()` leaves them intact. The struct↔record field mapping
 // lives in the `apply`/`make` helpers, shared by the per-section savers and the
@@ -1812,18 +1812,6 @@ extension TrainingDataStore {
         let rows = (try? context.fetch(FetchDescriptor<FeedbackRecord>(
             sortBy: [SortDescriptor(\.date, order: .forward)]))) ?? []
         return rows.map { FeedbackEntry(date: $0.date, category: $0.category, feedback: $0.feedback) }
-    }
-
-    /// Whether any coach-memory row exists yet — gates the one-time JSON import.
-    var hasCoachMemory: Bool {
-        let counts = [
-            (try? context.fetchCount(FetchDescriptor<ProfileRecord>())) ?? 0,
-            (try? context.fetchCount(FetchDescriptor<WeeklyStructureRecord>())) ?? 0,
-            (try? context.fetchCount(FetchDescriptor<PreferencesRecord>())) ?? 0,
-            (try? context.fetchCount(FetchDescriptor<SportProgressRecord>())) ?? 0,
-            (try? context.fetchCount(FetchDescriptor<FeedbackRecord>())) ?? 0,
-        ]
-        return counts.contains { $0 > 0 }
     }
 
     // MARK: Writes (one section each, mirroring CoachMemory's mutators)

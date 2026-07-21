@@ -601,30 +601,6 @@ enum BackendType: String, CaseIterable, Identifiable {
     var displayName: String { rawValue }
 }
 
-enum BackendFactory {
-    static func make(type: BackendType, apiKey: String = "") -> LLMBackend {
-        switch type {
-        case .openRouter:
-            return OpenAICompatibleBackend(
-                displayName: BackendType.openRouter.rawValue,
-                baseURL: OpenAICompatibleBackend.openRouterBaseURL,
-                apiKey: apiKey,
-                extraHeaders: OpenAICompatibleBackend.openRouterHeaders,
-                model: "openrouter/auto"
-            )
-        case .appleIntelligence:
-            return FoundationModelBackendFactory.make()
-        case .lmStudio:
-            return OpenAICompatibleBackend(
-                displayName: BackendType.lmStudio.rawValue,
-                baseURL: "http://localhost:1234/v1",
-                model: "local-model",
-                timeout: 300
-            )
-        }
-    }
-}
-
 // MARK: - No API Key stub
 
 private final class NoAPIKeyBackend: LLMBackend {

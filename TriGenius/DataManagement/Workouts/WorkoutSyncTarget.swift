@@ -62,7 +62,7 @@ extension WorkoutSyncTarget {
     func prune(keeping liveExternalIds: Set<String>) async {}
 }
 
-/// Builds the active `WorkoutSyncTarget`. Mirrors `BackendFactory`.
+/// Builds the active `WorkoutSyncTarget` for the athlete's chosen write target.
 @MainActor
 enum WorkoutTargetFactory {
     static func make(_ target: WriteTarget) -> WorkoutSyncTarget {

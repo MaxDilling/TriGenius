@@ -544,14 +544,8 @@ actor GarminAuth {
     // MARK: - Persistence
 
     private static func loadTokens(key: String) -> GarminTokens? {
-        if let json = KeychainStore.string(for: key), let data = json.data(using: .utf8),
-           let tokens = try? JSONDecoder().decode(GarminTokens.self, from: data) { return tokens }
-        // One-time migration from the pre-iCloud plaintext UserDefaults blob so an
-        // already-logged-in athlete isn't forced to re-authenticate.
-        guard let legacy = UserDefaults.standard.data(forKey: key),
-              let tokens = try? JSONDecoder().decode(GarminTokens.self, from: legacy) else { return nil }
-        saveTokens(tokens, key: key)
-        UserDefaults.standard.removeObject(forKey: key)
+        guard let json = KeychainStore.string(for: key), let data = json.data(using: .utf8),
+              let tokens = try? JSONDecoder().decode(GarminTokens.self, from: data) else { return nil }
         return tokens
     }
 

@@ -48,10 +48,6 @@ final class CalendarViewModel {
 
     /// Bounded continuous day list backing the week grid (≈ today ± 6 months).
     let weekGridDays: [Date]
-    /// `weekGridDays` → index, so the grid can map the leftmost visible day to a
-    /// position in O(1) instead of a per-frame linear `isDate(inSameDayAs:)` scan.
-    @ObservationIgnored private lazy var weekGridIndexByDay: [Date: Int] =
-        Dictionary(uniqueKeysWithValues: weekGridDays.enumerated().map { ($1, $0) })
     /// Bounded continuous week-start list backing the month grid (≈ today ± 1.5 years).
     let monthScrollWeeks: [Date]
 
@@ -117,11 +113,6 @@ final class CalendarViewModel {
         cal.component(.weekOfYear, from: day)
     }
 
-    /// Position of `day` in `weekGridDays` (O(1)), or nil if outside the backing range.
-    func weekGridIndex(of day: Date) -> Int? {
-        weekGridIndexByDay[cal.startOfDay(for: day)]
-    }
-
     // MARK: - Per-day accessors
 
     func planned(on day: Date) -> [WorkoutRecord] {
@@ -144,27 +135,6 @@ final class CalendarViewModel {
 
     func segments(on day: Date) -> [TimeOfDaySegment: SegmentState] {
         segmentsByDay[cal.startOfDay(for: day)] ?? [:]
-    }
-
-    func state(of segment: TimeOfDaySegment, on day: Date) -> SegmentState {
-        segments(on: day)[segment] ?? .free
-    }
-
-    func isInVisibleMonth(_ day: Date) -> Bool {
-        cal.isDate(day, equalTo: visibleMonth, toGranularity: .month)
-    }
-
-    // MARK: - Workout placement
-
-    /// The segment a planned workout is assigned to via its local start time, if any.
-    func assignedSegment(_ workout: WorkoutRecord) -> TimeOfDaySegment? {
-        workout.startMinute.flatMap { TimeOfDaySegment.containing(minute: $0) }
-    }
-
-    /// A planned workout conflicts when its assigned segment isn't completely free.
-    func conflict(for workout: WorkoutRecord) -> Bool {
-        guard let segment = assignedSegment(workout) else { return false }
-        return state(of: segment, on: workout.date) != .free
     }
 
     // MARK: - Navigation

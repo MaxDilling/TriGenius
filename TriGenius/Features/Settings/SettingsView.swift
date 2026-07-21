@@ -214,27 +214,12 @@ final class AppSettings: ObservableObject {
         readSources = Self.loadReadSources()
         metricsSource = Self.loadMetricsSource()
         writeTarget = Self.loadWriteTarget()
-        let keychainEmail = KeychainStore.string(for: KeychainStore.garminEmail)
-        let legacyEmail = UserDefaults.standard.string(forKey: "garmin_email")
-        garminEmail = keychainEmail ?? legacyEmail ?? ""
-        // One-time migration of the pre-iCloud UserDefaults email into the
-        // synchronizable Keychain (didSet doesn't fire during init).
-        if keychainEmail == nil, let legacyEmail, !legacyEmail.isEmpty {
-            KeychainStore.set(legacyEmail, for: KeychainStore.garminEmail)
-            UserDefaults.standard.removeObject(forKey: "garmin_email")
-        }
+        garminEmail = KeychainStore.string(for: KeychainStore.garminEmail) ?? ""
         lmStudioBaseURL = UserDefaults.standard.string(forKey: "lmstudio_base_url") ?? "http://localhost:1234/v1"
         lmStudioModel = UserDefaults.standard.string(forKey: "lmstudio_model") ?? "local-model"
         debugMode = UserDefaults.standard.bool(forKey: "debug_mode")
         proactiveNotifications = UserDefaults.standard.bool(forKey: Self.proactiveNotificationsKey)
-        let layout = Self.loadDashboardLayout()
-        dashboardLayout = layout
-        // One-time migration of the pre-layout AI-summary toggle (its value seeded
-        // the load above; didSet doesn't fire during init, so persist explicitly).
-        if UserDefaults.standard.object(forKey: "ai_dashboard_insight") != nil {
-            UserDefaults.standard.set(Self.encode(layout), forKey: "dashboard_sections")
-            UserDefaults.standard.removeObject(forKey: "ai_dashboard_insight")
-        }
+        dashboardLayout = Self.loadDashboardLayout()
         crossTrainingCreditFactor = Self.loadCreditFactor()
     }
 
@@ -266,10 +251,8 @@ final class AppSettings: ObservableObject {
                 items.append(DashboardLayoutItem(section: section, isVisible: !hidden))
             }
         } else {
-            // First run: everything visible except the AI summary, which keeps the
-            // legacy opt-in toggle's value (false when never set).
-            let aiOn = UserDefaults.standard.bool(forKey: "ai_dashboard_insight")
-            items = DashboardSection.allCases.map { DashboardLayoutItem(section: $0, isVisible: $0 != .aiInsight || aiOn) }
+            // First run: everything visible except the opt-in AI summary.
+            items = DashboardSection.allCases.map { DashboardLayoutItem(section: $0, isVisible: $0 != .aiInsight) }
         }
         // Sections the app gained after the layout was stored surface at the end.
         let known = Set(items.map(\.section))
@@ -980,7 +963,6 @@ struct GarminLoginSection: View {
     }
 
     private func finishConnected() async {
-        await GarminClient.shared.clearProfileCache()
         let name = (try? await GarminClient.shared.fullName()) ?? nil
         password = ""
         mfaCode = ""
@@ -992,7 +974,6 @@ struct GarminLoginSection: View {
 
     private func logout() async {
         await GarminAuth.shared.logout()
-        await GarminClient.shared.clearProfileCache()
         isConnected = false
         statusMessage = "Signed out."
         isError = false
