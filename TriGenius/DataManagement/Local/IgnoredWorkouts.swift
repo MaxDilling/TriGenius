@@ -77,7 +77,7 @@ enum IgnoredWorkouts {
         NotificationCenter.default.addObserver(
             forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
             object: cloud, queue: .main
-        ) { _ in mergeFromCloud() }
+        ) { _ in MainActor.assumeIsolated { mergeFromCloud() } }
         cloud.synchronize()
         mergeFromCloud()
     }

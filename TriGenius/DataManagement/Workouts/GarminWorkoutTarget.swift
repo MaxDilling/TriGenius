@@ -18,12 +18,12 @@ struct GarminWorkoutTarget: WorkoutSyncTarget {
 
     func schedule(_ workout: PlannedWorkout) async -> WorkoutWriteResult {
         guard await isAvailable else { return .failure("Garmin is not connected.") }
-        return Self.parse(await service.addWorkout(workoutData: workout.workoutData, date: workout.date))
+        return Self.parse(await service.addWorkout(workoutJSON: GarminService.jsonString(workout.workoutData), date: workout.date))
     }
 
     func update(externalId: String, _ workout: PlannedWorkout) async -> WorkoutWriteResult {
         guard await isAvailable else { return .failure("Garmin is not connected.") }
-        return Self.parse(await service.modifyWorkout(workoutId: externalId, workoutData: workout.workoutData))
+        return Self.parse(await service.modifyWorkout(workoutId: externalId, workoutJSON: GarminService.jsonString(workout.workoutData)))
     }
 
     func move(externalId: String, to date: String, from: String?) async -> WorkoutWriteResult {

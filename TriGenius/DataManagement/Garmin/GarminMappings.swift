@@ -83,7 +83,7 @@ nonisolated enum GarminMappings {
         "main": StepType(id: 8, key: "main")
     ]
 
-    static let workoutEndConditions: [String: [String: Any]] = [
+    nonisolated(unsafe) static let workoutEndConditions: [String: [String: Any]] = [
         "time": ["conditionTypeId": 2, "conditionTypeKey": "time", "displayOrder": 2, "displayable": true],
         "distance": ["conditionTypeId": 3, "conditionTypeKey": "distance", "displayOrder": 3, "displayable": true],
         "lap_button": ["conditionTypeId": 1, "conditionTypeKey": "lap.button", "displayOrder": 1, "displayable": true],
@@ -92,7 +92,7 @@ nonisolated enum GarminMappings {
         "fixed.rest": ["conditionTypeId": 8, "conditionTypeKey": "fixed.rest", "displayOrder": 8, "displayable": true]
     ]
 
-    static let workoutStrokes: [String: [String: Any]] = [
+    nonisolated(unsafe) static let workoutStrokes: [String: [String: Any]] = [
         "free": ["strokeTypeId": 6, "strokeTypeKey": "free", "displayOrder": 6],
         "freestyle": ["strokeTypeId": 6, "strokeTypeKey": "free", "displayOrder": 6],
         "breaststroke": ["strokeTypeId": 3, "strokeTypeKey": "breaststroke", "displayOrder": 3],
@@ -108,9 +108,9 @@ nonisolated enum GarminMappings {
         "drill": ["strokeTypeId": 7, "strokeTypeKey": "drill", "displayOrder": 7]
     ]
     /// Stroke payload for steps with no stroke (e.g. rest).
-    static let workoutStrokeNone: [String: Any] = ["strokeTypeId": 0, "strokeTypeKey": NSNull(), "displayOrder": 0]
+    nonisolated(unsafe) static let workoutStrokeNone: [String: Any] = ["strokeTypeId": 0, "strokeTypeKey": NSNull(), "displayOrder": 0]
 
-    static let workoutTargetTypes: [String: [String: Any]] = [
+    nonisolated(unsafe) static let workoutTargetTypes: [String: [String: Any]] = [
         "no_target": ["workoutTargetTypeId": 1, "workoutTargetTypeKey": "no.target", "displayOrder": 1],
         "heart_rate": ["workoutTargetTypeId": 4, "workoutTargetTypeKey": "heart.rate.zone", "displayOrder": 4],
         "power": ["workoutTargetTypeId": 2, "workoutTargetTypeKey": "power.zone", "displayOrder": 2],

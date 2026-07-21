@@ -8,7 +8,7 @@ import Foundation
 // through THIS function; no source keeps its own copy of the computation (see
 // CLAUDE.md "Algorithms are source-independent").
 
-enum NormalizedStream {
+nonisolated enum NormalizedStream {
     /// One stream reading: its `value` and the `seconds` of real time it represents
     /// (its own measurement interval — Apple Health supplies this per sample; a 1 Hz
     /// stream like Garmin's passes 1). Carrying the duration lets the math run on

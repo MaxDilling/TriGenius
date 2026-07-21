@@ -7,8 +7,14 @@ import os
 // Each public method returns a ToolResult-style JSON string for the coach,
 // except `syncUserSettings` which also returns the parsed settings dict so the
 // caller can persist them into CoachMemory (as the Python CLI does).
+//
+// A `nonisolated` Sendable class, not an actor: it holds no mutable state (only
+// the immutable `client`/`log`), so there is no boundary between it and
+// `GarminClient` — the raw JSON they exchange stays in one isolation domain.
+// Only values handed back to a MainActor caller cross a boundary (hence the
+// `sending` results on the two methods that return a `[String: Any]`).
 
-actor GarminService {
+nonisolated final class GarminService: Sendable {
 
     static let shared = GarminService()
     private let client = GarminClient.shared
@@ -21,7 +27,7 @@ actor GarminService {
     /// the `directSpeed` stream (1 Hz, each sample covering 1 s) through the shared
     /// `NormalizedStream`, plus the raw samples. Mirrors HealthKit's diagnostics so the
     /// export shape is identical across sources. Nil when details can't be fetched.
-    func speedStreamDiagnostics(activityId: String) async -> [String: Any]? {
+    func speedStreamDiagnostics(activityId: String) async -> sending [String: Any]? {
         guard let details = try? await client.getActivityDetails(id: activityId) else { return nil }
         let samples = GarminTransform.metricSegments(details, key: "directSpeed")
             .flatMap { $0 }.filter { $0 >= 0 }
@@ -442,14 +448,16 @@ actor GarminService {
         let windows = Self.dateWindows(startDate: startDate, endDate: endDate, maxDays: 28)
         // Fire the chunk requests concurrently; row order is irrelevant since the
         // transform keys each row by its own `calendarDate`.
-        let chunks = await withTaskGroup(of: [[String: Any]].self) { group -> [[String: Any]] in
+        let chunks = await withTaskGroup(of: String.self) { group -> [[String: Any]] in
             for (start, end) in windows {
                 group.addTask {
                     let obj = await self.get("/sleep-service/stats/sleep/daily/\(start)/\(end)") as? [String: Any]
-                    return obj?["individualStats"] as? [[String: Any]] ?? []
+                    return Self.jsonString(obj?["individualStats"] as? [[String: Any]] ?? [])
                 }
             }
-            return await group.reduce(into: []) { $0.append(contentsOf: $1) }
+            var out: [[String: Any]] = []
+            for await c in group { out.append(contentsOf: Self.jsonArray(c)) }
+            return out
         }
         return chunks.isEmpty ? nil : ["individualStats": chunks]
     }
@@ -489,8 +497,10 @@ actor GarminService {
 
     // JSON round-trip helpers to carry `[String: Any]` payloads across concurrency
     // task boundaries as Sendable strings. `nonisolated` so a non-main-actor task can
-    // call them without hopping / passing the dict cross-actor.
-    nonisolated private static func jsonString(_ obj: Any) -> String {
+    // call them without hopping / passing the dict cross-actor. `jsonString` is also
+    // the encode side of the write API — the caller serializes the plan before it
+    // crosses into this actor (see `add`/`modifyWorkout`).
+    nonisolated static func jsonString(_ obj: Any) -> String {
         (try? JSONSerialization.data(withJSONObject: obj)).flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
     }
     nonisolated private static func jsonObject(_ s: String) -> [String: Any]? {
@@ -774,8 +784,9 @@ actor GarminService {
 
     // MARK: - add_workouts (single add)
 
-    func addWorkout(workoutData: [String: Any], date: String) async -> String {
+    func addWorkout(workoutJSON: String, date: String) async -> String {
         do {
+            let workoutData = Self.jsonObject(workoutJSON) ?? [:]
             let targetDate = GarminTransform.formatDate(date)
             let sport = Coerce.token(workoutData["sport"] as? String, default: "other")
             let sportType = GarminMappings.workoutSportTypes[sport] ?? GarminMappings.workoutSportTypes["other"]!
@@ -853,8 +864,9 @@ actor GarminService {
 
     /// Edit an existing workout's content in place via PUT. The schedule
     /// occurrence (id + date) is untouched — date changes belong to moveWorkout.
-    func modifyWorkout(workoutId: String, workoutData: [String: Any]) async -> String {
+    func modifyWorkout(workoutId: String, workoutJSON: String) async -> String {
         do {
+            let workoutData = Self.jsonObject(workoutJSON) ?? [:]
             guard let existing = try await client.getWorkoutDetails(workoutId: workoutId) else {
                 return resultString(success: false, data: nil, message: "Workout \(workoutId) not found")
             }
@@ -896,7 +908,7 @@ actor GarminService {
     /// cycling FTP). The dated FTP/VO2max/threshold/CSS/weight time series are
     /// owned by `fetchMetricHistory`; `cycling_ftp` is read here only to derive
     /// the power-zone bands and is not emitted as a metric.
-    func syncUserSettings() async -> (text: String, settings: [String: Any]?) {
+    func syncUserSettings() async -> sending (text: String, settings: [String: Any]?) {
         var settings: [String: Any] = [:]
 
         // The two independent endpoints fire concurrently (they were serial).

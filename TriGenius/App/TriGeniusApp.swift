@@ -9,7 +9,16 @@ struct TriGeniusApp: App {
     @StateObject private var settings = AppSettings()
     @State private var router = CoachRouter()
     @State private var brain: CoachBrain?
+    /// True once the app has been fully backgrounded, so we can tell a real return
+    /// from a launch/`.inactive` blip and only then check for stale data.
+    @State private var wasBackgrounded = false
+    @State private var isForegroundSyncing = false
     @Environment(\.scenePhase) private var scenePhase
+
+    /// Re-sync on return to the foreground once the on-screen data has aged past this
+    /// window — covers an app left open for hours (esp. iOS, where the process lingers
+    /// in RAM and would otherwise keep showing the previous sync's data).
+    private static let staleForegroundSyncInterval: TimeInterval = 6 * 3600
 
     init() {
         // Register the background-refresh handler before launch completes, as
@@ -30,10 +39,19 @@ struct TriGeniusApp: App {
         }
         .modelContainer(TrainingDataStore.shared.container)
         .onChange(of: scenePhase) { _, phase in
-            // Queue a background refresh when leaving the foreground, so proactive
-            // signals can be evaluated while the app is suspended.
-            if phase == .background, settings.proactiveNotifications {
-                BackgroundCoordinator.shared.schedule()
+            switch phase {
+            case .background:
+                wasBackgrounded = true
+                // Queue a background refresh when leaving the foreground, so proactive
+                // signals can be evaluated while the app is suspended.
+                if settings.proactiveNotifications {
+                    BackgroundCoordinator.shared.schedule()
+                }
+            case .active where wasBackgrounded:
+                wasBackgrounded = false
+                refreshIfStale()
+            default:
+                break
             }
         }
 #if os(macOS)
@@ -80,6 +98,28 @@ struct TriGeniusApp: App {
             // Re-register OS-scheduled reminders — pending requests are cleared on
             // reboot / app update, so reconcile on every launch.
             await ReminderScheduler.shared.reconcile()
+        }
+    }
+
+    /// On return to the foreground, refresh silently if any enabled read source's data
+    /// is older than `staleForegroundSyncInterval` (or was never synced). Mirrors the
+    /// launch sync's data path (sans reminder reconcile). No-op while the brain is still
+    /// initialising (the launch sync covers that) or a refresh is already in flight.
+    private func refreshIfStale() {
+        guard brain != nil, !isForegroundSyncing else { return }
+        let sources = settings.readSources
+        let coordinator = DataSyncCoordinator.shared
+        let stale = sources.contains { source in
+            guard let last = coordinator.lastSync(for: source) else { return true }
+            return Date().timeIntervalSince(last) > Self.staleForegroundSyncInterval
+        }
+        guard stale else { return }
+        isForegroundSyncing = true
+        let writeTarget = settings.writeTarget
+        Task {
+            await coordinator.syncAll(sources)
+            await coordinator.reconcileWriteTarget(writeTarget)
+            isForegroundSyncing = false
         }
     }
 

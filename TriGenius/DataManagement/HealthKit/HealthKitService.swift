@@ -14,6 +14,15 @@ final class HealthKitService {
 
     private init() {}
 
+    /// Accumulator for a HealthKit series/route query's result blocks. HealthKit
+    /// delivers a query's callbacks serially on its own queue, so the unchecked
+    /// mutation is race-free — the box only exists to satisfy Sendable capture
+    /// checking for what a `withCheckedContinuation` handler accumulates into.
+    private nonisolated final class SeriesBox<Element>: @unchecked Sendable {
+        var items: [Element] = []
+        var didResume = false
+    }
+
     // MARK: - Authorization
 
     func requestAuthorization() async throws {
@@ -403,15 +412,14 @@ final class HealthKitService {
         }
         guard let route = routes.first else { return [] }
         return try await withCheckedThrowingContinuation { continuation in
-            var collected: [CLLocation] = []
-            var didResume = false
+            let box = SeriesBox<CLLocation>()
             let query = HKWorkoutRouteQuery(route: route) { _, locations, done, error in
                 if let error {
-                    if !didResume { didResume = true; continuation.resume(throwing: error) }
+                    if !box.didResume { box.didResume = true; continuation.resume(throwing: error) }
                     return
                 }
-                if let locations { collected.append(contentsOf: locations) }
-                if done, !didResume { didResume = true; continuation.resume(returning: collected) }
+                if let locations { box.items.append(contentsOf: locations) }
+                if done, !box.didResume { box.didResume = true; continuation.resume(returning: box.items) }
             }
             store.execute(query)
         }
@@ -438,20 +446,19 @@ final class HealthKitService {
                                 predicate: NSPredicate) async throws -> [(start: Date, duration: TimeInterval, value: Double)] {
         let type = HKQuantityType(id)
         return try await withCheckedThrowingContinuation { continuation in
-            var collected: [(start: Date, duration: TimeInterval, value: Double)] = []
-            var didResume = false
+            let box = SeriesBox<(start: Date, duration: TimeInterval, value: Double)>()
             let query = HKQuantitySeriesSampleQuery(quantityType: type, predicate: predicate) {
                 _, quantity, dateInterval, _, done, error in
                 if let error {
-                    if !didResume { didResume = true; continuation.resume(throwing: error) }
+                    if !box.didResume { box.didResume = true; continuation.resume(throwing: error) }
                     return
                 }
                 if let quantity, let dateInterval {
-                    collected.append((dateInterval.start, dateInterval.duration, quantity.doubleValue(for: unit)))
+                    box.items.append((dateInterval.start, dateInterval.duration, quantity.doubleValue(for: unit)))
                 }
-                if done, !didResume {
-                    didResume = true
-                    continuation.resume(returning: collected)
+                if done, !box.didResume {
+                    box.didResume = true
+                    continuation.resume(returning: box.items)
                 }
             }
             store.execute(query)
@@ -465,7 +472,7 @@ final class HealthKitService {
     /// the ones the Garmin integration already provides. Drop anything authored by
     /// the Garmin Connect app on import. Matches by source name ("Connect") and by
     /// bundle identifier ("com.garmin.connect.mobile") to be robust to either.
-    private static func isGarmin(_ w: HKWorkout) -> Bool {
+    nonisolated private static func isGarmin(_ w: HKWorkout) -> Bool {
         let source = w.sourceRevision.source
         return source.bundleIdentifier.lowercased().contains("garmin")
             || source.name.caseInsensitiveCompare("Connect") == .orderedSame
@@ -493,20 +500,19 @@ final class HealthKitService {
         let type = HKQuantityType(id)
         let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
         return try await withCheckedThrowingContinuation { continuation in
-            var collected: [(date: Date, value: Double)] = []
-            var didResume = false
+            let box = SeriesBox<(date: Date, value: Double)>()
             let query = HKQuantitySeriesSampleQuery(quantityType: type, predicate: predicate) {
                 _, quantity, dateInterval, _, done, error in
                 if let error {
-                    if !didResume { didResume = true; continuation.resume(throwing: error) }
+                    if !box.didResume { box.didResume = true; continuation.resume(throwing: error) }
                     return
                 }
                 if let quantity, let dateInterval {
-                    collected.append((dateInterval.start, quantity.doubleValue(for: unit)))
+                    box.items.append((dateInterval.start, quantity.doubleValue(for: unit)))
                 }
-                if done, !didResume {
-                    didResume = true
-                    continuation.resume(returning: collected)
+                if done, !box.didResume {
+                    box.didResume = true
+                    continuation.resume(returning: box.items)
                 }
             }
             store.execute(query)

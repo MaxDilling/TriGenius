@@ -13,7 +13,7 @@ import Foundation
 // source-independent"). The result is `NormalizedStream.Sample`s, so it drops straight
 // into `NormalizedStream.normalized`.
 
-enum GradeAdjustedPace {
+nonisolated enum GradeAdjustedPace {
     /// Metabolic cost of running vs gradient, normalized to the flat cost — the factor
     /// that turns an actual speed at `grade` (rise/run fraction) into the equivalent
     /// flat speed. From Minetti et al. (2002) energy-cost polynomial, the standard

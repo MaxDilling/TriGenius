@@ -13,12 +13,23 @@ struct AppleWatchWorkoutTarget: WorkoutSyncTarget {
     let target: WriteTarget = .appleWatch
 
     var isAvailable: Bool {
-        get async { await WorkoutScheduler.shared.authorizationState == .authorized }
+        get async { await Self.isAuthorized() }
     }
 
     private func ensureAuthorized() async -> Bool {
-        if await WorkoutScheduler.shared.authorizationState == .authorized { return true }
-        return await WorkoutScheduler.shared.requestAuthorization() == .authorized
+        if await Self.isAuthorized() { return true }
+        return await Self.requestAuthorization()
+    }
+
+    // WorkoutKit's `AuthorizationState` isn't Sendable, so the state read and its
+    // comparison run `@concurrent` (off any actor — a plain nonisolated async func
+    // would inherit this MainActor target's isolation under approachable
+    // concurrency); only the resulting Bool (Sendable) crosses back.
+    @concurrent private static func isAuthorized() async -> Bool {
+        await WorkoutScheduler.shared.authorizationState == .authorized
+    }
+    @concurrent private static func requestAuthorization() async -> Bool {
+        await WorkoutScheduler.shared.requestAuthorization() == .authorized
     }
 
     func schedule(_ workout: PlannedWorkout) async -> WorkoutWriteResult {
