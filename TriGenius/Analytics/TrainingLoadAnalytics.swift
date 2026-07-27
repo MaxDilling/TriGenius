@@ -188,14 +188,17 @@ enum TrainingLoadAnalytics {
 
     /// The longest session of `family` with `start <= date < end`, by primary metric.
     private static func longest(in records: [WorkoutRecord], family: SportFamily, on start: Date, before end: Date) -> LongestSession? {
-        let matching = records.filter {
-            SportFamily(sportKey: $0.sport) == family && $0.date >= start && $0.date < end
-        }
+        // Per contribution, not per row: the bike leg of a race is a candidate for
+        // the week's long ride, measured on that leg alone.
+        let matching = records
+            .filter { $0.date >= start && $0.date < end }
+            .flatMap { r in r.sportContributions.filter { $0.family == family }.map { (r, $0) } }
         return matching.max {
-            primaryVolume(family, distanceKm: $0.distanceKm, durationMinutes: $0.durationMinutes)
-                < primaryVolume(family, distanceKm: $1.distanceKm, durationMinutes: $1.durationMinutes)
+            primaryVolume(family, distanceKm: $0.1.distanceKm, durationMinutes: $0.1.durationMinutes)
+                < primaryVolume(family, distanceKm: $1.1.distanceKm, durationMinutes: $1.1.durationMinutes)
         }.map {
-            LongestSession(distanceKm: $0.distanceKm, durationMinutes: $0.durationMinutes, date: $0.date, name: $0.name)
+            LongestSession(distanceKm: $0.1.distanceKm, durationMinutes: $0.1.durationMinutes,
+                           date: $0.0.date, name: $0.0.name)
         }
     }
 }

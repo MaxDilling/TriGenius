@@ -28,15 +28,14 @@ enum ZoneDistribution {
     }
 
     /// Element-wise sum of `z1…z5` across the records that carry the source's
-    /// key; `[]` when none does.
+    /// key; `[]` when none does. `family` selects the discipline — applied per
+    /// details dict, so only the matching *leg* of a multisport session counts.
     @MainActor
-    static func aggregate(records: [WorkoutRecord], source: ZoneSource) -> [Double] {
+    static func aggregate(records: [WorkoutRecord], source: ZoneSource, family: SportFamily) -> [Double] {
         var total: [Double]? = nil
-        for record in records {
-            guard let data = record.detailsJSON.data(using: .utf8),
-                  let details = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let zones = zoneSeconds(details: details, source: source)
-            else { continue }
+        for details in records.flatMap(\.detailDicts) {
+            guard SportFamily(sportKey: details["sport"] as? String ?? "other") == family,
+                  let zones = zoneSeconds(details: details, source: source) else { continue }
             total = zip(total ?? [0, 0, 0, 0, 0], zones).map(+)
         }
         return total ?? []

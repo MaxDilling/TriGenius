@@ -69,13 +69,16 @@ enum TrainingVolume {
         for record in records where record.date >= earliest {
             let ws = weekStart(of: record.date, calendar: cal)
             guard acc[ws] != nil else { continue } // outside the window
-            let family = SportFamily(sportKey: record.sport)
-            var totals = acc[ws]?[family] ?? VolumeTotals()
-            totals.tss += TSS.value(for: record) ?? 0
-            totals.distanceKm += record.distanceKm
-            totals.durationMinutes += record.durationMinutes
-            totals.sessions += 1
-            acc[ws]?[family] = totals
+            // A multisport session contributes to each discipline it contains, so a
+            // brick counts as one bike *and* one run session.
+            for c in record.sportContributions {
+                var totals = acc[ws]?[c.family] ?? VolumeTotals()
+                totals.tss += c.tss
+                totals.distanceKm += c.distanceKm
+                totals.durationMinutes += c.durationMinutes
+                totals.sessions += 1
+                acc[ws]?[c.family] = totals
+            }
         }
 
         return starts.map { WeekBucket(weekStart: $0, totals: acc[$0] ?? [:]) }

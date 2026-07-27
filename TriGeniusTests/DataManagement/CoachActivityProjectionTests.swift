@@ -10,7 +10,6 @@ private let swim: [String: Any] = [
     "id": "g:1", "name": "Pool Swim", "date": "2026-06-20", "time": "07:00",
     "sport": "swimming", "duration_minutes": 30, "distance_km": 1.5,
     "avg_hr": 130, "max_hr": 150, "calories": 300, "location": "Hallenbad",
-    "aerobic_te": 2.1, "training_load": 80,
     "swimming": [
         "pool_length_m": 25, "total_lengths": 60, "avg_pace_per_100m": "2:00",
         "avg_swolf": 38, "avg_strokes_per_length": 18,
@@ -26,7 +25,6 @@ private let swim: [String: Any] = [
     #expect(out["tss_basis"] as? String == "swim pace vs CSS (cleaned distance)")
     #expect(out["calories"] == nil)
     #expect(out["location"] == nil)
-    #expect(out["training_load"] == nil)
     let sub = out["swimming"] as? [String: Any]
     #expect(sub?["avg_pace_per_100m"] as? String == "2:00")
     #expect(sub?["intervals"] == nil)

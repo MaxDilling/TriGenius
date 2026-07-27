@@ -15,6 +15,40 @@ import AppKit
 struct TrainingDetailView: View {
     let record: WorkoutRecord
 
+    /// The legs of a multisport session, prepared for display. Decoded once in
+    /// `init` — `record.segments` parses `segmentsJSON` on every access.
+    private let legs: [Leg]
+
+    /// One leg, with the name and color it carries through strip, splits and
+    /// chart bands. `name` is unique within the race so it can identify a row.
+    private struct Leg: Identifiable {
+        let index: Int
+        let segment: WorkoutSegment
+        let name: String
+        let color: Color
+        var id: Int { index }
+    }
+
+    init(record: WorkoutRecord) {
+        self.record = record
+        let segments = record.segments
+        let totals = segments.reduce(into: [String: Int]()) { $0[$1.sport, default: 0] += 1 }
+        var seen: [String: Int] = [:]
+        self.legs = segments.enumerated().map { index, segment in
+            seen[segment.sport, default: 0] += 1
+            let ordinal = seen[segment.sport] ?? 1
+            let title = Self.legTitle(segment)
+            return Leg(
+                index: index,
+                segment: segment,
+                name: segment.isTransition ? "T\(ordinal)"
+                    : (totals[segment.sport] ?? 1) > 1 ? "\(title) \(ordinal)" : title,
+                color: segment.isTransition ? .gray : segment.family.color)
+        }
+    }
+
+    /// nil = the Total tab; otherwise the index into `legs`.
+    @State private var selectedLeg: Int?
     @State private var exportFile: ExportFile?
     @State private var actionError: String?
     @State private var showDistanceEdit = false
@@ -36,6 +70,10 @@ struct TrainingDetailView: View {
         return obj
     }
     private var isHealthKit: Bool { record.source == "healthkit" }
+
+    /// Multisport rows are marked (and tinted) by the link glyph, not by the
+    /// `.other` family their parent sport key falls into.
+    private var accent: Color { legs.isEmpty ? family.color : .accentColor }
 
     /// The stored id of this row's completed activity — the row's own id, or the
     /// fold link when the actuals live on a plan row.
@@ -64,11 +102,15 @@ struct TrainingDetailView: View {
                 comparisonCard
                 plannedStructureCard
                 // coachInsight
-                activityCard
-                zonesCard
-                feelCard
-                streamsSection
-                swimSection
+                if legs.isEmpty {
+                    activityCard(details)
+                    zonesCard(details)
+                    feelCard
+                    streamsSection(record.streamsData, family: family)
+                    swimSection(details)
+                } else {
+                    multisportSection
+                }
             }
             .padding()
         }
@@ -217,11 +259,11 @@ struct TrainingDetailView: View {
 
     private var header: some View {
         HStack(spacing: Theme.Spacing.m) {
-            Image(systemName: family.icon)
+            Image(systemName: legs.isEmpty ? family.icon : "link")
                 .font(.title)
                 .foregroundStyle(.white)
                 .frame(width: 52, height: 52)
-                .background(family.color.gradient)
+                .background(accent.gradient)
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.m))
             VStack(alignment: .leading, spacing: 3) {
                 Text(record.name).font(.headline)
@@ -449,7 +491,7 @@ struct TrainingDetailView: View {
         let icon: String
     }
 
-    private var activityMetricList: [SecondaryMetric] {
+    private func activityMetricList(_ details: [String: Any]) -> [SecondaryMetric] {
         var rows: [SecondaryMetric] = []
         let running = details["running"] as? [String: Any]
         let cycling = details["cycling"] as? [String: Any]
@@ -510,11 +552,12 @@ struct TrainingDetailView: View {
     }
 
     @ViewBuilder
-    private var activityCard: some View {
-        let rows = activityMetricList
+    private func activityCard(_ details: [String: Any], title: String = "Activity",
+                              extra: [SecondaryMetric] = []) -> some View {
+        let rows = activityMetricList(details) + extra
         if !rows.isEmpty {
             VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                Text("Activity").font(.headline)
+                Text(title).font(.headline)
                 VStack(spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                         if index > 0 { Divider() }
@@ -537,7 +580,7 @@ struct TrainingDetailView: View {
     // MARK: Zones — time-in-zone distribution (HR and, for cycling, power)
 
     @ViewBuilder
-    private var zonesCard: some View {
+    private func zonesCard(_ details: [String: Any]) -> some View {
         let hr = ZoneDistribution.zoneSeconds(details: details, source: .heartRate)
         let power = ZoneDistribution.zoneSeconds(details: details, source: .power)
         if hr != nil || power != nil {
@@ -606,9 +649,220 @@ struct TrainingDetailView: View {
 
     // MARK: Metric streams — one chart per stored time-series metric
 
+    // MARK: Segments — the legs of a multisport session
+    //
+    // A segment tab strip (Garmin Connect's pattern) replaces one endless scroll
+    // through every leg: title, totals and strip stay put, only the blocks below
+    // swap. Each leg renders through the same cards as a standalone workout —
+    // its details dict has the identical schema and it carries its own streams,
+    // TSS and basis. "Total" keeps the whole-race view.
+
     @ViewBuilder
-    private var streamsSection: some View {
-        ForEach(WorkoutStreamModel.models(from: record.streamsData, family: family)) { model in
+    private var multisportSection: some View {
+        segmentStrip
+        if let leg = selectedLeg.flatMap({ $0 < legs.count ? legs[$0] : nil }) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.s) {
+                Text(leg.name).font(.title3.weight(.bold))
+                Text(legSummary(leg.segment))
+                    .font(.subheadline).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+            }
+            activityCard(leg.segment.details, title: "Metrics")
+            zonesCard(leg.segment.details)
+            streamsSection(leg.segment.streamsData, family: leg.segment.family)
+            swimSection(leg.segment.details)
+        } else {
+            splitsCard
+            activityCard(details, title: "Metrics", extra: transitionsRow)
+            zonesCard(details)
+            feelCard
+            raceCharts
+        }
+    }
+
+    private var segmentStrip: some View {
+        HStack(spacing: 2) {
+            segmentTab(nil)
+            ForEach(legs) { segmentTab($0) }
+        }
+        .background(alignment: .bottom) {
+            Rectangle().fill(.separator).frame(height: 1)
+        }
+    }
+
+    private func segmentTab(_ leg: Leg?) -> some View {
+        let active = selectedLeg == leg?.index
+        let color = leg?.color ?? accent
+        return Button {
+            selectedLeg = leg?.index
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: leg.map(Self.legIcon) ?? "link")
+                    .font(.footnote)
+                    .foregroundStyle(active ? color : .secondary)
+                Text(Self.elapsed(leg?.segment.durationMinutes ?? record.durationMinutes))
+                    .font(.caption.weight(.bold)).monospacedDigit()
+                    .foregroundStyle(active ? .primary : .secondary)
+                Text(tabDetail(leg))
+                    .font(.caption2)
+                    .foregroundStyle(active ? .secondary : .tertiary)
+            }
+            .lineLimit(1).minimumScaleFactor(0.75)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, Theme.Spacing.s)
+            .background(
+                active ? color.opacity(0.12) : .clear,
+                in: .rect(topLeadingRadius: Theme.Radius.s, topTrailingRadius: Theme.Radius.s)
+            )
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(active ? color : .clear).frame(height: 2)
+            }
+        }
+        .buttonStyle(.plain)
+        .animation(.easeInOut(duration: 0.2), value: active)
+    }
+
+    /// The tab's secondary line: the race distance for Total, else the leg's own
+    /// rate — falling back to its distance for a transition, which has no rate.
+    private func tabDetail(_ leg: Leg?) -> String {
+        guard let leg else { return String(format: "%.1f km", record.distanceKm) }
+        if let rate = Self.rateLabel(leg.segment.details) { return rate }
+        return leg.segment.distanceKm > 0 ? String(format: "%.2f km", leg.segment.distanceKm) : "—"
+    }
+
+    // MARK: Splits — the race broken into its legs (Total tab)
+
+    private var splitsCard: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            Text("Splits").font(.headline)
+            ProportionBar(
+                segments: legs.map {
+                    .init(label: $0.name, color: $0.color,
+                          value: $0.segment.durationMinutes, display: "")
+                },
+                showLegend: false)
+            VStack(spacing: Theme.Spacing.s) {
+                ForEach(legs) { leg in
+                    Button { selectedLeg = leg.index } label: { splitRow(leg) }
+                        .buttonStyle(.plain)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface()
+    }
+
+    private func splitRow(_ leg: Leg) -> some View {
+        HStack(spacing: Theme.Spacing.s) {
+            Image(systemName: Self.legIcon(leg))
+                .font(.subheadline)
+                .foregroundStyle(leg.color)
+                .frame(width: 30, height: 30)
+                .background(leg.color.opacity(0.17),
+                            in: .rect(cornerRadius: Theme.Radius.s, style: .continuous))
+            VStack(alignment: .leading, spacing: 1) {
+                Text(leg.name).font(.subheadline.weight(.semibold))
+                Text(splitDetail(leg)).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(Self.elapsed(leg.segment.durationMinutes))
+                    .font(.subheadline.weight(.semibold)).monospacedDigit()
+                Text(leg.segment.tss.map { "\(Int($0.rounded())) TSS" } ?? "—")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+
+    /// "40.2 km · 32.0 km/h" — the leg's distance and rate; a transition names
+    /// the disciplines it sits between instead, having neither rate nor pace.
+    private func splitDetail(_ leg: Leg) -> String {
+        var parts: [String] = []
+        if leg.segment.distanceKm > 0 {
+            parts.append(String(format: "%.2f km", leg.segment.distanceKm))
+        }
+        if let rate = Self.rateLabel(leg.segment.details) {
+            parts.append(rate)
+        } else if leg.segment.isTransition {
+            let neighbours = [legs.first { $0.index < leg.index && !$0.segment.isTransition },
+                              legs.first { $0.index > leg.index && !$0.segment.isTransition }]
+            parts.append(neighbours.compactMap { $0?.segment.family.displayName }.joined(separator: " → "))
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    /// Time spent in transition — a race total the leg cards can't show.
+    private var transitionsRow: [SecondaryMetric] {
+        let minutes = legs.filter(\.segment.isTransition).reduce(0) { $0 + $1.segment.durationMinutes }
+        guard minutes > 0 else { return [] }
+        return [.init(label: "Transitions", value: Self.elapsed(minutes) + " total", icon: "clock")]
+    }
+
+    /// The race-long traces, with the legs shaded behind them.
+    @ViewBuilder
+    private var raceCharts: some View {
+        let bands = legs.map {
+            WorkoutStreamChart.Band(
+                start: $0.segment.offsetSeconds,
+                end: $0.segment.offsetSeconds + $0.segment.durationMinutes * 60,
+                color: $0.color)
+        }
+        ForEach(WorkoutStreamModel.raceModels(segments: legs.map(\.segment))) { model in
+            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                Text("\(model.kind.label) · full race").font(.headline)
+                WorkoutStreamChart(model: model, bands: bands)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .cardSurface()
+        }
+    }
+
+    private static func legIcon(_ leg: Leg) -> String {
+        leg.segment.isTransition ? "chevron.right.2" : leg.segment.family.icon
+    }
+
+    /// The leg's family name, except for the sports the families collapse into
+    /// `.other` — a triathlon's transitions above all, which would otherwise all
+    /// read "Other". Those show their own sport key ("transition" → "Transition").
+    private static func legTitle(_ segment: WorkoutSegment) -> String {
+        guard segment.family == .other else { return segment.family.displayName }
+        return segment.sport.replacingOccurrences(of: "_", with: " ").capitalized
+    }
+
+    /// "1:12:04 · 40.2 km · 118 TSS" — the parts this leg actually measured.
+    private func legSummary(_ segment: WorkoutSegment) -> String {
+        var parts = [Self.elapsed(segment.durationMinutes)]
+        if segment.distanceKm > 0 { parts.append(String(format: "%.2f km", segment.distanceKm)) }
+        if let tss = segment.tss { parts.append("\(Int(tss.rounded())) TSS") }
+        return parts.joined(separator: " · ")
+    }
+
+    /// The measured average rate of a details dict — pace for swim and run,
+    /// speed for the bike. Nil when the sport has none (a transition).
+    private static func rateLabel(_ details: [String: Any]) -> String? {
+        if let pace = Coerce.string((details["swimming"] as? [String: Any])?["avg_pace_per_100m"]) {
+            return "\(pace) /100m"
+        }
+        if let pace = Coerce.string((details["running"] as? [String: Any])?["avg_pace_min_km"]) {
+            return "\(pace) /km"
+        }
+        if let speed = Coerce.double((details["cycling"] as? [String: Any])?["avg_speed_kmh"]), speed > 0 {
+            return String(format: "%.1f km/h", speed)
+        }
+        return nil
+    }
+
+    /// Elapsed split time — `h:mm:ss` over an hour, else `m:ss`.
+    private static func elapsed(_ minutes: Double) -> String {
+        let s = Int((minutes * 60).rounded())
+        return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60)
+                         : String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    @ViewBuilder
+    private func streamsSection(_ data: Data, family: SportFamily) -> some View {
+        ForEach(WorkoutStreamModel.models(from: data, family: family)) { model in
             VStack(alignment: .leading, spacing: Theme.Spacing.s) {
                 Text(model.kind.label).font(.headline)
                 WorkoutStreamChart(model: model)
@@ -621,19 +875,19 @@ struct TrainingDetailView: View {
     // MARK: Swim — per-lap intervals + the cleaned lengths (Garmin per-length data)
 
     @ViewBuilder
-    private var swimSection: some View {
+    private func swimSection(_ details: [String: Any]) -> some View {
         let swim = details["swimming"] as? [String: Any]
         if let intervals = swim?["intervals"] as? [[String: Any]], !intervals.isEmpty {
             swimIntervalsCard(intervals)
         }
-        if let cleaned = cleanedLengths {
+        if let cleaned = cleanedLengths(details) {
             swimLengthsCard(cleaned)
         }
     }
 
     /// The same cleaning as ingest (`TSSScoring`), re-run on the stored lengths —
     /// deterministic, so the rows shown always match the scored distance.
-    private var cleanedLengths: SwimCleanResult? {
+    private func cleanedLengths(_ details: [String: Any]) -> SwimCleanResult? {
         guard let swim = details["swimming"] as? [String: Any],
               let pool = Coerce.double(swim["pool_length_m"]), pool > 0,
               let raw = swim["lengths"] as? [[String: Any]], !raw.isEmpty else { return nil }

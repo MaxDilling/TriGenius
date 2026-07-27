@@ -47,6 +47,28 @@ nonisolated enum TSSScoring {
         return (distanceKm, tss, basis?.label)
     }
 
+    /// Scores each leg of a multisport session in place and returns the row
+    /// totals. Every leg is a normal single-sport details dict, so each goes
+    /// through `score` unchanged — the bike leg gets power TSS, the run leg
+    /// rTSS. Row TSS is their sum (nil when no leg scored, e.g. a session that
+    /// is only transitions); the basis lists the distinct per-leg bases in
+    /// order, so a partly HR-derived total isn't over-trusted.
+    static func scoreSegments(_ segments: inout [WorkoutSegment], snapshot: PerformanceSnapshot)
+        -> (distanceKm: Double, tss: Double?, basis: String?) {
+        var distanceKm = 0.0, total = 0.0, scored = false
+        var bases: [String] = []
+        for i in segments.indices {
+            let (km, tss, basis) = score(&segments[i].details, snapshot: snapshot)
+            segments[i].tss = tss
+            segments[i].tssBasis = basis
+            distanceKm += km
+            if let tss { total += tss; scored = true }
+            if let basis, !bases.contains(basis) { bases.append(basis) }
+        }
+        guard scored else { return (round2(distanceKm), nil, nil) }
+        return (round2(distanceKm), round1(total), "segments: " + bases.joined(separator: " + "))
+    }
+
     private static func round1(_ v: Double) -> Double { (v * 10).rounded() / 10 }
     private static func round2(_ v: Double) -> Double { (v * 100).rounded() / 100 }
 }

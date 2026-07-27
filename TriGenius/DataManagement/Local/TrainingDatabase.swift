@@ -125,6 +125,10 @@ final class WorkoutRecord {
     /// Downsampled metric streams (`WorkoutStreams.encode`), the detail charts'
     /// data. Empty when the source delivered no streams for this activity.
     var streamsData: Data = Data()
+    /// The legs of a multisport session (`WorkoutSegments.encode`), "" for a
+    /// single-sport row. When present, `tss` and `distanceKm` are the sum over
+    /// these and every per-sport reader goes through `sportContributions`.
+    var segmentsJSON: String = ""
 
     init(
         id: String,
@@ -148,7 +152,8 @@ final class WorkoutRecord {
         tssBasis: String? = nil,
         detailsJSON: String = "",
         powerCurveJSON: String = "",
-        streamsData: Data = Data()
+        streamsData: Data = Data(),
+        segmentsJSON: String = ""
     ) {
         self.id = id
         self.source = source
@@ -172,6 +177,7 @@ final class WorkoutRecord {
         self.detailsJSON = detailsJSON
         self.powerCurveJSON = powerCurveJSON
         self.streamsData = streamsData
+        self.segmentsJSON = segmentsJSON
     }
 }
 
@@ -284,6 +290,9 @@ struct IngestedActivity: Sendable {
     /// Downsampled metric streams (`WorkoutStreams.encode`), empty when the source
     /// delivered none.
     let streamsData: Data
+    /// Multisport legs (`WorkoutSegments.encode`), "" for a single-sport activity.
+    /// Also *unscored* — the store scores each leg and sums at ingest.
+    let segmentsJSON: String
 }
 
 /// The cached, already-computed result of a stored activity — lets a resync reuse
@@ -770,15 +779,16 @@ final class TrainingDataStore {
         let tss: Double?, tssBasis: String?
         let detailsJSON: String, powerCurveJSON: String
         let streamsData: Data
+        let segmentsJSON: String
 
-        init(_ a: IngestedActivity, scored: (tss: Double?, distanceKm: Double, detailsJSON: String, basis: String?)) {
+        init(_ a: IngestedActivity, scored: ScoredActivity) {
             source = a.source; date = a.date
             startMinute = WorkoutRecord.clockMinute(fromDetails: scored.detailsJSON)
             sport = a.sport; name = a.name
             durationMinutes = a.durationMinutes; distanceKm = scored.distanceKm
             tss = scored.tss; tssBasis = scored.basis
             detailsJSON = scored.detailsJSON; powerCurveJSON = a.powerCurveJSON
-            streamsData = a.streamsData
+            streamsData = a.streamsData; segmentsJSON = scored.segmentsJSON
         }
 
         init(_ r: WorkoutRecord) {
@@ -787,7 +797,7 @@ final class TrainingDataStore {
             durationMinutes = r.durationMinutes; distanceKm = r.distanceKm
             tss = r.tss; tssBasis = r.tssBasis
             detailsJSON = r.detailsJSON; powerCurveJSON = r.powerCurveJSON
-            streamsData = r.streamsData
+            streamsData = r.streamsData; segmentsJSON = r.segmentsJSON
         }
     }
 
@@ -813,6 +823,7 @@ final class TrainingDataStore {
         record.detailsJSON = c.detailsJSON
         record.powerCurveJSON = c.powerCurveJSON
         record.streamsData = c.streamsData
+        record.segmentsJSON = c.segmentsJSON
     }
 
     /// Re-materialize the athlete's stored edits (`overridesJSON`) onto a freshly
@@ -845,14 +856,28 @@ final class TrainingDataStore {
         return String(id[id.index(after: colon)...])
     }
 
+    struct ScoredActivity {
+        let tss: Double?, distanceKm: Double, detailsJSON: String, basis: String?
+        var segmentsJSON: String = ""
+    }
+
     /// Score one incoming activity against the thresholds current on its date.
-    private static func score(_ a: IngestedActivity, history: PerformanceHistory)
-        -> (tss: Double?, distanceKm: Double, detailsJSON: String, basis: String?) {
-        guard var details = jsonObject(a.detailsJSON) else {
-            return (nil, a.distanceKm, a.detailsJSON, nil)
+    /// A multisport activity is scored per leg and summed — its parent details
+    /// carry no per-discipline data, so only the legs are scorable.
+    private static func score(_ a: IngestedActivity, history: PerformanceHistory) -> ScoredActivity {
+        let snapshot = history.snapshot(asOf: a.date)
+        if !a.segmentsJSON.isEmpty {
+            var segments = WorkoutSegments.decode(a.segmentsJSON)
+            let (km, tss, basis) = TSSScoring.scoreSegments(&segments, snapshot: snapshot)
+            return ScoredActivity(tss: tss, distanceKm: km, detailsJSON: a.detailsJSON,
+                                  basis: basis, segmentsJSON: WorkoutSegments.encode(segments))
         }
-        let (km, tss, basis) = TSSScoring.score(&details, snapshot: history.snapshot(asOf: a.date))
-        return (tss, km, jsonString(details) ?? a.detailsJSON, basis)
+        guard var details = jsonObject(a.detailsJSON) else {
+            return ScoredActivity(tss: nil, distanceKm: a.distanceKm, detailsJSON: a.detailsJSON, basis: nil)
+        }
+        let (km, tss, basis) = TSSScoring.score(&details, snapshot: snapshot)
+        return ScoredActivity(tss: tss, distanceKm: km,
+                              detailsJSON: jsonString(details) ?? a.detailsJSON, basis: basis)
     }
 
     /// Cached `(tss, detailsJSON)` for the given ids — a resync passes the ids it is

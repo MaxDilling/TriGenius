@@ -41,6 +41,45 @@ struct WorkoutStreamModel: Codable, Equatable, Identifiable {
             }
         }
     }
+
+    /// Race-wide models for a multisport session: every leg's stored bins placed
+    /// on one elapsed-race timeline (a leg's gap between end and the next start
+    /// stays nil, so the line breaks there). Only heart rate and elevation
+    /// combine — cadence, power and pace mean different things per discipline,
+    /// so one series across the legs would be a number that never existed.
+    static func raceModels(segments: [WorkoutSegment]) -> [WorkoutStreamModel] {
+        let legs = segments.compactMap { segment -> (offset: Double, decoded: WorkoutStreams.Decoded)? in
+            WorkoutStreams.decode(segment.streamsData).map { (segment.offsetSeconds, $0) }
+        }
+        let span: Double = legs.map { leg in
+            let bins: Int = leg.decoded.metrics.values.first?.count ?? 0
+            return leg.offset + Double(bins * leg.decoded.binSeconds)
+        }.max() ?? 0
+        guard span > 0 else { return [] }
+        let bin = WorkoutStreams.binSeconds(spanSeconds: span)
+        let count = Int((span / Double(bin)).rounded(.up))
+
+        return [(WorkoutStreams.Metric.heartRate, Kind.heartRate), (.elevation, .elevation)]
+            .compactMap { metric, kind in
+                var sums = [Double](repeating: 0, count: count)
+                var hits = [Int](repeating: 0, count: count)
+                for leg in legs {
+                    guard let values = leg.decoded.metrics[metric] else { continue }
+                    for (i, value) in values.enumerated() {
+                        guard let value else { continue }
+                        let center = leg.offset + (Double(i) + 0.5) * Double(leg.decoded.binSeconds)
+                        let slot = Int(center) / bin
+                        guard slot >= 0, slot < count else { continue }
+                        sums[slot] += value
+                        hits[slot] += 1
+                    }
+                }
+                guard hits.contains(where: { $0 > 0 }) else { return nil }
+                return WorkoutStreamModel(
+                    kind: kind, binSeconds: bin,
+                    values: (0..<count).map { hits[$0] == 0 ? nil : sums[$0] / Double(hits[$0]) })
+            }
+    }
 }
 
 extension WorkoutStreamModel.Kind {
@@ -109,18 +148,34 @@ extension WorkoutStreamModel.Kind {
 }
 
 struct WorkoutStreamChart: View {
+
+    /// A shaded elapsed-time span behind the trace — the legs of a multisport
+    /// session on a race-wide chart.
+    struct Band: Identifiable {
+        let start: Double
+        let end: Double
+        let color: Color
+        var id: Double { start }
+    }
+
     let model: WorkoutStreamModel
+    let bands: [Band]
 
     @State private var scrubOffset: Double?
     private let segments: [Segment]
 
-    init(model: WorkoutStreamModel) {
+    init(model: WorkoutStreamModel, bands: [Band] = []) {
         self.model = model
+        self.bands = bands
         self.segments = Self.segments(of: model)
     }
 
     var body: some View {
         Chart {
+            ForEach(bands) { band in
+                RectangleMark(xStart: .value("Start", band.start), xEnd: .value("End", band.end))
+                    .foregroundStyle(band.color.opacity(0.14))
+            }
             ForEach(segments) { segment in
                 ForEach(segment.points) { point in
                     LineMark(

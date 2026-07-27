@@ -25,6 +25,17 @@ nonisolated enum GarminTransform {
         DateFormatter.ymd.date(from: ymd)
     }
 
+    /// A Garmin GMT timestamp (`"2026-07-26T06:46:01.0"`). Backs the multisport
+    /// leg offsets, so it must parse the fractional second Garmin always emits.
+    static func timestamp(_ value: Any?) -> Date? {
+        guard let string = value as? String else { return nil }
+        let parser = DateFormatter()
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.timeZone = TimeZone(identifier: "GMT")
+        parser.dateFormat = "yyyy-MM-dd'T'HH:mm:ss.S"
+        return parser.date(from: string)
+    }
+
     /// Convert speed in m/s into pace (mm:ss) for the requested reference distance.
     static func speedToPace(_ speedMps: Double?, distanceM: Double = 1000) -> String? {
         guard let speedMps, speedMps > 0 else { return nil }
@@ -123,10 +134,13 @@ nonisolated enum GarminTransform {
         return segments
     }
 
-    /// (offset-from-first-sample seconds, value) samples for a named detail metric —
+    /// (offset-from-activity-start seconds, value) samples for a named detail metric —
     /// the stream shape `WorkoutStreams` bins. Offsets come from `directTimestamp`
-    /// (ms), falling back to the row index (the detail grid is ~1 Hz); null-value
-    /// rows are skipped, so recording gaps stay empty bins.
+    /// (ms) against the **first row's** timestamp, falling back to the row index (the
+    /// detail grid is ~1 Hz); null-value rows are skipped, so recording gaps stay
+    /// empty bins. The origin is the activity, not the metric: a metric that only
+    /// starts partway in (power on a triathlon's bike leg) must keep its place on the
+    /// timeline, or every bin lands under the wrong moment of the workout.
     static func metricSamples(_ details: [String: Any], key: String) -> [(offset: Double, value: Double)] {
         guard let descriptors = details["metricDescriptors"] as? [[String: Any]],
               let rows = details["activityDetailMetrics"] as? [[String: Any]],
@@ -138,16 +152,19 @@ nonisolated enum GarminTransform {
         guard let valueIdx = indexes[key] else { return [] }
         let timestampIdx = indexes["directTimestamp"]
 
-        var firstTimestamp: Double?
+        func timestamp(_ metrics: [Any]) -> Double? {
+            guard let ti = timestampIdx, ti < metrics.count else { return nil }
+            return (metrics[ti] as? NSNumber)?.doubleValue
+        }
+        let firstTimestamp = rows.lazy.compactMap { ($0["metrics"] as? [Any]).flatMap(timestamp) }.first
+
         var samples: [(offset: Double, value: Double)] = []
         for (rowIndex, row) in rows.enumerated() {
             guard let metrics = row["metrics"] as? [Any], valueIdx < metrics.count,
                   let value = (metrics[valueIdx] as? NSNumber)?.doubleValue else { continue }
             var offset = Double(rowIndex)
-            if let ti = timestampIdx, ti < metrics.count,
-               let ts = (metrics[ti] as? NSNumber)?.doubleValue {
-                if firstTimestamp == nil { firstTimestamp = ts }
-                offset = (ts - firstTimestamp!) / 1000
+            if let firstTimestamp, let ts = timestamp(metrics) {
+                offset = (ts - firstTimestamp) / 1000
             }
             samples.append((offset, value))
         }
@@ -497,5 +514,35 @@ nonisolated enum GarminTransform {
             intervals.append(entry)
         }
         return intervals
+    }
+
+    // MARK: - Activity DTO → list schema
+    //
+    // The `/activity/{id}` DTO nests its summary in `summaryDTO` and uses
+    // different key spellings than the activity-list entries every formatter
+    // reads. This shapes one into the other — pure renaming, no computation — so
+    // a multisport parent's children (which the list never returns) run through
+    // the same `formatActivityRecord` as any other activity. Keys the detail DTO
+    // doesn't carry (time-in-zone) stay absent.
+
+    static func flattenActivity(_ dto: [String: Any]) -> [String: Any] {
+        let summary = dto["summaryDTO"] as? [String: Any] ?? [:]
+        var out: [String: Any] = summary
+        out["activityId"] = dto["activityId"] ?? NSNull()
+        out["activityName"] = dto["activityName"] ?? NSNull()
+        out["activityType"] = dto["activityTypeDTO"] ?? NSNull()
+        out["locationName"] = dto["locationName"] ?? NSNull()
+        out["description"] = dto["description"] ?? NSNull()
+        // List-entry spellings for the values the summary names differently.
+        for (listKey, summaryKey) in [
+            ("avgPower", "averagePower"),
+            ("normPower", "normalizedPower"),
+            ("averageRunningCadenceInStepsPerMinute", "averageRunCadence"),
+            ("maxRunningCadenceInStepsPerMinute", "maxRunCadence"),
+            ("avgBikingCadenceInRevPerMinute", "averageBikeCadence")
+        ] where summary[summaryKey] != nil {
+            out[listKey] = summary[summaryKey]!
+        }
+        return out
     }
 }

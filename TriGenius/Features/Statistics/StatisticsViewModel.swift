@@ -64,9 +64,8 @@ final class StatisticsViewModel {
     }
 
     private func rebuildZones() {
-        let sportRecords = records.filter { SportFamily(sportKey: $0.sport) == zoneSport }
-        zoneHR = ZoneDistribution.aggregate(records: sportRecords, source: .heartRate)
-        zonePower = ZoneDistribution.aggregate(records: sportRecords, source: .power)
+        zoneHR = ZoneDistribution.aggregate(records: records, source: .heartRate, family: zoneSport)
+        zonePower = ZoneDistribution.aggregate(records: records, source: .power, family: zoneSport)
     }
 
 }

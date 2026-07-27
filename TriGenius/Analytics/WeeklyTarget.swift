@@ -217,11 +217,12 @@ enum WeeklyTargets {
         // Completed so far this week.
         let weekCompleted = store.activities(from: weekStart, to: weekEnd)
         for record in weekCompleted {
-            let family = SportFamily(sportKey: record.sport)
-            var p = out[family] ?? WeeklyProjection()
-            p.actualTSS += TSS.value(for: record) ?? 0
-            p.actualKm += record.distanceKm
-            out[family] = p
+            for c in record.sportContributions {
+                var p = out[c.family] ?? WeeklyProjection()
+                p.actualTSS += c.tss
+                p.actualKm += c.distanceKm
+                out[c.family] = p
+            }
         }
 
         // Still-planned for today + the remaining days. `openScheduledWorkouts`

@@ -136,9 +136,8 @@ struct ZonesChatCard: View {
             let now = Date()
             guard let start = TrainingVolume.recentWeekStarts(weeks: weeks, today: now).first else { return }
             let records = TrainingDataStore.shared.activities(from: start, to: now)
-                .filter { SportFamily(sportKey: $0.sport) == sport }
-            hr = ZoneDistribution.aggregate(records: records, source: .heartRate)
-            power = ZoneDistribution.aggregate(records: records, source: .power)
+            hr = ZoneDistribution.aggregate(records: records, source: .heartRate, family: sport)
+            power = ZoneDistribution.aggregate(records: records, source: .power, family: sport)
             loaded = true
         }
     }

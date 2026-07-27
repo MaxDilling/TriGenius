@@ -91,15 +91,56 @@ nonisolated final class GarminService: Sendable {
         return detail
     }
 
-    private func formatActivityRecord(_ activity: [String: Any]) async -> (rec: [String: Any], powerCurveJSON: String, streamsData: Data) {
+    /// The legs of a multisport parent, shaped into segments. Garmin files each leg
+    /// (and each transition) as its own activity, reachable only via the parent's
+    /// `metadataDTO.childIds` — the activity list returns the parent alone. Each
+    /// child runs through `formatActivityRecord` unchanged, so a leg produces the
+    /// same record it would as a standalone activity, keeps its own streams and
+    /// scores the same TSS. Returns the segments plus the bike leg's power curve
+    /// (the only leg whose power belongs under the cycling key). ("", "") when not
+    /// a multisport parent.
+    private func multisportSegments(_ activity: [String: Any], id: String?) async -> (segmentsJSON: String, powerCurveJSON: String) {
+        // The list entry only *flags* a multisport parent (`parent: true`); the
+        // child ids live in the activity's own DTO, so that costs one extra fetch —
+        // for parents only, and only for activities the cache didn't cover.
+        guard activity["parent"] as? Bool == true, let id,
+              let dto = try? await client.getActivity(id: id),
+              let metadata = dto["metadataDTO"] as? [String: Any],
+              let childIds = metadata["childIds"] as? [Any], !childIds.isEmpty,
+              let parentStart = GarminTransform.timestamp((dto["summaryDTO"] as? [String: Any])?["startTimeGMT"])
+        else { return ("", "") }
+
+        var segments: [WorkoutSegment] = []
         var powerCurveJSON = ""
+        for child in childIds {
+            guard let dto = try? await client.getActivity(id: "\(child)") else { continue }
+            let flat = GarminTransform.flattenActivity(dto)
+            let (rec, childCurve, childStreams, _) = await formatActivityRecord(flat)
+            if rec["cycling"] != nil, !childCurve.isEmpty { powerCurveJSON = childCurve }
+            let start = GarminTransform.timestamp((dto["summaryDTO"] as? [String: Any])?["startTimeGMT"]) ?? parentStart
+            segments.append(WorkoutSegment(
+                offsetSeconds: start.timeIntervalSince(parentStart),
+                sourceId: "garmin:\(child)", details: rec, streamsData: childStreams))
+        }
+        return (WorkoutSegments.encode(segments.sorted { $0.offsetSeconds < $1.offsetSeconds }), powerCurveJSON)
+    }
+
+    private func formatActivityRecord(_ activity: [String: Any]) async
+        -> (rec: [String: Any], powerCurveJSON: String, streamsData: Data, segmentsJSON: String) {
         let startTime = activity["startTimeLocal"] as? String ?? ""
         let activityType = (activity["activityType"] as? [String: Any])?["typeKey"] as? String ?? "unknown"
         let activityId = activity["activityId"].map { "\($0)" }
+
+        // A multisport parent carries no per-discipline data of its own — its legs
+        // do, as segments. The bike leg's power curve becomes the row's.
+        let (segmentsJSON, legPowerCurve) = await multisportSegments(activity, id: activityId)
+        var powerCurveJSON = legPowerCurve
+
         // One full-details fetch feeds NGP, the power curve and the metric streams
-        // (callers gate this function to new/forced activities only).
+        // (callers gate this function to new/forced activities only). A parent needs
+        // none of the three — each leg fetched its own — so it skips the fetch.
         var details: [String: Any]?
-        if let activityId { details = try? await fetchFullDetails(id: activityId) }
+        if let activityId, segmentsJSON.isEmpty { details = try? await fetchFullDetails(id: activityId) }
 
         func intOrNull(_ key: String) -> Any { Coerce.double(activity[key]).map { Int($0.rounded()) } ?? NSNull() }
 
@@ -115,7 +156,6 @@ nonisolated final class GarminService: Sendable {
             "location": activity["locationName"] ?? NSNull(),
             "avg_hr": intOrNull("averageHR"),
             "max_hr": intOrNull("maxHR"),
-            "training_load": intOrNull("activityTrainingLoad"),
             "elevation_gain_m": intOrNull("elevationGain"),
             "elevation_loss_m": intOrNull("elevationLoss")
         ]
@@ -233,7 +273,7 @@ nonisolated final class GarminService: Sendable {
             streamsData = WorkoutStreams.encode(
                 spanSeconds: Coerce.double(activity["duration"]) ?? 0, metrics: metrics)
         }
-        return (data, powerCurveJSON, streamsData)
+        return (data, powerCurveJSON, streamsData, segmentsJSON)
     }
 
     /// Garmin feel buckets (0/25/50/75/100) → 1–5. Nil when not rated.
@@ -254,7 +294,8 @@ nonisolated final class GarminService: Sendable {
     /// effective distance are computed by the store at ingest
     /// (`TrainingDataStore.ingest`), scored against the activity's own date. Returns
     /// nil without an id/date.
-    private func ingestDTO(from rec: [String: Any], powerCurveJSON: String, streamsData: Data) -> IngestedActivity? {
+    private func ingestDTO(from rec: [String: Any], powerCurveJSON: String, streamsData: Data,
+                           segmentsJSON: String = "") -> IngestedActivity? {
         guard let idNum = rec["id"] as? NSNumber else { return nil }
         guard let dateStr = rec["date"] as? String, let date = GarminTransform.date(from: dateStr) else { return nil }
         let detailsJSON = (try? JSONSerialization.data(withJSONObject: rec))
@@ -269,7 +310,8 @@ nonisolated final class GarminService: Sendable {
             distanceKm: (rec["distance_km"] as? NSNumber)?.doubleValue ?? 0,
             detailsJSON: detailsJSON,
             powerCurveJSON: powerCurveJSON,
-            streamsData: streamsData
+            streamsData: streamsData,
+            segmentsJSON: segmentsJSON
         )
     }
 
@@ -311,10 +353,11 @@ nonisolated final class GarminService: Sendable {
                     // fetch inside formatActivityRecord. One span per activity, so the
                     // timeline shows whether these round-trips are the launch bottleneck.
                     let dp = Perf.begin("garmin.activityDetail")
-                    let (rec, powerCurveJSON, streamsData) = await formatActivityRecord(activity)
+                    let (rec, powerCurveJSON, streamsData, segmentsJSON) = await formatActivityRecord(activity)
                     Perf.end(dp)
                     formatted.append(rec)
-                    if let dto = ingestDTO(from: rec, powerCurveJSON: powerCurveJSON, streamsData: streamsData) { toIngest.append(dto) }
+                    if let dto = ingestDTO(from: rec, powerCurveJSON: powerCurveJSON,
+                                           streamsData: streamsData, segmentsJSON: segmentsJSON) { toIngest.append(dto) }
                 }
                 if formatted.count >= count { break }
             }
@@ -352,10 +395,11 @@ nonisolated final class GarminService: Sendable {
             for activity in raw {
                 let gid = (activity["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" }
                 if !force, let gid, cache[gid] != nil { continue }   // cache: skip known
-                let (formatted, powerCurveJSON, streamsData) = await formatActivityRecord(activity)
+                let (formatted, powerCurveJSON, streamsData, segmentsJSON) = await formatActivityRecord(activity)
                 // TSS + effective distance are scored by the store at ingest; the
                 // athlete's manual edits re-apply there from the override layer.
-                if let dto = ingestDTO(from: formatted, powerCurveJSON: powerCurveJSON, streamsData: streamsData) { toIngest.append(dto) }
+                if let dto = ingestDTO(from: formatted, powerCurveJSON: powerCurveJSON,
+                                       streamsData: streamsData, segmentsJSON: segmentsJSON) { toIngest.append(dto) }
             }
             await TrainingDataStore.shared.ingest(toIngest)
             return toIngest.count

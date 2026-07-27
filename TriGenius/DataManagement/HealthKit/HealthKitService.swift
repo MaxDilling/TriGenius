@@ -94,7 +94,9 @@ final class HealthKitService {
         for workout in workouts {
             let bounds = HRZones.upperBounds(snapshot: history.snapshot(asOf: workout.startDate))
             let (rec, powerCurveJSON, streamsData) = try await normalizedRecord(for: workout, hrZoneBounds: bounds)
-            if let dto = Self.ingestDTO(from: rec, powerCurveJSON: powerCurveJSON, streamsData: streamsData) { out.append(dto) }
+            let segments = await segmentsJSON(for: workout, hrZoneBounds: bounds)
+            if let dto = Self.ingestDTO(from: rec, powerCurveJSON: powerCurveJSON,
+                                        streamsData: streamsData, segmentsJSON: segments) { out.append(dto) }
         }
         return out
     }
@@ -117,13 +119,15 @@ final class HealthKitService {
         guard let workout else { return nil }
         let bounds = HRZones.upperBounds(snapshot: history.snapshot(asOf: workout.startDate))
         let (rec, powerCurveJSON, streamsData) = try await normalizedRecord(for: workout, hrZoneBounds: bounds)
-        return Self.ingestDTO(from: rec, powerCurveJSON: powerCurveJSON, streamsData: streamsData)
+        return Self.ingestDTO(from: rec, powerCurveJSON: powerCurveJSON, streamsData: streamsData,
+                              segmentsJSON: await segmentsJSON(for: workout, hrZoneBounds: bounds))
     }
 
     /// Wrap a normalized record into an unscored `IngestedActivity` (mirrors
     /// `GarminService.ingestDTO`); the store computes TSS + effective distance from
     /// `detailsJSON` at ingest. Nil without an id/date.
-    private static func ingestDTO(from rec: [String: Any], powerCurveJSON: String, streamsData: Data) -> IngestedActivity? {
+    private static func ingestDTO(from rec: [String: Any], powerCurveJSON: String, streamsData: Data,
+                                  segmentsJSON: String = "") -> IngestedActivity? {
         guard let id = rec["id"] as? String,
               let dateStr = rec["date"] as? String, let date = DateFormatter.ymd.date(from: dateStr) else { return nil }
         let detailsJSON = (try? JSONSerialization.data(withJSONObject: rec))
@@ -138,7 +142,8 @@ final class HealthKitService {
             distanceKm: (rec["distance_km"] as? NSNumber)?.doubleValue ?? 0,
             detailsJSON: detailsJSON,
             powerCurveJSON: powerCurveJSON,
-            streamsData: streamsData
+            streamsData: streamsData,
+            segmentsJSON: segmentsJSON
         )
     }
 
@@ -153,31 +158,65 @@ final class HealthKitService {
     // `hrZoneBounds` (z1–z4 upper bpm, derived by the caller from the athlete's
     // thresholds for the activity's date) drives time-in-zone; pass nil to omit it.
 
-    func normalizedRecord(for workout: HKWorkout, hrZoneBounds: [Double]?) async throws -> (record: [String: Any], powerCurveJSON: String, streamsData: Data) {
+    /// The sample window a record is built from: a whole workout, or one leg of a
+    /// multisport session. A leg is scoped by *date* — HealthKit associates every
+    /// sample with the parent workout, so the object predicate can't narrow it.
+    struct SampleScope {
+        let workout: HKWorkout
+        let activity: HKWorkoutActivity?
+
+        var start: Date { activity?.startDate ?? workout.startDate }
+        var end: Date { activity?.endDate ?? workout.endDate }
+        var duration: TimeInterval { activity == nil ? workout.duration : end.timeIntervalSince(start) }
+        var activityType: HKWorkoutActivityType {
+            activity?.workoutConfiguration.activityType ?? workout.workoutActivityType
+        }
+        var metadata: [String: Any]? { activity?.metadata ?? workout.metadata }
+        var objectPredicate: NSPredicate? {
+            activity == nil ? HKQuery.predicateForObjects(from: workout) : nil
+        }
+        func statistics(for type: HKQuantityType) -> HKStatistics? {
+            activity.map { $0.statistics(for: type) } ?? workout.statistics(for: type)
+        }
+    }
+
+    func normalizedRecord(for workout: HKWorkout, activity: HKWorkoutActivity? = nil,
+                          hrZoneBounds: [Double]?) async throws -> (record: [String: Any], powerCurveJSON: String, streamsData: Data) {
         var powerCurveJSON = ""
-        let sport = Self.sportName(for: workout.workoutActivityType)
+        let scope = SampleScope(workout: workout, activity: activity)
+        let sport = Self.sportName(for: scope.activityType)
         let family = SportFamily(sportKey: sport)
-        let durationMin = workout.duration / 60
-        let distanceM = workout.totalDistance?.doubleValue(for: .meter())
+        let durationMin = scope.duration / 60
+        // A leg carries no `totalDistance` of its own; it comes from the distance
+        // type of its own discipline (a transition has none — stays nil).
+        let legDistanceType: HKQuantityTypeIdentifier? = switch family {
+        case .run: .distanceWalkingRunning
+        case .bike: .distanceCycling
+        case .swim: .distanceSwimming
+        case .strength, .other: nil
+        }
+        let distanceM = activity == nil
+            ? workout.totalDistance?.doubleValue(for: .meter())
+            : legDistanceType.flatMap { scope.statistics(for: HKQuantityType($0))?.sumQuantity()?.doubleValue(for: .meter()) }
         let bpm = HKUnit.count().unitDivided(by: .minute())
         let mps = HKUnit.meter().unitDivided(by: .second())
         let rpm = HKUnit.count().unitDivided(by: .minute())
 
         func avg(_ id: HKQuantityTypeIdentifier, _ unit: HKUnit) -> Double? {
-            workout.statistics(for: HKQuantityType(id))?.averageQuantity()?.doubleValue(for: unit)
+            scope.statistics(for: HKQuantityType(id))?.averageQuantity()?.doubleValue(for: unit)
         }
         func peak(_ id: HKQuantityTypeIdentifier, _ unit: HKUnit) -> Double? {
-            workout.statistics(for: HKQuantityType(id))?.maximumQuantity()?.doubleValue(for: unit)
+            scope.statistics(for: HKQuantityType(id))?.maximumQuantity()?.doubleValue(for: unit)
         }
         func total(_ id: HKQuantityTypeIdentifier, _ unit: HKUnit) -> Double? {
-            workout.statistics(for: HKQuantityType(id))?.sumQuantity()?.doubleValue(for: unit)
+            scope.statistics(for: HKQuantityType(id))?.sumQuantity()?.doubleValue(for: unit)
         }
 
         var data: [String: Any] = [
             "id": workout.uuid.uuidString,
             "name": sport,
-            "date": DateFormatter.ymd.string(from: workout.startDate),
-            "time": Self.clock.string(from: workout.startDate),
+            "date": DateFormatter.ymd.string(from: scope.start),
+            "time": Self.clock.string(from: scope.start),
             "sport": sport,
             "duration_minutes": Self.round1(durationMin),
             "distance_km": distanceM.map { Self.round2($0 / 1000) } ?? NSNull(),
@@ -185,14 +224,14 @@ final class HealthKitService {
             "avg_hr": avg(.heartRate, bpm).map { Int($0.rounded()) } ?? NSNull(),
             "max_hr": peak(.heartRate, bpm).map { Int($0.rounded()) } ?? NSNull(),
         ]
-        if let ascended = (workout.metadata?[HKMetadataKeyElevationAscended] as? HKQuantity)?
+        if let ascended = (scope.metadata?[HKMetadataKeyElevationAscended] as? HKQuantity)?
             .doubleValue(for: .meter()), ascended > 0 {
             data["elevation_gain_m"] = Int(ascended.rounded())
         }
         // High-res HR stream (≈ 1 s): feeds time-in-zone (when bounds exist) and
         // the heart-rate stream for the detail chart.
-        let start = workout.startDate
-        let hrSeries = (try? await fetchHeartRateSeries(during: workout)) ?? []
+        let start = scope.start
+        let hrSeries = (try? await fetchHeartRateSeries(during: scope)) ?? []
         if let hrZoneBounds, let zones = HRZones.timeInZoneSeconds(hrSeries, upperBounds: hrZoneBounds) {
             data["hr_zones_seconds"] = zones
         }
@@ -215,7 +254,7 @@ final class HealthKitService {
             // number, not a normalized one). One fetch feeds NGP and the speed stream
             // (the chart carries the RAW moving speed — grade adjustment is a scoring
             // transform, not a measurement).
-            if let stream = try? await speedStream(during: workout) {
+            if let stream = try? await speedStream(during: scope) {
                 if let normSpeed = NormalizedStream.normalized(stream.samples), normSpeed > 0 {
                     running["normalized_pace_s_per_km"] = Self.round1(1000.0 / normSpeed)
                 }
@@ -224,9 +263,9 @@ final class HealthKitService {
                         stream.raw.map { (start: $0.start, duration: $0.seconds, value: $0.speed) }, from: start)
                 }
             }
-            let power = (try? await quantityIntervalSeries(.runningPower, unit: .watt(), during: workout)) ?? []
+            let power = (try? await quantityIntervalSeries(.runningPower, unit: .watt(), during: scope)) ?? []
             if !power.isEmpty { metrics[.power] = Self.streamSamples(power, from: start) }
-            let steps = ((try? await quantityIntervalSeries(.stepCount, unit: .count(), during: workout)) ?? [])
+            let steps = ((try? await quantityIntervalSeries(.stepCount, unit: .count(), during: scope)) ?? [])
                 .filter { $0.duration > 0 }
                 .map { (start: $0.start, duration: $0.duration, value: $0.value / $0.duration * 60) }
             if !steps.isEmpty { metrics[.cadence] = Self.streamSamples(steps, from: start) }
@@ -243,16 +282,16 @@ final class HealthKitService {
             // toward NP (the TrainingPeaks convention; unlike pace, where a stop is
             // not "slow running"), each reading covering its own real interval — and
             // the max-mean power curve. Absent NP, TSS falls back to HR zones.
-            let series = (try? await quantityIntervalSeries(.cyclingPower, unit: .watt(), during: workout)) ?? []
+            let series = (try? await quantityIntervalSeries(.cyclingPower, unit: .watt(), during: scope)) ?? []
             if let np = NormalizedStream.normalized(series.map { (value: $0.value, seconds: $0.duration) }) {
                 cycling["normalized_power_w"] = Int(np.rounded())
             }
             powerCurveJSON = PowerCurve.encode(PowerCurve.maxMeans(segments: Self.powerSegments(series)))
             if !series.isEmpty { metrics[.power] = Self.streamSamples(series, from: start) }
-            let speed = ((try? await quantityIntervalSeries(.cyclingSpeed, unit: mps, during: workout)) ?? [])
+            let speed = ((try? await quantityIntervalSeries(.cyclingSpeed, unit: mps, during: scope)) ?? [])
                 .filter { $0.value >= 0 }
             if !speed.isEmpty { metrics[.speed] = Self.streamSamples(speed, from: start) }
-            let cadence = (try? await quantityIntervalSeries(.cyclingCadence, unit: rpm, during: workout)) ?? []
+            let cadence = (try? await quantityIntervalSeries(.cyclingCadence, unit: rpm, during: scope)) ?? []
             if !cadence.isEmpty { metrics[.cadence] = Self.streamSamples(cadence, from: start) }
             if !cycling.isEmpty { data["cycling"] = cycling }
         case .swim:
@@ -271,10 +310,31 @@ final class HealthKitService {
         }
         // Altitude profile from the GPS route (outdoor run/ride only).
         if family == .run || family == .bike,
-           let route = try? await routeLocations(during: workout), route.count >= 2 {
+           let route = try? await routeLocations(during: scope), route.count >= 2 {
             metrics[.elevation] = route.map { ($0.timestamp.timeIntervalSince(start), $0.altitude) }
         }
-        return (data, powerCurveJSON, WorkoutStreams.encode(spanSeconds: workout.duration, metrics: metrics))
+        return (data, powerCurveJSON, WorkoutStreams.encode(spanSeconds: scope.duration, metrics: metrics))
+    }
+
+    /// The legs of a multisport session (`.swimBikeRun` and the transitions in
+    /// between), each shaped by `normalizedRecord` exactly like a standalone
+    /// workout — so a leg scores the same TSS it would on its own. "" when this
+    /// workout isn't multisport; a single-activity workout is not a session.
+    private func segmentsJSON(for workout: HKWorkout, hrZoneBounds: [Double]?) async -> String {
+        let activities = workout.workoutActivities
+        guard activities.count > 1 else { return "" }
+        var segments: [WorkoutSegment] = []
+        for (index, activity) in activities.enumerated() {
+            guard let (rec, _, _) = try? await normalizedRecord(
+                for: workout, activity: activity, hrZoneBounds: hrZoneBounds) else { continue }
+            var details = rec
+            details["id"] = "\(workout.uuid.uuidString)#\(index)"
+            segments.append(WorkoutSegment(
+                offsetSeconds: activity.startDate.timeIntervalSince(workout.startDate),
+                sourceId: details["id"] as? String,
+                details: details))
+        }
+        return WorkoutSegments.encode(segments)
     }
 
     /// Offset samples for `WorkoutStreams`: each interval reading repeated once per
@@ -317,7 +377,8 @@ final class HealthKitService {
     func speedStreamDiagnostics(forWorkoutID id: String) async -> [String: Any]? {
         guard let workout = try? await fetchWorkout(id: id),
               SportFamily(sportKey: Self.sportName(for: workout.workoutActivityType)) == .run,
-              let stream = try? await speedStream(during: workout) else { return nil }
+              let stream = try? await speedStream(during: SampleScope(workout: workout, activity: nil))
+        else { return nil }
         var d = NormalizedStream.diagnostics(stream.samples)
         d["source"] = stream.source
         if let m = d["mean_value"] as? Double, m > 0 { d["mean_pace_s_per_km"] = Self.round1(1000.0 / m) }
@@ -337,10 +398,10 @@ final class HealthKitService {
     /// running pace is over moving time, and counting paused time pulls the normalized
     /// speed below the moving average (impossible for a real normalized value). Empty
     /// when neither stream exists.
-    private func speedStream(during workout: HKWorkout) async throws
+    private func speedStream(during scope: SampleScope) async throws
         -> (source: String, raw: [(start: Date, speed: Double, seconds: Double)], samples: [NormalizedStream.Sample]) {
         let mps = HKUnit.meter().unitDivided(by: .second())
-        let running = try await quantityIntervalSeries(.runningSpeed, unit: mps, during: workout)
+        let running = try await quantityIntervalSeries(.runningSpeed, unit: mps, during: scope)
             .filter { $0.duration > 0 && $0.value > 0 }
         let source: String
         let raw: [(start: Date, speed: Double, seconds: Double)]
@@ -351,13 +412,13 @@ final class HealthKitService {
             // No speed series: per-interval speed from the distance stream (a paused
             // interval covers ~0 distance → ~0 speed → dropped by the same moving filter).
             source = "distanceWalkingRunning"
-            raw = try await quantityIntervalSeries(.distanceWalkingRunning, unit: .meter(), during: workout)
+            raw = try await quantityIntervalSeries(.distanceWalkingRunning, unit: .meter(), during: scope)
                 .filter { $0.duration > 0 && $0.value > 0 }
                 .map { (start: $0.start, speed: $0.value / $0.duration, seconds: $0.duration) }
         }
         guard !raw.isEmpty else { return (source, [], []) }
 
-        let grades = (try? await routeGradeSegments(during: workout)) ?? []
+        let grades = (try? await routeGradeSegments(during: scope)) ?? []
         let paired = raw.map {
             (speed: $0.speed, grade: Self.grade(at: $0.start, in: grades), seconds: $0.seconds)
         }
@@ -369,8 +430,8 @@ final class HealthKitService {
     /// `GradeAdjustedPace.smoothedGrades` value (central difference over a fixed horizontal
     /// span, not the raw point-to-point delta, which GPS/barometer noise would bias upward
     /// through the convex cost factor). Empty for indoor runs (no route).
-    private func routeGradeSegments(during workout: HKWorkout) async throws -> [(start: Date, end: Date, grade: Double)] {
-        let locations = try await routeLocations(during: workout).sorted { $0.timestamp < $1.timestamp }
+    private func routeGradeSegments(during scope: SampleScope) async throws -> [(start: Date, end: Date, grade: Double)] {
+        let locations = try await routeLocations(during: scope).sorted { $0.timestamp < $1.timestamp }
         guard locations.count >= 2 else { return [] }
         var distance = [0.0]
         var altitude = [locations[0].altitude]
@@ -400,10 +461,10 @@ final class HealthKitService {
 
     /// The workout's GPS route as `CLLocation`s (altitude + timestamp), via the
     /// `workoutRoute` series sample. Empty when the workout has no route (indoor).
-    private func routeLocations(during workout: HKWorkout) async throws -> [CLLocation] {
+    private func routeLocations(during scope: SampleScope) async throws -> [CLLocation] {
         let routes: [HKWorkoutRoute] = try await withCheckedThrowingContinuation { continuation in
             let query = HKSampleQuery(sampleType: HKSeriesType.workoutRoute(),
-                                      predicate: HKQuery.predicateForObjects(from: workout),
+                                      predicate: scope.objectPredicate ?? HKQuery.predicateForSamples(withStart: scope.start, end: scope.end),
                                       limit: HKObjectQueryNoLimit, sortDescriptors: nil) { _, samples, error in
                 if let error { continuation.resume(throwing: error); return }
                 continuation.resume(returning: (samples as? [HKWorkoutRoute]) ?? [])
@@ -435,11 +496,13 @@ final class HealthKitService {
     /// back to the time range for older/third-party workouts that don't associate their
     /// samples with the workout (else the scoped query is empty).
     private func quantityIntervalSeries(_ id: HKQuantityTypeIdentifier, unit: HKUnit,
-                                        during workout: HKWorkout) async throws -> [(start: Date, duration: TimeInterval, value: Double)] {
-        let scoped = try await intervalSeries(id, unit: unit, predicate: HKQuery.predicateForObjects(from: workout))
-        if !scoped.isEmpty { return scoped }
+                                        during scope: SampleScope) async throws -> [(start: Date, duration: TimeInterval, value: Double)] {
+        if let objects = scope.objectPredicate {
+            let scoped = try await intervalSeries(id, unit: unit, predicate: objects)
+            if !scoped.isEmpty { return scoped }
+        }
         return try await intervalSeries(id, unit: unit,
-                                        predicate: HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate))
+                                        predicate: HKQuery.predicateForSamples(withStart: scope.start, end: scope.end))
     }
 
     private func intervalSeries(_ id: HKQuantityTypeIdentifier, unit: HKUnit,
@@ -486,9 +549,9 @@ final class HealthKitService {
     /// the same beat-to-beat series the CSV export and Apple Health show (≈ 1 s),
     /// not the ≈ 2.5 min aggregated samples a plain `HKSampleQuery` returns. Backs
     /// both the detail chart and the time-in-zone bucketing.
-    func fetchHeartRateSeries(during workout: HKWorkout) async throws -> [HeartRateSample] {
+    func fetchHeartRateSeries(during scope: SampleScope) async throws -> [HeartRateSample] {
         let unit = HKUnit.count().unitDivided(by: HKUnit.minute())
-        return try await quantitySeries(.heartRate, unit: unit, during: workout)
+        return try await quantitySeries(.heartRate, unit: unit, during: scope)
             .map { HeartRateSample(date: $0.date, bpm: $0.value) }
     }
 
@@ -496,9 +559,9 @@ final class HealthKitService {
     /// quantity series for the workout's interval (HR, power, …). Each point is
     /// timestamped at its interval start.
     private func quantitySeries(_ id: HKQuantityTypeIdentifier, unit: HKUnit,
-                                during workout: HKWorkout) async throws -> [(date: Date, value: Double)] {
+                                during scope: SampleScope) async throws -> [(date: Date, value: Double)] {
         let type = HKQuantityType(id)
-        let predicate = HKQuery.predicateForSamples(withStart: workout.startDate, end: workout.endDate)
+        let predicate = HKQuery.predicateForSamples(withStart: scope.start, end: scope.end)
         return try await withCheckedThrowingContinuation { continuation in
             let box = SeriesBox<(date: Date, value: Double)>()
             let query = HKQuantitySeriesSampleQuery(quantityType: type, predicate: predicate) {
@@ -683,6 +746,10 @@ final class HealthKitService {
         case .walking: return "Walking"
         case .hiking: return "Hiking"
         case .traditionalStrengthTraining, .functionalStrengthTraining: return "Strength"
+        // Multisport: the parent session and the legs in between. Matches Garmin's
+        // `multi_sport` / `transition` sport keys so both sources agree.
+        case .swimBikeRun: return "multi_sport"
+        case .transition: return "transition"
         default: return "Workout"
         }
     }

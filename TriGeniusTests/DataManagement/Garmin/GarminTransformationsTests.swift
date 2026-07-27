@@ -98,3 +98,90 @@ private let realSwimLaps: [[String: Any]] = [
     let rests = intervals.filter { ($0["is_rest"] as? Bool) == true }
     #expect(rests.map { $0["time_sec"] as? Double } == [50.4, 30.3])
 }
+
+// MARK: - flattenActivity
+//
+// Pins the key renaming that lets a multisport parent's children (fetched from
+// `/activity/{id}`, whose summary is nested and differently spelled) run through
+// the same formatter as an activity-list entry. Values are lifted verbatim from
+// the real bike leg in ref/garmin_api/multisportChild_bike.json.
+
+private let bikeChildDTO: [String: Any] = [
+    "activityId": 23736636527,
+    "activityName": "Road Cycling",
+    "parentId": 23736636815,
+    "locationName": "Wörthsee",
+    "activityTypeDTO": ["typeId": 10, "typeKey": "road_biking"],
+    "summaryDTO": [
+        "startTimeLocal": "2026-07-26T09:32:48.0",
+        "startTimeGMT": "2026-07-26T07:32:48.0",
+        "distance": 43850.08, "duration": 4937.983,
+        "averageSpeed": 8.88, "maxSpeed": 16.945,
+        "averagePower": 224.0, "maxPower": 872.0, "normalizedPower": 252.0,
+        "averageHR": 160.0, "maxHR": 176.0, "calories": 1218.0,
+        "elevationGain": 524.29, "elevationLoss": 536.74,
+        "averageBikeCadence": 80.0
+    ]
+]
+
+@Test func flattenActivity_liftsTheSummaryAndRenamesToListKeys() {
+    let flat = GarminTransform.flattenActivity(bikeChildDTO)
+    #expect((flat["activityType"] as? [String: Any])?["typeKey"] as? String == "road_biking")
+    #expect(flat["startTimeLocal"] as? String == "2026-07-26T09:32:48.0")
+    #expect(Coerce.double(flat["duration"]) == 4937.983)
+    #expect(Coerce.double(flat["distance"]) == 43850.08)
+    // The renames the formatter depends on: without them the bike leg would lose
+    // its normalized power and score no power TSS.
+    #expect(Coerce.double(flat["avgPower"]) == 224.0)
+    #expect(Coerce.double(flat["normPower"]) == 252.0)
+    #expect(flat["locationName"] as? String == "Wörthsee")
+    // The detail DTO spells bike cadence `averageBikeCadence`, not the list's
+    // `averageBikingCadenceInRevPerMinute`.
+    #expect(Coerce.double(flat["avgBikingCadenceInRevPerMinute"]) == 80.0)
+}
+
+@Test func flattenActivity_keysTheDTOLacksStayAbsent() {
+    let flat = GarminTransform.flattenActivity(bikeChildDTO)
+    // Children carry no time-in-zone — absence must stay absence, not a zero dict.
+    #expect(flat["hrTimeInZone_1"] == nil)
+    #expect(flat["averageRunningCadenceInStepsPerMinute"] == nil)
+}
+
+@Test func timestamp_parsesGarminsFractionalGMTStamp() {
+    let start = GarminTransform.timestamp("2026-07-26T06:46:01.0")
+    let bikeStart = GarminTransform.timestamp("2026-07-26T07:32:48.0")
+    #expect(start != nil)
+    // The swim→bike offset the segment layer stores: 46:47 into the session.
+    #expect(bikeStart?.timeIntervalSince(start!) == 2807)
+}
+
+// MARK: - metricSamples
+//
+// Offsets are measured from the activity's start, not from the metric's first
+// sample. A triathlon's `directPower` only begins on the bike leg; anchoring it
+// to itself slid the whole power stream to t=0, so the detail view charted the
+// ride's power under the swim and the run's cadence under the bike.
+
+/// Three rows 1 s apart; power is missing until the third.
+private let lateStartingMetricDetails: [String: Any] = [
+    "metricDescriptors": [
+        ["key": "directTimestamp", "metricsIndex": 0],
+        ["key": "directPower", "metricsIndex": 1]
+    ],
+    "activityDetailMetrics": [
+        ["metrics": [1_785_000_000_000, NSNull()]],
+        ["metrics": [1_785_000_001_000, NSNull()]],
+        ["metrics": [1_785_000_002_000, 224]]
+    ]
+]
+
+@Test func metricSamples_offsetsRunFromTheActivityStartNotTheMetricsFirstSample() {
+    let samples = GarminTransform.metricSamples(lateStartingMetricDetails, key: "directPower")
+    #expect(samples.map(\.offset) == [2])
+    #expect(samples.map(\.value) == [224])
+}
+
+@Test func timestamp_rejectsNonStrings() {
+    #expect(GarminTransform.timestamp(nil) == nil)
+    #expect(GarminTransform.timestamp(42) == nil)
+}

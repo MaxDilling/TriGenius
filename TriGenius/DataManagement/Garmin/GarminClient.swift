@@ -124,6 +124,13 @@ nonisolated final class GarminClient: Sendable {
         return result as? [String: Any] ?? [:]
     }
 
+    /// One activity's own DTO. Unlike the list entries, its summary is nested in
+    /// `summaryDTO` (see `GarminTransform.flattenActivity`) — needed for the
+    /// children of a multisport parent, which the activity list doesn't return.
+    func getActivity(id: String) async throws -> [String: Any] {
+        try await connectapi("/activity-service/activity/\(id)") as? [String: Any] ?? [:]
+    }
+
     func getActivitySplits(id: String) async throws -> [String: Any] {
         let result = try await connectapi("/activity-service/activity/\(id)/splits")
         return result as? [String: Any] ?? [:]
