@@ -160,13 +160,16 @@ struct WorkoutStreamChart: View {
 
     let model: WorkoutStreamModel
     let bands: [Band]
+    /// Plot height. The tiled regular-width panes size their own rows.
+    let height: CGFloat
 
     @State private var scrubOffset: Double?
     private let segments: [Segment]
 
-    init(model: WorkoutStreamModel, bands: [Band] = []) {
+    init(model: WorkoutStreamModel, bands: [Band] = [], height: CGFloat = 140) {
         self.model = model
         self.bands = bands
+        self.height = height
         self.segments = Self.segments(of: model)
     }
 
@@ -207,7 +210,7 @@ struct WorkoutStreamChart: View {
             }
         }
         .chartPlotStyle { $0.clipped() }   // an off-domain pace spike clips, not overflows
-        .frame(height: 140)
+        .frame(height: height)
         .chartScrubbing($scrubOffset) { nearestPoint(to: $0)?.offset }
     }
 

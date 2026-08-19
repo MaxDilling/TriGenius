@@ -192,10 +192,9 @@ final class AppSettings: ObservableObject {
     /// exposes hundreds; these are the ones worth defaulting to for the coach.
     static let availableOpenRouterModels = [
         "openrouter/auto",
-        "deepseek/deepseek-v4-flash",
-        "deepseek/deepseek-v4-pro",
-        "meta-llama/llama-4-maverick",
-        "z-ai/glm-5.2",
+        "deepseek/deepseek-v4-flash-latest",
+        "deepseek/deepseek/deepseek-v4-pro-0813",
+        "google/gemini-3.7-flash",
         "openai/gpt-oss-120b:free",
         "google/gemma-4-31b-it:free",
 
@@ -424,6 +423,11 @@ struct SettingsView: View {
                 } label: {
                     Label("Dashboard layout", systemImage: "rectangle.grid.1x2")
                 }
+                NavigationLink {
+                    SportSplitView(memory: memory)
+                } label: {
+                    Label("Sport split", systemImage: "chart.pie")
+                }
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Label("Cross-training credit", systemImage: "arrow.triangle.2.circlepath")
@@ -436,7 +440,7 @@ struct SettingsView: View {
             } header: {
                 Text("Dashboard")
             } footer: {
-                Text("Dashboard layout picks which sections appear and in what order (the AI summary costs an LLM call per load, off by default). Cross-training credit lets surplus in one discipline partly fill the other weekly rings — 0 % keeps each discipline strict, 100 % treats load as fully interchangeable.")
+                Text("Dashboard layout picks which sections appear and in what order (the AI summary costs an LLM call per load, off by default). Sport split divides the week's load across swim/bike/run — a discipline at 0 % loses its weekly-target ring. Cross-training credit lets surplus in one discipline partly fill the other weekly rings — 0 % keeps each discipline strict, 100 % treats load as fully interchangeable.")
             }
 
             // Notifications section — proactive background coaching.

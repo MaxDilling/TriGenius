@@ -49,6 +49,9 @@ struct TrainingDetailView: View {
 
     /// nil = the Total tab; otherwise the index into `legs`.
     @State private var selectedLeg: Int?
+    /// Regular-width (iPad / Mac) two-pane layout. Measured, not size-class — a
+    /// narrow iPad split view gets the phone column.
+    @State private var isWide = false
     @State private var exportFile: ExportFile?
     @State private var actionError: String?
     @State private var showDistanceEdit = false
@@ -96,24 +99,12 @@ struct TrainingDetailView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Spacing.l) {
-                header
-                heroCapsule
-                comparisonCard
-                plannedStructureCard
-                // coachInsight
-                if legs.isEmpty {
-                    activityCard(details)
-                    zonesCard(details)
-                    feelCard
-                    streamsSection(record.streamsData, family: family)
-                    swimSection(details)
-                } else {
-                    multisportSection
-                }
+            Group {
+                if isWide { wideBody } else { compactBody }
             }
             .padding()
         }
+        .onGeometryChange(for: Bool.self) { $0.size.width >= 1000 } action: { isWide = $0 }
         .navigationTitle(family.displayName)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -255,6 +246,106 @@ struct TrainingDetailView: View {
         }
     }
 
+    // MARK: Layouts
+    //
+    // One card set, two arrangements: the phone column, and — from ~1000pt of
+    // width — two panes, a fixed summary rail beside the charts tiled across the
+    // rest, so a wide window doesn't push every chart below the fold. The title
+    // and (multisport) the segment strip span both panes and never move.
+
+    private var compactBody: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+            header
+            heroCapsule
+            comparisonCard
+            plannedStructureCard
+            if legs.isEmpty {
+                activityCard(details)
+                zonesCard(details)
+                feelCard
+                streamsSection(record.streamsData, family: family)
+                swimSection(details)
+            } else {
+                multisportSection
+            }
+        }
+    }
+
+    private var wideBody: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            if legs.isEmpty {
+                Text(family.displayName).font(.headline).frame(maxWidth: .infinity)
+            } else {
+                header
+                segmentStrip
+            }
+            HStack(alignment: .top, spacing: Theme.Spacing.l) {
+                VStack(spacing: Theme.Spacing.m) { rail }
+                    .frame(width: 372)
+                VStack(spacing: Theme.Spacing.m) { chartPane }
+                    .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    /// The left rail: identity and every number, top to bottom. Its last card
+    /// stretches so both panes end flush.
+    @ViewBuilder
+    private var rail: some View {
+        if let leg = selectedLegValue {
+            totalsCard(totalsMetrics(leg.segment.durationMinutes, leg.segment.tss, leg.segment.distanceKm),
+                       basis: leg.segment.tssBasis)
+            activityCard(leg.segment.details, title: "\(leg.name) · Metrics")
+            zonesCard(leg.segment.details)
+        } else {
+            if legs.isEmpty { header.cardSurface() }
+            totalsCard(heroMetrics, basis: tssBasis)
+            comparisonCard
+            plannedStructureCard
+            activityCard(details, title: legs.isEmpty ? "Activity" : "Metrics", extra: transitionsRow)
+            feelCard
+            zonesCard(details)
+                .frame(maxHeight: legs.isEmpty ? .infinity : nil, alignment: .top)
+        }
+        // The splits card is the race's index — it stays on every tab.
+        if !legs.isEmpty {
+            splitsCard.frame(maxHeight: .infinity, alignment: .top)
+        }
+    }
+
+    /// The right pane: the workout's defining metric full width, the rest tiled
+    /// two-up. A card drops with its stream and the grid reflows.
+    @ViewBuilder
+    private var chartPane: some View {
+        if let leg = selectedLegValue {
+            let models = WorkoutStreamModel.models(from: leg.segment.streamsData, family: leg.segment.family)
+            chartGrid(models, columns: models.count > 2 ? 2 : 1, height: 168)
+            swimSection(leg.segment.details)
+        } else if legs.isEmpty {
+            let models = WorkoutStreamModel.models(from: record.streamsData, family: family)
+            if let primary = models.first {
+                chartCard(primary.kind.label, primary, height: 180)
+            }
+            chartGrid(Array(models.dropFirst()), columns: 2, height: 150)
+            swimSection(details)
+        } else {
+            chartGrid(WorkoutStreamModel.raceModels(segments: legs.map(\.segment)),
+                      columns: 1, height: 168, bands: raceBands, suffix: " · full race")
+        }
+    }
+
+    private func chartGrid(_ models: [WorkoutStreamModel], columns: Int, height: CGFloat,
+                           bands: [WorkoutStreamChart.Band] = [], suffix: String = "") -> some View {
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible(), spacing: Theme.Spacing.m), count: columns),
+            spacing: Theme.Spacing.m
+        ) {
+            ForEach(models) { model in
+                chartCard(model.kind.label + suffix, model, bands: bands, height: height)
+            }
+        }
+    }
+
     // MARK: Header
 
     private var header: some View {
@@ -290,34 +381,47 @@ struct TrainingDetailView: View {
         let label: String
     }
 
-    private var heroMetrics: [HeroMetric] {
+    /// The totals of a workout or of one multisport leg.
+    private func totalsMetrics(_ durationMinutes: Double, _ tss: Double?, _ distanceKm: Double) -> [HeroMetric] {
         var metrics: [HeroMetric] = [
-            HeroMetric(value: durationHM(record.durationMinutes), label: "Duration"),
-            HeroMetric(value: record.tss.map { "\(Int($0.rounded()))" } ?? "—", label: "TSS"),
+            HeroMetric(value: durationHM(durationMinutes), label: "Duration"),
+            HeroMetric(value: tss.map { "\(Int($0.rounded()))" } ?? "—", label: "TSS"),
         ]
-        if record.distanceKm > 0 {
-            metrics.append(HeroMetric(value: String(format: "%.1f km", record.distanceKm), label: "Distance"))
+        if distanceKm > 0 {
+            metrics.append(HeroMetric(value: String(format: "%.1f km", distanceKm), label: "Distance"))
         }
         return metrics
     }
 
-    private var heroCapsule: some View {
+    private var heroMetrics: [HeroMetric] {
+        totalsMetrics(record.durationMinutes, record.tss, record.distanceKm)
+    }
+
+    private func totalsRow(_ metrics: [HeroMetric], basis: String?) -> some View {
         HStack(spacing: 0) {
-            ForEach(Array(heroMetrics.enumerated()), id: \.element.id) { index, metric in
+            ForEach(Array(metrics.enumerated()), id: \.element.id) { index, metric in
                 if index > 0 {
                     Divider().frame(height: 34)
                 }
-                heroCell(metric)
+                heroCell(metric, basis: basis)
             }
         }
         .padding(.vertical, Theme.Spacing.l)
         .padding(.horizontal, Theme.Spacing.m)
-        .glassSurface(cornerRadius: Theme.Radius.l)
+    }
+
+    private var heroCapsule: some View {
+        totalsRow(heroMetrics, basis: tssBasis).glassSurface(cornerRadius: Theme.Radius.l)
+    }
+
+    /// The rail's totals — numbers belong on the opaque content layer.
+    private func totalsCard(_ metrics: [HeroMetric], basis: String?) -> some View {
+        totalsRow(metrics, basis: basis).frame(maxWidth: .infinity).cardSurface()
     }
 
     /// The TSS cell reveals its computation basis in a popover on tap.
     @ViewBuilder
-    private func heroCell(_ metric: HeroMetric) -> some View {
+    private func heroCell(_ metric: HeroMetric, basis: String?) -> some View {
         let cell = VStack(spacing: Theme.Spacing.xs) {
             Text(metric.value)
                 .font(.title2.weight(.semibold))
@@ -327,12 +431,12 @@ struct TrainingDetailView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-        if metric.label == "TSS", let tssBasis {
+        if metric.label == "TSS", let basis {
             cell
                 .contentShape(Rectangle())
                 .onTapGesture { showTSSBasis = true }
                 .popover(isPresented: $showTSSBasis, arrowEdge: .top) {
-                    Label("TSS computed from \(tssBasis)", systemImage: "function")
+                    Label("TSS computed from \(basis)", systemImage: "function")
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: 280)
@@ -657,10 +761,15 @@ struct TrainingDetailView: View {
     // its details dict has the identical schema and it carries its own streams,
     // TSS and basis. "Total" keeps the whole-race view.
 
+    /// The leg the strip has selected; nil on the Total tab.
+    private var selectedLegValue: Leg? {
+        selectedLeg.flatMap { $0 < legs.count ? legs[$0] : nil }
+    }
+
     @ViewBuilder
     private var multisportSection: some View {
         segmentStrip
-        if let leg = selectedLeg.flatMap({ $0 < legs.count ? legs[$0] : nil }) {
+        if let leg = selectedLegValue {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.s) {
                 Text(leg.name).font(.title3.weight(.bold))
                 Text(legSummary(leg.segment))
@@ -799,22 +908,21 @@ struct TrainingDetailView: View {
         return [.init(label: "Transitions", value: Self.elapsed(minutes) + " total", icon: "clock")]
     }
 
-    /// The race-long traces, with the legs shaded behind them.
-    @ViewBuilder
-    private var raceCharts: some View {
-        let bands = legs.map {
+    /// The legs shaded behind a race-long trace.
+    private var raceBands: [WorkoutStreamChart.Band] {
+        legs.map {
             WorkoutStreamChart.Band(
                 start: $0.segment.offsetSeconds,
                 end: $0.segment.offsetSeconds + $0.segment.durationMinutes * 60,
                 color: $0.color)
         }
+    }
+
+    /// The race-long traces, with the legs shaded behind them.
+    @ViewBuilder
+    private var raceCharts: some View {
         ForEach(WorkoutStreamModel.raceModels(segments: legs.map(\.segment))) { model in
-            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                Text("\(model.kind.label) · full race").font(.headline)
-                WorkoutStreamChart(model: model, bands: bands)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .cardSurface()
+            chartCard("\(model.kind.label) · full race", model, bands: raceBands)
         }
     }
 
@@ -863,13 +971,18 @@ struct TrainingDetailView: View {
     @ViewBuilder
     private func streamsSection(_ data: Data, family: SportFamily) -> some View {
         ForEach(WorkoutStreamModel.models(from: data, family: family)) { model in
-            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                Text(model.kind.label).font(.headline)
-                WorkoutStreamChart(model: model)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .cardSurface()
+            chartCard(model.kind.label, model)
         }
+    }
+
+    private func chartCard(_ title: String, _ model: WorkoutStreamModel,
+                           bands: [WorkoutStreamChart.Band] = [], height: CGFloat = 140) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+            Text(title).font(.headline)
+            WorkoutStreamChart(model: model, bands: bands, height: height)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface()
     }
 
     // MARK: Swim — per-lap intervals + the cleaned lengths (Garmin per-length data)
