@@ -545,11 +545,8 @@ private var chart: some View {
             RuleMark(x: .value("Scrub", p.date))
                 .foregroundStyle(.secondary.opacity(0.6))
                 .lineStyle(StrokeStyle(lineWidth: 1))
-                // y must fit *inside* the plot: `chartPlotStyle { $0.clipped() }`
-                // clips the plot content, and an annotation overflowing above the
-                // plot top (as the other, unclipped charts allow) is clipped away.
                 .annotation(position: .top, spacing: 0,
-                            overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .plot))) {
+                            overflowResolution: .init(x: .fit(to: .plot), y: .fit(to: .plot))) {
                     ChartTooltip(
                         title: p.date.formatted(.dateTime.day().month(.abbreviated).year()),
                         rows: [.init(color: metric.accent, label: metric.title,

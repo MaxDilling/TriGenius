@@ -579,7 +579,7 @@ private struct HoverReadoutLayer: View {
         }
         .padding(Theme.Spacing.s)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: .rect(cornerRadius: Theme.Radius.s, style: .continuous))
+        .background(Color.appSecondaryBackground, in: .rect(cornerRadius: Theme.Radius.s, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.s, style: .continuous).strokeBorder(.separator))
     }
 

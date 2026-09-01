@@ -220,7 +220,7 @@ struct WorkoutStreamChart: View {
                 .foregroundStyle(.secondary.opacity(0.6))
                 .lineStyle(StrokeStyle(lineWidth: 1))
                 .annotation(position: .top, spacing: 0,
-                            overflowResolution: .init(x: .fit(to: .chart), y: .fit(to: .plot))) {
+                            overflowResolution: .init(x: .fit(to: .plot), y: .fit(to: .plot))) {
                     ChartTooltip(
                         title: Self.timeLabel(point.offset),
                         rows: [.init(color: model.kind.color, label: model.kind.label,

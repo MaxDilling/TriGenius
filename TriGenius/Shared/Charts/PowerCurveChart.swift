@@ -50,7 +50,7 @@ struct PowerCurveChart: View {
                 .foregroundStyle(.secondary.opacity(0.6))
                 .lineStyle(StrokeStyle(lineWidth: 1))
                 .annotation(position: .top, spacing: 0,
-                            overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
+                            overflowResolution: .init(x: .fit(to: .plot), y: .fit(to: .plot))) {
                     ChartTooltip(
                         title: PowerCurve.durationLabel(point.durationSeconds),
                         rows: [
