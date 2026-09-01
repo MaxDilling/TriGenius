@@ -5,7 +5,7 @@ import SwiftUI
 // The analysis screen behind the dashboard's Fitness & Form section, grouped by
 // the question it answers: Fitness & Form (am I fit and fresh), Training Mix (is
 // my training balanced), Power Curve and Performance / Recovery (am I actually
-// faster). One range control at the top governs every card below it. All charts
+// faster). One range control in the navigation bar governs every card below it. All charts
 // render shared `Shared/Charts/` components from plain value models; missing data
 // shows as absence, never a fabricated distribution.
 //
@@ -22,14 +22,6 @@ struct StatisticsView: View {
             // single glass system instead of stacking independent glass layers.
             GlassEffectContainer(spacing: Theme.Spacing.l) {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
-                    Picker("Range", selection: $viewModel.range) {
-                        ForEach(StatisticsViewModel.StatsRange.allCases) { range in
-                            Text(range.rawValue).tag(range)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-
                     if let pmc = viewModel.pmc {
                         section("Fitness & Form") {
                             PMCInsightsSection(result: pmc, days: viewModel.range.days)
@@ -54,10 +46,30 @@ struct StatisticsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .toolbar {
+            // The segmented control brings its own capsule; without this the toolbar
+            // wraps it in a second one and the glass stacks.
+            ToolbarItem(placement: .primaryAction) { rangePicker }
+                .sharedBackgroundVisibility(.hidden)
+        }
         .task { viewModel.load() }
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
             viewModel.load()
         }
+    }
+
+    /// The screen-wide range, in the navigation bar beside the title: it governs
+    /// every card below, and those run far enough that a control scrolling out of
+    /// reach is friction.
+    private var rangePicker: some View {
+        Picker("Range", selection: $viewModel.range) {
+            ForEach(StatisticsViewModel.StatsRange.allCases) { range in
+                Text(range.rawValue).tag(range)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
     }
 
     private func section<Content: View>(_ title: String,

@@ -2,12 +2,13 @@ import SwiftUI
 
 // MARK: - Calendar nav chrome (glass)
 //
-// The floating glass control layer above the grid, mirroring Apple Calendar: a pill
-// with the month name (a back chevron that zooms out to the month, in week mode) and
-// a right-hand pill with search + add ("+" opens the workout editor; search is a
-// mockup only, per the design reference). Below the pill, in week mode, a date strip shows
-// the visible week, highlights the selected day and the columns currently on screen,
-// and tabs to a day.
+// The floating glass control layer above the grid, mirroring Apple Calendar. The
+// control row carries the month on the left — a back pill that zooms out in week
+// mode, the screen's big title in month mode — and a right-hand pill with search +
+// add ("+" opens the workout editor; search is a mockup only, per the design
+// reference). Below it, week mode shows a date strip of the visible week that
+// highlights the selected day and the columns currently on screen and tabs to a
+// day; month mode shows the weekday letters.
 
 struct CalendarNavBar: View {
     @Bindable var viewModel: CalendarViewModel
@@ -15,9 +16,6 @@ struct CalendarNavBar: View {
     let visibleCount: Int
     /// Opens the workout editor to create a plan (the "+" control).
     let onAdd: () -> Void
-
-    /// All nav pills share this height + a capsule corner radius so they line up.
-    private let pillHeight: CGFloat = 40
 
     var body: some View {
         VStack(spacing: Theme.Spacing.s) {
@@ -37,8 +35,8 @@ struct CalendarNavBar: View {
         }
     }
 
-    // Week mode: chevron + month name (tap zooms out to the month). Month mode has no
-    // left pill — the month name lives in the big header below.
+    // Week mode: chevron + month name in a pill (tap zooms out to the month). Month
+    // mode: the month name as the screen's big title, on the same row as the controls.
     @ViewBuilder
     private var leftPill: some View {
         if viewModel.mode == .week {
@@ -48,27 +46,23 @@ struct CalendarNavBar: View {
                     Text(viewModel.monthLabel).font(.title3.weight(.semibold))
                 }
                 .padding(.horizontal, Theme.Spacing.m)
-                .frame(height: pillHeight)
             }
             .buttonStyle(.plain)
-            .glassSurface(cornerRadius: pillHeight / 2)
+            .headerPill()
+        } else {
+            Text(viewModel.monthLabel).font(.largeTitle.weight(.bold))
         }
     }
 
-    // Month mode header: the big month-name text + the weekday row (indented to line
-    // up with the grid's week-number gutter).
+    // Month mode: the weekday row, indented to line up with the grid's week-number
+    // gutter. The month name itself sits on the control row above.
     private var monthHeader: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text(viewModel.monthLabel)
-                .font(.largeTitle.weight(.bold))
-                .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: 0) {
-                Spacer().frame(width: CalendarLayout.monthGutter)
-                ForEach(viewModel.weekdaySymbols, id: \.self) { symbol in
-                    Text(symbol)
-                        .font(.caption2).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity)
-                }
+        HStack(spacing: 0) {
+            Spacer().frame(width: CalendarLayout.monthGutter)
+            ForEach(viewModel.weekdaySymbols, id: \.self) { symbol in
+                Text(symbol)
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
             }
         }
     }
@@ -76,13 +70,10 @@ struct CalendarNavBar: View {
     // Jump back to today — sits beside the (mockup) search/add controls.
     private var todayPill: some View {
         Button { viewModel.goToToday() } label: {
-            Text("Today")
-                .font(.subheadline.weight(.semibold))
-                .padding(.horizontal, Theme.Spacing.m)
-                .frame(height: pillHeight)
+            Text("Today").font(.subheadline.weight(.semibold))
         }
         .buttonStyle(.plain)
-        .glassSurface(cornerRadius: pillHeight / 2)
+        .headerPill()
     }
 
     // Search (still a visual mockup, by design) + add (creates a planned workout).
@@ -96,9 +87,7 @@ struct CalendarNavBar: View {
             .buttonStyle(.plain)
         }
         .font(.body.weight(.medium))
-        .padding(.horizontal, Theme.Spacing.m)
-        .frame(height: pillHeight)
-        .glassSurface(cornerRadius: pillHeight / 2)
+        .headerPill()
     }
 
     // MARK: Date strip

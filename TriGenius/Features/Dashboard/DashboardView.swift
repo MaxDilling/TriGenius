@@ -3,7 +3,8 @@ import Combine
 
 // MARK: - Dashboard View
 //
-// The athlete's home screen. A fixed header (greeting + Settings entry), then the
+// The athlete's home screen. A `ScreenHeader` greeting the athlete by name, with
+// Settings as its one control, then the
 // `DashboardSection` blocks in the athlete's configured order/visibility
 // (`AppSettings.dashboardLayout`, Settings → Dashboard layout):
 //   • Plan banner: current ATP period + countdown to the next A event → Plan tab.
@@ -135,22 +136,7 @@ struct DashboardView: View {
     // MARK: Header
 
     private var header: some View {
-        HStack(spacing: 12) {
-            Text(initials)
-                .font(.headline).foregroundStyle(.white)
-                .frame(width: 48, height: 48)
-                .background(Color.accentColor.gradient)
-                .clipShape(Circle())
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(Date.now.formatted(.dateTime.weekday(.wide).day().month(.wide).year())
-                    .uppercased())
-                    .font(.caption2).foregroundStyle(.secondary)
-                Text(greeting).font(.title2.bold())
-            }
-
-            Spacer()
-
+        ScreenHeader(greeting) {
             NavigationLink {
                 SettingsView(
                     brain: brain,
@@ -159,25 +145,16 @@ struct DashboardView: View {
                     onBackendChanged: onBackendChanged
                 )
             } label: {
-                Image(systemName: "gearshape")
-                    .font(.title3)
-                    .frame(width: 44, height: 44)
-                    .glassEffect(.regular, in: .circle)
+                Image(systemName: "gearshape").font(.title3)
             }
             .buttonStyle(.plain)
+            .headerPill()
         }
     }
 
     private var greeting: String {
         if let name = athleteName, !name.isEmpty { return "Hi \(name)" }
         return "Hi there"
-    }
-
-    private var initials: String {
-        guard let name = athleteName, !name.isEmpty else { return "🏃" }
-        let parts = name.split(separator: " ")
-        let letters = parts.prefix(2).compactMap { $0.first }
-        return String(letters).uppercased()
     }
 
     // MARK: Plan banner
@@ -206,7 +183,7 @@ struct DashboardView: View {
                     StatisticsView()
                 } label: {
                     VStack(spacing: Theme.Spacing.m) {
-                        HStack(spacing: 10) {
+                        HStack(spacing: Theme.Spacing.m) {
                             PMCStatCard(title: "Fitness", caption: "CTL", dot: .blue,
                                         value: Int(s.ctl.rounded()), delta: viewModel.ctlDelta,
                                         status: fitnessStatus(delta: viewModel.ctlDelta))
@@ -517,40 +494,6 @@ private struct UpNextItem: Identifiable {
             return parts.joined(separator: " · ")
         }
         return planned?.plannedSummaryLine() ?? ""
-    }
-}
-
-// MARK: - PMC Stat Card
-
-private struct PMCStatCard: View {
-    let title: String
-    let caption: String
-    let dot: Color
-    let value: Int
-    let delta: Int
-    let status: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
-                Circle().fill(dot).frame(width: 7, height: 7)
-                Text(title).font(.caption).foregroundStyle(.secondary)
-                Text("(\(caption))").font(.caption2).foregroundStyle(.tertiary)
-            }
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text("\(value)").font(.title.bold())
-                if delta != 0 {
-                    HStack(spacing: 1) {
-                        Image(systemName: delta > 0 ? "arrow.up" : "arrow.down")
-                        Text("\(abs(delta))")
-                    }
-                    .font(.caption2).foregroundStyle(dot)
-                }
-            }
-            Text(status).font(.caption2).foregroundStyle(dot)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard(padding: 12)
     }
 }
 

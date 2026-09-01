@@ -339,13 +339,34 @@ struct CoachChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            ScreenHeader("Coach") {
+                HStack(spacing: Theme.Spacing.l) {
+                    Button { showReport = true } label: {
+                        Image(systemName: "exclamationmark.bubble")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Report an issue")
+                    Button { viewModel.reset() } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                    }
+                    .buttonStyle(.plain)
+                    .help("Reset session")
+                }
+                .headerPill()
+            }
+            .padding(.horizontal)
+            .padding(.top, Theme.Spacing.s)
+            .padding(.bottom, Theme.Spacing.s)
+
             // Message list
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(spacing: 12) {
                         if viewModel.showGreeting {
+                            // Fills the scroll viewport so the greeting sits in the
+                            // middle of an empty transcript rather than at its top.
                             GreetingView(text: viewModel.greeting)
-                                .padding(.top, 20)
+                                .containerRelativeFrame(.vertical)
                         }
 
                         ForEach(viewModel.messages) { message in
@@ -430,24 +451,9 @@ struct CoachChatView: View {
         }
         .onChange(of: router.pendingPrompt) { _, _ in consumePendingPrompt() }
         .task { viewModel.prewarm() }
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    showReport = true
-                } label: {
-                    Image(systemName: "exclamationmark.bubble")
-                }
-                .help("Report an issue")
-            }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    viewModel.reset()
-                } label: {
-                    Image(systemName: "arrow.counterclockwise")
-                }
-                .help("Reset session")
-            }
-        }
+        #if os(iOS)
+        .toolbar(.hidden, for: .navigationBar)
+        #endif
         .sheet(isPresented: $showReport) {
             ReportComposerView(messageCount: viewModel.messages.count) { note in
                 viewModel.fileReport(note: note)

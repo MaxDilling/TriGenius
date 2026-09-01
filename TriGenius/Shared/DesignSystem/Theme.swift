@@ -28,6 +28,13 @@ enum Theme {
         static let l: CGFloat = 16
     }
 
+    /// Floating control-layer metrics. Every tab's header pill shares this height
+    /// so the chrome lines up across Plan, Coach and Calendar — it matches the
+    /// system toolbar control the tabs used before they grew their own headers.
+    enum Chrome {
+        static let pillHeight: CGFloat = 44
+    }
+
     /// Semantic status colors. Reach for these names instead of raw `.orange`
     /// / `.green` / `.red` so intent is explicit and re-tintable later.
     enum Palette {

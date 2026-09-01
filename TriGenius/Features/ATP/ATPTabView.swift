@@ -3,8 +3,8 @@ import SwiftUI
 // MARK: - Plan tab (ATP)
 //
 // The season-plan surface: the chart fills the tab, while the methodology + volume
-// config and event list sit in a setup sheet behind the toolbar gear (edit → Save →
-// the deterministic engine recomputes and the chart updates).
+// config and event list sit in a setup sheet behind the toolbar's edit button (edit
+// → Save → the deterministic engine recomputes and the chart updates).
 
 struct ATPTabView: View {
 
@@ -24,27 +24,34 @@ struct ATPTabView: View {
     @State private var loaded = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: Theme.Spacing.l) {
-                if let plan {
-                    chartCard(plan)
-                } else {
-                    emptyHint
+        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            // Pencil, not a gear: the sheet edits *this plan*, and a gear here reads
+            // as app settings. The bare glyph, not `square.and.pencil` — that one's
+            // nib overshoots the square and sits visibly high in a round pill.
+            ScreenHeader("Plan") {
+                Button { showingSetup = true } label: { Image(systemName: "pencil") }
+                    .buttonStyle(.plain)
+                    .headerPill()
+                    .accessibilityLabel("Edit plan")
+            }
+            .padding(.horizontal)
+            .padding(.top, Theme.Spacing.s)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                    if let plan {
+                        chartCard(plan)
+                    } else {
+                        emptyHint
+                    }
+                    eventsCard
                 }
-                eventsCard
+                .padding()
             }
-            .padding()
         }
-        .navigationTitle("Plan")
         #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .navigationBar)
         #endif
-        .toolbar {
-            ToolbarItem(placement: .primaryAction) {
-                Button { showingSetup = true } label: { Image(systemName: "gearshape") }
-                    .accessibilityLabel("Plan setup")
-            }
-        }
         .sheet(isPresented: $showingSetup) { setupSheet }
         .sheet(item: $editingEvent) { draft in
             let isExisting = events.contains { $0.id == draft.id }
@@ -66,7 +73,7 @@ struct ATPTabView: View {
 
     // MARK: Setup (behind the gear)
 
-    /// The methodology + volume config, presented from the toolbar gear so the Plan
+    /// The methodology + volume config, presented from the toolbar edit button so the Plan
     /// tab itself stays focused on the season chart + events. Events live on the tab,
     /// not here — they're the plan's content, not a setting.
     private var setupSheet: some View {
@@ -147,11 +154,18 @@ struct ATPTabView: View {
                 Text("Add at least one A/B event to anchor the plan.")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            ForEach(events) { e in
+            ForEach(upcomingEvents) { e in
                 Button { editingEvent = e } label: { eventRow(e) }
                     .buttonStyle(.plain)
             }
         }
+    }
+
+    /// What the list shows. Display only — `events` keeps every race, so the plan
+    /// engine still periodises against past ones and `targetEvent` still resolves.
+    private var upcomingEvents: [EventDraft] {
+        let today = Calendar.current.startOfDay(for: Date())
+        return events.filter { $0.date >= today }
     }
 
     private func eventRow(_ e: EventDraft) -> some View {

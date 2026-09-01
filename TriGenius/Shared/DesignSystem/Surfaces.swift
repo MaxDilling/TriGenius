@@ -41,6 +41,16 @@ extension View {
             .glassSurface(cornerRadius: Theme.Radius.l)
     }
 
+    /// One control in a screen header: a glass capsule at the shared chrome height.
+    /// `minWidth` matches the height so a single narrow glyph renders as a circle
+    /// rather than a tall oval; wider content (a label, two icons) grows past it.
+    func headerPill() -> some View {
+        self.padding(.horizontal, Theme.Spacing.m)
+            .frame(height: Theme.Chrome.pillHeight)
+            .frame(minWidth: Theme.Chrome.pillHeight)
+            .glassSurface(cornerRadius: Theme.Chrome.pillHeight / 2)
+    }
+
     /// Control/navigation-layer Liquid Glass. Pass a `tint` to color the glass
     /// (e.g. a discipline color) instead of painting a solid block behind it.
     func glassSurface(
@@ -94,4 +104,37 @@ struct SectionHeading<Accessory: View>: View {
 
 extension SectionHeading where Accessory == EmptyView {
     init(_ title: String) { self.init(title) { EmptyView() } }
+}
+
+// MARK: - Screen header
+
+/// A tab's top chrome: the screen title, big and leading, on the *same row* as its
+/// controls. Deliberately not `navigationBarTitleDisplayMode(.large)` — that puts
+/// the title on its own row below the controls, which reads as two unrelated
+/// bands. Tabs using this hide the navigation bar (`CalendarNavBar` builds its own
+/// variant on the same metrics, because its leading slot changes with the mode).
+struct ScreenHeader<Controls: View>: View {
+    private let title: String
+    private let controls: Controls
+
+    init(_ title: String, @ViewBuilder controls: () -> Controls) {
+        self.title = title
+        self.controls = controls()
+    }
+
+    var body: some View {
+        GlassEffectContainer(spacing: Theme.Spacing.s) {
+            HStack(spacing: Theme.Spacing.s) {
+                // Shrinks rather than wraps: the dashboard's title is the athlete's
+                // own name, so its width isn't ours to bound.
+                Text(title)
+                    .font(.largeTitle.weight(.bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Spacer(minLength: Theme.Spacing.s)
+                controls
+            }
+        }
+        .frame(minHeight: Theme.Chrome.pillHeight)
+    }
 }

@@ -74,15 +74,15 @@ struct PMCInsightsSection: View {
     }
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: Theme.Spacing.m) {
             if let s = result.snapshot {
-                HStack(spacing: 10) {
-                    statCard("Fitness", dot: .blue, value: Int(s.ctl.rounded()),
-                             delta: delta { $0.ctl })
-                    statCard("Fatigue", dot: .pink, value: Int(s.atl.rounded()),
-                             delta: delta { $0.atl })
-                    statCard("Form", dot: .orange, value: Int(s.tsb.rounded()),
-                             delta: delta { $0.tsb })
+                HStack(spacing: Theme.Spacing.m) {
+                    PMCStatCard(title: "Fitness", dot: .blue, value: Int(s.ctl.rounded()),
+                                delta: delta { $0.ctl })
+                    PMCStatCard(title: "Fatigue", dot: .pink, value: Int(s.atl.rounded()),
+                                delta: delta { $0.atl })
+                    PMCStatCard(title: "Form", dot: .orange, value: Int(s.tsb.rounded()),
+                                delta: delta { $0.tsb })
                 }
             }
 
@@ -231,28 +231,6 @@ struct PMCInsightsSection: View {
             Circle().fill(color).frame(width: 7, height: 7)
             Text(label)
         }
-    }
-
-    private func statCard(_ title: String, dot: Color, value: Int, delta: Int) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 5) {
-                Circle().fill(dot).frame(width: 7, height: 7)
-                Text(title).font(.caption).foregroundStyle(.secondary)
-            }
-            HStack(alignment: .firstTextBaseline, spacing: 4) {
-                Text("\(value)").font(.title.bold())
-                if delta != 0 {
-                    HStack(spacing: 1) {
-                        Image(systemName: delta > 0 ? "arrow.up" : "arrow.down")
-                        Text("\(abs(delta))")
-                    }
-                    .font(.caption2).foregroundStyle(dot)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Theme.Spacing.m)
-        .glassSurface(cornerRadius: Theme.Radius.l)
     }
 
     private func delta(_ metric: (PMCPoint) -> Double) -> Int {
