@@ -148,47 +148,36 @@ struct RootTabView: View {
 
     var body: some View {
         TabView(selection: $router.selectedTab) {
-            NavigationStack {
-                DashboardView(
-                    readSources: settings.readSources,
-                    athleteName: memory.userProfile.name,
-                    weeklyStructure: memory.weeklyStructure,
-                    memory: memory,
-                    makeBackend: { settings.makeBackend() },
-                    brain: brain,
-                    settings: settings,
-                    onBackendChanged: onBackendChanged
-                )
-            }
-            .tag(CoachRouter.RootTab.dashboard)
-            .tabItem {
-                Label("Dashboard", systemImage: "chart.xyaxis.line")
+            Tab("Dashboard", systemImage: "chart.xyaxis.line", value: CoachRouter.RootTab.dashboard) {
+                NavigationStack {
+                    DashboardView(
+                        readSources: settings.readSources,
+                        athleteName: memory.userProfile.name,
+                        weeklyStructure: memory.weeklyStructure,
+                        memory: memory,
+                        makeBackend: { settings.makeBackend() },
+                        brain: brain,
+                        settings: settings,
+                        onBackendChanged: onBackendChanged
+                    )
+                }
             }
 
-            NavigationStack {
-                ATPTabView()
-            }
-            .tag(CoachRouter.RootTab.plan)
-            .tabItem {
-                Label("Plan", systemImage: "chart.bar.xaxis")
+            Tab("Plan", systemImage: "chart.bar.xaxis", value: CoachRouter.RootTab.plan) {
+                NavigationStack { ATPTabView() }
             }
 
-            NavigationStack {
-                CoachChatView(brain: brain)
-            }
-            .tag(CoachRouter.RootTab.coach)
-            .tabItem {
-                Label("Coach", systemImage: "bubble.left.and.bubble.right.fill")
+            Tab("Coach", systemImage: "bubble.left.and.bubble.right.fill", value: CoachRouter.RootTab.coach) {
+                NavigationStack { CoachChatView(brain: brain) }
             }
 
-            NavigationStack {
-                CalendarView()
-            }
-            .tag(CoachRouter.RootTab.calendar)
-            .tabItem {
-                Label("Calendar", systemImage: "calendar")
+            Tab("Calendar", systemImage: "calendar", value: CoachRouter.RootTab.calendar) {
+                NavigationStack { CalendarView() }
             }
         }
+        // Tab bar on the phone, sidebar on iPad regular width and macOS — the wide
+        // shell the dashboard's column layouts assume.
+        .tabViewStyle(.sidebarAdaptable)
         .environment(router)
         // Trace marker: aligns the Instruments timeline with each tab switch, so
         // hangs/hitches right after it attribute to that tab's first build + load.

@@ -7,13 +7,13 @@ import UIKit
 // MARK: - Chart scrubbing & tooltip
 //
 // Shared X-axis scrubbing for every chart (date axes and numeric ones like the
-// power curve's log duration): long-press-then-drag on iOS (`chartGesture`),
-// pointer hover on macOS (where a hit-testable overlay would block nothing else —
-// these charts carry no other gestures). Charts render their own tooltip from the
-// selected value via `ChartTooltip`.
+// power curve's log duration), from two inputs at once: long-press-then-drag for
+// touch, and pointer hover for the macOS cursor, a trackpad on iPad, and Apple
+// Pencil hover. Charts render their own tooltip from the selected value via
+// `ChartTooltip`.
 
 extension View {
-    /// Bind the X value under the finger (iOS) or pointer (macOS) — nil when idle.
+    /// Bind the X value under the finger or pointer — nil when idle.
     /// `snap` quantizes the raw location to the chart's own data grid (nearest
     /// point / containing week); the binding is only written when the snapped
     /// value changes. The scrub rule + tooltip are chart *content*, so every
@@ -27,32 +27,38 @@ extension View {
                 if value != selection.wrappedValue { selection.wrappedValue = value }
             }
         )
-        #if os(macOS)
         return chartOverlay { proxy in
-            Rectangle().fill(.clear).contentShape(Rectangle())
-                .onContinuousHover { phase in
-                    switch phase {
-                    case .active(let location):
-                        snapped.wrappedValue = proxy.value(atX: location.x, as: V.self)
-                    case .ended:
-                        snapped.wrappedValue = nil
-                    }
-                }
-        }
-        #else
-        // A UIKit recognizer, not a SwiftUI gesture: every SwiftUI route
-        // (`chartXSelection`, `chartGesture`, a plain overlay `.gesture`) claims
-        // the touch ahead of the enclosing ScrollView's pan, so a scroll starting
-        // on the plot goes dead. UILongPressGestureRecognizer arbitrates natively
-        // with UIScrollView — a swipe cancels it and scrolls; a ~0.2 s hold
-        // recognizes, excludes the pan, and tracks the finger to scrub.
-        return chartOverlay { proxy in
-            ScrubTouchOverlay { point in
+            scrubSurface { point in
                 snapped.wrappedValue = point.flatMap { proxy.value(atX: $0.x, as: V.self) }
             }
+            // Hover never enters the touch stream, so it rides alongside the
+            // long-press below it rather than competing with it — a hovering
+            // Pencil scrubs, a finger still long-presses.
+            .onContinuousHover { phase in
+                switch phase {
+                case .active(let location):
+                    snapped.wrappedValue = proxy.value(atX: location.x, as: V.self)
+                case .ended:
+                    snapped.wrappedValue = nil
+                }
+            }
         }
-        #endif
     }
+}
+
+/// The plot-covering scrub surface. On iOS a UIKit recognizer, not a SwiftUI
+/// gesture: every SwiftUI route (`chartXSelection`, `chartGesture`, a plain overlay
+/// `.gesture`) claims the touch ahead of the enclosing ScrollView's pan, so a
+/// scroll starting on the plot goes dead. UILongPressGestureRecognizer arbitrates
+/// natively with UIScrollView — a swipe cancels it and scrolls; a ~0.2 s hold
+/// recognizes, excludes the pan, and tracks the finger to scrub. macOS has no touch
+/// to track, so a hit-testable rectangle carries the hover on its own.
+@ViewBuilder private func scrubSurface(onTouch: @escaping (CGPoint?) -> Void) -> some View {
+    #if os(iOS)
+    ScrubTouchOverlay(onChange: onTouch)
+    #else
+    Rectangle().fill(.clear).contentShape(Rectangle())
+    #endif
 }
 
 #if os(iOS)

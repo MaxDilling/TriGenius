@@ -13,6 +13,7 @@ struct PMCInsightsSection: View {
     let days: Int
 
     @State private var scrubDate: Date?
+    private var wide = WideLayout()
 
     private var points: [PMCPoint] {
         guard let last = result.points.last else { return [] }
@@ -74,18 +75,8 @@ struct PMCInsightsSection: View {
     }
 
     var body: some View {
-        VStack(spacing: Theme.Spacing.m) {
-            if let s = result.snapshot {
-                HStack(spacing: Theme.Spacing.m) {
-                    PMCStatCard(title: "Fitness", dot: .blue, value: Int(s.ctl.rounded()),
-                                delta: delta { $0.ctl })
-                    PMCStatCard(title: "Fatigue", dot: .pink, value: Int(s.atl.rounded()),
-                                delta: delta { $0.atl })
-                    PMCStatCard(title: "Form", dot: .orange, value: Int(s.tsb.rounded()),
-                                delta: delta { $0.tsb })
-                }
-            }
-
+        wide.outer {
+            PMCStatTiles(result: result)
             chartCard
         }
     }
@@ -206,7 +197,7 @@ struct PMCInsightsSection: View {
                     }
                 }
             }
-            .frame(height: 260)
+            .frame(minHeight: 260, maxHeight: wide.isWide ? .infinity : 260)
             .chartLegend(.hidden)
 
             HStack(spacing: 16) {
@@ -224,6 +215,7 @@ struct PMCInsightsSection: View {
             }
         }
         .glassCard()
+        .frame(maxHeight: wide.rowHeight)
     }
 
     private func legend(_ color: Color, _ label: String) -> some View {
@@ -231,11 +223,5 @@ struct PMCInsightsSection: View {
             Circle().fill(color).frame(width: 7, height: 7)
             Text(label)
         }
-    }
-
-    private func delta(_ metric: (PMCPoint) -> Double) -> Int {
-        guard let now = result.points.last.map(metric),
-              let then = result.value(daysAgo: 7, metric) else { return 0 }
-        return Int((now - then).rounded())
     }
 }

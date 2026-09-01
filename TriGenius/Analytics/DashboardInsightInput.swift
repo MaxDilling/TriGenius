@@ -116,7 +116,7 @@ enum DashboardInsightInput {
 
     private static func fitnessLines(pmc: PMCResult?) -> [String] {
         guard let s = pmc?.snapshot else { return [] }
-        let ctlDelta = delta(pmc, days: 7) { $0.ctl }
+        let ctlDelta = pmc?.delta(daysAgo: 7) { $0.ctl } ?? 0
         let trend = trendWord(ctlDelta)
         var out = [
             "Fitness (CTL) \(Int(s.ctl.rounded())), \(signed(ctlDelta))/7d (\(trend)); "
@@ -297,12 +297,6 @@ enum DashboardInsightInput {
     }
 
     // MARK: Small helpers
-
-    private static func delta(_ pmc: PMCResult?, days: Int, _ metric: (PMCPoint) -> Double) -> Int {
-        guard let now = pmc?.points.last.map(metric),
-              let then = pmc?.value(daysAgo: days, metric) else { return 0 }
-        return Int((now - then).rounded())
-    }
 
     private static func trendWord(_ delta: Int) -> String {
         if delta > 1 { return "rising" }

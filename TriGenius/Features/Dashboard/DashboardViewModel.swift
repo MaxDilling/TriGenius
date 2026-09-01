@@ -256,15 +256,7 @@ final class DashboardViewModel {
         """
     }
 
-    // MARK: PMC deltas (vs. 7 days ago) for the stat cards.
-
-    var ctlDelta: Int { delta { $0.ctl } }
-    var atlDelta: Int { delta { $0.atl } }
-    var tsbDelta: Int { delta { $0.tsb } }
-
-    private func delta(_ metric: (PMCPoint) -> Double) -> Int {
-        guard let now = pmc?.points.last.map(metric),
-              let then = pmc?.value(daysAgo: 7, metric) else { return 0 }
-        return Int((now - then).rounded())
-    }
+    /// CTL's weekly change, for the Fitness tile's status line — the tiles read
+    /// their own deltas off the same `PMCResult`.
+    var ctlDelta: Int { pmc?.delta(daysAgo: 7) { $0.ctl } ?? 0 }
 }

@@ -49,6 +49,13 @@ struct PMCResult: Sendable {
         guard let target = cal.date(byAdding: .day, value: -days, to: last.date) else { return nil }
         return points.last(where: { $0.date <= target }).map(metric)
     }
+
+    /// Rounded change over `days` — 0 where the history doesn't reach back that far.
+    func delta(daysAgo days: Int, _ metric: (PMCPoint) -> Double) -> Int {
+        guard let now = points.last.map(metric),
+              let then = value(daysAgo: days, metric) else { return 0 }
+        return Int((now - then).rounded())
+    }
 }
 
 enum PMCEngine {

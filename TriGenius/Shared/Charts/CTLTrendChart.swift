@@ -36,6 +36,9 @@ struct CTLTrendModel: Codable, Equatable {
 
 struct CTLTrendChart: View {
     let model: CTLTrendModel
+    /// Grow past the default plot height to fill whatever the parent offers — the
+    /// dashboard's wide layout sizes the card against the PMC tile column beside it.
+    var fills = false
 
     @State private var scrubDate: Date?
 
@@ -57,7 +60,7 @@ struct CTLTrendChart: View {
             scrubMarks
         }
         .chartYScale(domain: yDomain)
-        .frame(height: 160)
+        .frame(minHeight: 160, maxHeight: fills ? .infinity : 160)
         .chartScrubbing($scrubDate) { nearestDay(to: $0) }
     }
 

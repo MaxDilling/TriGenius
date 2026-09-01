@@ -39,6 +39,8 @@ struct DashboardView: View {
     @State private var viewModel = DashboardViewModel()
     @State private var volumeMetric: VolumeMetric = .tss
 
+    private var wide = WideLayout()
+
     private var context: DashboardContext {
         DashboardContext(
             readSources: readSources,
@@ -182,18 +184,13 @@ struct DashboardView: View {
                 NavigationLink {
                     StatisticsView()
                 } label: {
-                    VStack(spacing: Theme.Spacing.m) {
-                        HStack(spacing: Theme.Spacing.m) {
-                            PMCStatCard(title: "Fitness", caption: "CTL", dot: .blue,
-                                        value: Int(s.ctl.rounded()), delta: viewModel.ctlDelta,
-                                        status: fitnessStatus(delta: viewModel.ctlDelta))
-                            PMCStatCard(title: "Fatigue", caption: "ATL", dot: .pink,
-                                        value: Int(s.atl.rounded()), delta: viewModel.atlDelta,
-                                        status: fatigueStatus(atl: s.atl, ctl: s.ctl))
-                            PMCStatCard(title: "Form", caption: "TSB", dot: .orange,
-                                        value: Int(s.tsb.rounded()), delta: viewModel.tsbDelta,
-                                        status: formStatus(tsb: s.tsb))
-                        }
+                    wide.outer {
+                        PMCStatTiles(
+                            result: result,
+                            statuses: .init(ctl: fitnessStatus(delta: viewModel.ctlDelta),
+                                            atl: fatigueStatus(atl: s.atl, ctl: s.ctl),
+                                            tsb: formStatus(tsb: s.tsb))
+                        )
                         if !viewModel.ctlTrend.actual.isEmpty || viewModel.currentWeek != nil {
                             trendCard
                         }
@@ -226,7 +223,7 @@ struct DashboardView: View {
                             Text("CTL/wk").font(.caption2).foregroundStyle(.secondary)
                         }
                     }
-                    CTLTrendChart(model: viewModel.ctlTrend)
+                    CTLTrendChart(model: viewModel.ctlTrend, fills: wide.isWide)
                 }
             }
             if let week = viewModel.currentWeek {
@@ -243,6 +240,9 @@ struct DashboardView: View {
             }
         }
         .glassCard()
+        // Wide: match the PMC tile column beside it — the chart takes the extra
+        // height rather than leaving a gap under the card.
+        .frame(maxHeight: wide.rowHeight)
     }
 
     private func fitnessStatus(delta: Int) -> String {
@@ -268,31 +268,28 @@ struct DashboardView: View {
     @ViewBuilder private var weeklyTarget: some View {
         if !viewModel.visibleFamilies.isEmpty {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                SectionHeading("Weekly Target")
+                SectionHeading("Weekly Target") {
+                    VolumeMetricToggle(metric: $volumeMetric)
+                }
 
-                VStack(alignment: .leading, spacing: Theme.Spacing.l) {
-                    HStack {
-                        Spacer()
-                        VolumeMetricToggle(metric: $volumeMetric)
-                    }
-
-                    HStack(alignment: .top, spacing: 8) {
-                        ForEach(viewModel.visibleFamilies) { family in
-                            // Actual comes from the projection (its own weekly sum) so the
-                            // solid arc and the projection arc share one number.
-                            let target = viewModel.target(for: family)
-                            let projection = viewModel.projection(for: family)
-                            VolumeRing(family: family,
-                                       metric: volumeMetric,
-                                       actualTSS: projection.actualTSS,
-                                       targetTSS: target.tss,
-                                       actualKm: projection.actualKm,
-                                       targetKm: target.distanceKm,
-                                       projectedTSS: projection.projectedTSS,
-                                       projectedKm: projection.projectedKm,
-                                       creditedTSS: projection.creditedTSS,
-                                       projectedCreditTSS: projection.projectedCreditTSS)
-                        }
+                HStack(alignment: wide.isWide ? .center : .top,
+                       spacing: wide.isWide ? Theme.Spacing.l : 8) {
+                    ForEach(viewModel.visibleFamilies) { family in
+                        // Actual comes from the projection (its own weekly sum) so the
+                        // solid arc and the projection arc share one number.
+                        let target = viewModel.target(for: family)
+                        let projection = viewModel.projection(for: family)
+                        VolumeRing(family: family,
+                                   metric: volumeMetric,
+                                   horizontal: wide.isWide,
+                                   actualTSS: projection.actualTSS,
+                                   targetTSS: target.tss,
+                                   actualKm: projection.actualKm,
+                                   targetKm: target.distanceKm,
+                                   projectedTSS: projection.projectedTSS,
+                                   projectedKm: projection.projectedKm,
+                                   creditedTSS: projection.creditedTSS,
+                                   projectedCreditTSS: projection.projectedCreditTSS)
                     }
                 }
                 .glassCard()
@@ -392,18 +389,32 @@ struct DashboardView: View {
                 Text("No workouts logged or planned.")
                     .font(.subheadline).foregroundStyle(.secondary)
                     .glassCard()
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                        if index > 0 {
-                            Divider().padding(.leading, 64)
-                        }
-                        upNextRow(item)
-                    }
+            } else if wide.isWide, items.count > 3 {
+                // Split in halves rather than interleaved: the agenda is date-sorted,
+                // so each column stays chronological on its own.
+                let split = (items.count + 1) / 2
+                HStack(alignment: .top, spacing: 0) {
+                    upNextColumn(Array(items.prefix(split)))
+                    Divider()
+                    upNextColumn(Array(items.dropFirst(split)))
                 }
                 .glassCard(padding: 0)
+            } else {
+                upNextColumn(items).glassCard(padding: 0)
             }
         }
+    }
+
+    private func upNextColumn(_ items: [UpNextItem]) -> some View {
+        VStack(spacing: 0) {
+            ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                if index > 0 {
+                    Divider().padding(.leading, 64).padding(.trailing, Theme.Spacing.m)
+                }
+                upNextRow(item)
+            }
+        }
+        .frame(maxWidth: .infinity)
     }
 
     /// One compact row in the Up Next tile: date column, sport dot, title + summary.
@@ -550,6 +561,9 @@ private struct VolumeMetricToggle: View {
 private struct VolumeRing: View {
     let family: SportFamily
     let metric: VolumeMetric
+    /// Wide layouts put the numbers beside the ring instead of under it, so three
+    /// tiles fill the row rather than floating in it.
+    var horizontal = false
     let actualTSS: Double
     let targetTSS: Double
     let actualKm: Double
@@ -584,7 +598,9 @@ private struct VolumeRing: View {
     private var fallsShort: Bool { target > 0 && projTop < 0.99 }
 
     var body: some View {
-        VStack(spacing: 8) {
+        let layout = horizontal ? AnyLayout(HStackLayout(spacing: Theme.Spacing.m))
+                                : AnyLayout(VStackLayout(spacing: 8))
+        layout {
             ZStack {
                 Circle().stroke(Color.primary.opacity(0.10), lineWidth: 7)
                 // Projection: the still-planned continuation beyond the completed
@@ -615,7 +631,7 @@ private struct VolumeRing: View {
             }
             .frame(width: 60, height: 60)
 
-            VStack(spacing: 1) {
+            VStack(alignment: horizontal ? .leading : .center, spacing: 1) {
                 Text(label(metric, actual)).font(.subheadline.weight(.semibold))
                 if target > 0 {
                     Text("/ \(label(metric, target))").font(.caption2).foregroundStyle(.secondary)
@@ -634,7 +650,7 @@ private struct VolumeRing: View {
                     .padding(.top, 2)
             }
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: horizontal ? .leading : .center)
     }
 
     private var secondaryMetric: VolumeMetric { metric == .tss ? .distance : .tss }
