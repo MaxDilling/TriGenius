@@ -18,6 +18,7 @@ final class StatisticsViewModel {
         case oneYear = "1Y"
 
         var id: String { rawValue }
+        var days: Int { weeks * 7 }
         var weeks: Int {
             switch self {
             case .oneMonth: return 4

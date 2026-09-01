@@ -32,6 +32,15 @@ extension View {
             )
     }
 
+    /// The standard content card on the dashboard and statistics screens: padded,
+    /// full width, on real Liquid Glass. The screen groups them under one
+    /// `GlassEffectContainer` so the panes blend as a single glass system.
+    func glassCard(padding: CGFloat = Theme.Spacing.l) -> some View {
+        self.padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .glassSurface(cornerRadius: Theme.Radius.l)
+    }
+
     /// Control/navigation-layer Liquid Glass. Pass a `tint` to color the glass
     /// (e.g. a discipline color) instead of painting a solid block behind it.
     func glassSurface(
@@ -54,4 +63,35 @@ extension View {
                 .strokeBorder(color.opacity(0.4), lineWidth: 1)
         )
     }
+}
+
+// MARK: - Section heading
+
+/// Page-level section heading: freestanding above the section's content and a
+/// clear size step above anything inside a card, so it visibly scopes the block
+/// below it. Cards carry no title of their own — one that must name itself uses a
+/// small secondary caption row instead.
+///
+/// The optional accessory is for *actions* (an add button), never navigation:
+/// with no chevrons anywhere, every card is a door and the heading stays a label.
+struct SectionHeading<Accessory: View>: View {
+    private let title: String
+    private let accessory: Accessory
+
+    init(_ title: String, @ViewBuilder accessory: () -> Accessory) {
+        self.title = title
+        self.accessory = accessory()
+    }
+
+    var body: some View {
+        HStack {
+            Text(title).font(.title2.bold())
+            Spacer()
+            accessory
+        }
+    }
+}
+
+extension SectionHeading where Accessory == EmptyView {
+    init(_ title: String) { self.init(title) { EmptyView() } }
 }

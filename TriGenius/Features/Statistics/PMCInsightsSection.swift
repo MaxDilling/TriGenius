@@ -3,21 +3,21 @@ import Charts
 
 // MARK: - PMC insights section
 //
-// The CTL / ATL / TSB stat cards plus the full Performance Management Chart over
-// a selectable range, embedded at the top of the Statistics screen: CTL (Fitness)
-// and ATL (Fatigue) as lines, TSB (Form) as signed bars (green = positive/fresh,
-// orange = negative/fatigued).
+// The CTL / ATL / TSB stat cards plus the full Performance Management Chart at the
+// top of the Statistics screen: CTL (Fitness) and ATL (Fatigue) as lines, TSB
+// (Form) as signed bars (green = positive/fresh, orange = negative/fatigued).
+// `days` is the screen-wide range — the section owns no range control of its own.
 
 struct PMCInsightsSection: View {
     let result: PMCResult
+    let days: Int
 
-    @State private var range: PMCRange = .thirty
     @State private var scrubDate: Date?
 
     private var points: [PMCPoint] {
         guard let last = result.points.last else { return [] }
         let cal = Calendar.current
-        guard let cutoff = cal.date(byAdding: .day, value: -range.days, to: last.date) else {
+        guard let cutoff = cal.date(byAdding: .day, value: -days, to: last.date) else {
             return result.points
         }
         return result.points.filter { $0.date >= cutoff }
@@ -185,16 +185,6 @@ struct PMCInsightsSection: View {
 
     private var chartCard: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("PMC Chart").font(.headline)
-                Spacer()
-                Picker("Range", selection: $range) {
-                    ForEach(PMCRange.allCases) { r in Text(r.label).tag(r) }
-                }
-                .pickerStyle(.segmented)
-                .fixedSize()
-            }
-
             Chart {
                 historicMarks
                 forecastMarks
@@ -233,9 +223,7 @@ struct PMCInsightsSection: View {
                     .foregroundStyle(.tertiary)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Theme.Spacing.l)
-        .glassSurface(cornerRadius: Theme.Radius.l)
+        .glassCard()
     }
 
     private func legend(_ color: Color, _ label: String) -> some View {
@@ -271,29 +259,5 @@ struct PMCInsightsSection: View {
         guard let now = result.points.last.map(metric),
               let then = result.value(daysAgo: 7, metric) else { return 0 }
         return Int((now - then).rounded())
-    }
-}
-
-// MARK: - Range
-
-enum PMCRange: String, CaseIterable, Identifiable {
-    case thirty
-    case ninety
-    case year
-
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .thirty: return "30D"
-        case .ninety: return "90D"
-        case .year:   return "1Y"
-        }
-    }
-    var days: Int {
-        switch self {
-        case .thirty: return 30
-        case .ninety: return 90
-        case .year:   return 365
-        }
     }
 }

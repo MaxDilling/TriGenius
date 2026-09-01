@@ -2,11 +2,16 @@ import SwiftUI
 
 // MARK: - Statistics
 //
-// The analysis screen behind the dashboard's Fitness & Form section: the PMC (stat
-// cards + chart), fitness ramp rate, sport share, time in zone, and the
-// physiological-marker grid. All charts render shared `Shared/Charts/`
-// components from plain value models; missing data shows as absence, never a
-// fabricated distribution.
+// The analysis screen behind the dashboard's Fitness & Form section, grouped by
+// the question it answers: Fitness & Form (am I fit and fresh), Training Mix (is
+// my training balanced), Power Curve and Performance / Recovery (am I actually
+// faster). One range control at the top governs every card below it. All charts
+// render shared `Shared/Charts/` components from plain value models; missing data
+// shows as absence, never a fabricated distribution.
+//
+// Layering follows the dashboard: a `SectionHeading` over title-less `glassCard`s,
+// each naming itself with a small secondary caption where its siblings make that
+// ambiguous.
 
 struct StatisticsView: View {
     @State private var viewModel = StatisticsViewModel()
@@ -16,11 +21,7 @@ struct StatisticsView: View {
             // One GlassEffectContainer so the PMC panes and cards blend as a
             // single glass system instead of stacking independent glass layers.
             GlassEffectContainer(spacing: Theme.Spacing.l) {
-                VStack(alignment: .leading, spacing: Theme.Spacing.l) {
-                    if let pmc = viewModel.pmc {
-                        PMCInsightsSection(result: pmc)
-                    }
-
+                VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                     Picker("Range", selection: $viewModel.range) {
                         ForEach(StatisticsViewModel.StatsRange.allCases) { range in
                             Text(range.rawValue).tag(range)
@@ -29,10 +30,19 @@ struct StatisticsView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
 
-                    rampCard
-                    shareCard
-                    zonesCard
-                    powerCurveCard
+                    if let pmc = viewModel.pmc {
+                        section("Fitness & Form") {
+                            PMCInsightsSection(result: pmc, days: viewModel.range.days)
+                            rampCard
+                        }
+                    }
+
+                    section("Training Mix") {
+                        shareCard
+                        zonesCard
+                    }
+
+                    section("Power Curve") { powerCurveCard }
 
                     PerformanceMetricsSection()
                 }
@@ -50,11 +60,25 @@ struct StatisticsView: View {
         }
     }
 
+    private func section<Content: View>(_ title: String,
+                                        @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            SectionHeading(title)
+            content()
+        }
+    }
+
+    /// A card's own name, for sections holding more than one — deliberately a
+    /// small secondary line, never a second headline competing with the section.
+    private func caption(_ text: String) -> some View {
+        Text(text).font(.caption).foregroundStyle(.secondary)
+    }
+
     // MARK: Fitness ramp rate
 
     private var rampCard: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            Text("Fitness Ramp Rate").font(.headline)
+            caption("Ramp rate")
             if viewModel.ramp.isEmpty {
                 Text("Not enough training history for a ramp rate.")
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -70,9 +94,7 @@ struct StatisticsView: View {
                 RampRateChart(model: RampRateModel(weeks: viewModel.ramp, safeBand: RampRate.safeBand))
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Theme.Spacing.l)
-        .glassSurface(cornerRadius: Theme.Radius.l)
+        .glassCard()
     }
 
     private func rampTint(_ delta: Double) -> Color {
@@ -85,7 +107,7 @@ struct StatisticsView: View {
     private var shareCard: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
             HStack {
-                Text("Sport Share").font(.headline)
+                caption("Sport share")
                 Spacer()
                 Picker("Metric", selection: $viewModel.shareMetric) {
                     ForEach(SportShareModel.Metric.allCases, id: \.self) { metric in
@@ -103,16 +125,14 @@ struct StatisticsView: View {
                 SportShareChart(model: viewModel.share)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Theme.Spacing.l)
-        .glassSurface(cornerRadius: Theme.Radius.l)
+        .glassCard()
     }
 
     // MARK: Time in zone
 
     private var zonesCard: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            Text("Time in Zone").font(.headline)
+            caption("Time in zone")
             Picker("Sport", selection: $viewModel.zoneSport) {
                 ForEach(SportFamily.triathlon) { family in
                     Text(family.displayName).tag(family)
@@ -132,16 +152,13 @@ struct StatisticsView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Theme.Spacing.l)
-        .glassSurface(cornerRadius: Theme.Radius.l)
+        .glassCard()
     }
 
     // MARK: Power curve
 
     private var powerCurveCard: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            Text("Power Curve").font(.headline)
             if viewModel.powerCurve.isEmpty {
                 Text("No cycling power data in this range.")
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -149,8 +166,6 @@ struct StatisticsView: View {
                 PowerCurveChart(model: PowerCurveModel(points: viewModel.powerCurve))
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Theme.Spacing.l)
-        .glassSurface(cornerRadius: Theme.Radius.l)
+        .glassCard()
     }
 }

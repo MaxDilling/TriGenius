@@ -102,14 +102,6 @@ struct DashboardView: View {
         }
     }
 
-    /// Page-level section heading. Deliberately outside the cards and a clear size
-    /// step above anything inside one, so a heading visibly scopes the block below
-    /// it. Cards carry no title of their own; a card that needs to name itself uses
-    /// a small secondary caption row (see `trendCard`).
-    private func sectionHeading(_ title: String) -> some View {
-        Text(title).font(.title2.bold())
-    }
-
     /// Renders one configurable dashboard section (order + visibility come from
     /// `AppSettings.dashboardLayout`; the header stays fixed above them).
     @ViewBuilder private func sectionView(_ section: DashboardSection) -> some View {
@@ -207,7 +199,7 @@ struct DashboardView: View {
     /// screen, where these same numbers open into the full PMC chart.
     private var fitnessAndForm: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            sectionHeading("Fitness & Form")
+            SectionHeading("Fitness & Form")
 
             if let result = viewModel.pmc, let s = result.snapshot {
                 NavigationLink {
@@ -235,7 +227,7 @@ struct DashboardView: View {
             } else {
                 Text("No training-load data yet. Sync your activities to see CTL / ATL / TSB.")
                     .font(.subheadline).foregroundStyle(.secondary)
-                    .dashCard()
+                    .glassCard()
             }
         }
     }
@@ -273,7 +265,7 @@ struct DashboardView: View {
                 )
             }
         }
-        .dashCard()
+        .glassCard()
     }
 
     private func fitnessStatus(delta: Int) -> String {
@@ -299,7 +291,7 @@ struct DashboardView: View {
     @ViewBuilder private var weeklyTarget: some View {
         if !viewModel.visibleFamilies.isEmpty {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                sectionHeading("Weekly Target")
+                SectionHeading("Weekly Target")
 
                 VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                     HStack {
@@ -326,7 +318,7 @@ struct DashboardView: View {
                         }
                     }
                 }
-                .dashCard()
+                .glassCard()
                 .contentShape(Rectangle())
                 .onTapGesture { router.selectedTab = .plan }
             }
@@ -358,7 +350,7 @@ struct DashboardView: View {
                     }
                 }
             }
-            .dashCard()
+            .glassCard()
             .overlay(
                 RoundedRectangle(cornerRadius: Theme.Radius.l, style: .continuous)
                     .strokeBorder(Self.appleIntelligenceGradient, lineWidth: 1.5)
@@ -416,13 +408,13 @@ struct DashboardView: View {
 
     private var upNext: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            sectionHeading("Up Next")
+            SectionHeading("Up Next")
 
             let items = upNextItems
             if items.isEmpty {
                 Text("No workouts logged or planned.")
                     .font(.subheadline).foregroundStyle(.secondary)
-                    .dashCard()
+                    .glassCard()
             } else {
                 VStack(spacing: 0) {
                     ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
@@ -432,7 +424,7 @@ struct DashboardView: View {
                         upNextRow(item)
                     }
                 }
-                .dashCard(padding: 0)
+                .glassCard(padding: 0)
             }
         }
     }
@@ -558,7 +550,7 @@ private struct PMCStatCard: View {
             Text(status).font(.caption2).foregroundStyle(dot)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .dashCard(padding: 12)
+        .glassCard(padding: 12)
     }
 }
 
@@ -724,24 +716,4 @@ func durationHM(_ minutes: Double) -> String {
     let total = Int(minutes.rounded())
     let h = total / 60, m = total % 60
     return h > 0 ? "\(h)h \(String(format: "%02d", m))m" : "\(m)m"
-}
-
-// MARK: - Card styling
-
-// Dashboard cards ride on real Liquid Glass (`glassEffect`) instead of a
-// hand-rolled translucent fill. They're grouped under a single
-// `GlassEffectContainer` in `DashboardView.body` so the panes blend as one
-// glass system rather than stacking independent layers.
-private struct DashCard: ViewModifier {
-    var padding: CGFloat = Theme.Spacing.l
-    func body(content: Content) -> some View {
-        content
-            .padding(padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .glassSurface(cornerRadius: Theme.Radius.l)
-    }
-}
-
-extension View {
-    func dashCard(padding: CGFloat = 16) -> some View { modifier(DashCard(padding: padding)) }
 }

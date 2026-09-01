@@ -124,11 +124,9 @@ struct PerformanceMetricsSection: View {
     var body: some View {
         // A concrete VStack (not a transparent `Group`) so the `.task` loader
         // fires reliably even while the section has nothing to show yet.
-        VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("Performance Metrics").font(.headline)
-                    Spacer()
+        VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+            VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+                SectionHeading("Performance") {
                     Button { showAdd = true } label: {
                         Image(systemName: "plus.circle.fill").font(.title3)
                     }
@@ -141,16 +139,14 @@ struct PerformanceMetricsSection: View {
                 } else if loaded {
                     Text("No performance metrics yet. VO₂max, FTP and your threshold values appear here once your data source reports them.")
                         .font(.subheadline).foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(Theme.Spacing.m)
-                        .glassSurface(cornerRadius: Theme.Radius.l)
+                        .glassCard(padding: Theme.Spacing.m)
                 }
             }
 
             let recovery = available(.recovery)
             if !recovery.isEmpty {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Recovery").font(.headline)
+                VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+                    SectionHeading("Recovery")
                     grid(recovery)
                 }
             }

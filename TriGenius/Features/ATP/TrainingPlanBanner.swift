@@ -52,7 +52,7 @@ struct TrainingPlanBanner: View {
                 .font(.footnote.weight(.semibold))
                 .foregroundStyle(.tertiary)
         }
-        .dashCard()
+        .glassCard()
     }
 
     // MARK: Period (left)
