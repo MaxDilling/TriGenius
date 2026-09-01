@@ -190,7 +190,7 @@ final class AppSettings: ObservableObject {
     static let availableOpenRouterModels = [
         "openrouter/auto",
         "deepseek/deepseek-v4-flash-latest",
-        "deepseek/deepseek/deepseek-v4-pro-0813",
+        "deepseek/deepseek-v4-pro-0813",
         "google/gemini-3.7-flash",
         "openai/gpt-oss-120b:free",
         "google/gemma-4-31b-it:free",
