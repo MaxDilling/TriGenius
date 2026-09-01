@@ -66,4 +66,12 @@ extension SportFamily {
     }
 
     var color: Color { Theme.Palette.sport(self) }
+
+    /// Distance for display. Swims read in metres, the unit a session is
+    /// measured in, as does any sub-kilometre distance ("600 m"); `decimals`
+    /// applies to the kilometre form only.
+    func distanceLabel(_ km: Double, decimals: Int = 2) -> String {
+        guard self != .swim, km >= 1 else { return "\(Int((km * 1000).rounded())) m" }
+        return String(format: "%.\(decimals)f km", km)
+    }
 }

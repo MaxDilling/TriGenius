@@ -293,7 +293,8 @@ struct TrainingDetailView: View {
     @ViewBuilder
     private var rail: some View {
         if let leg = selectedLegValue {
-            totalsCard(totalsMetrics(leg.segment.durationMinutes, leg.segment.tss, leg.segment.distanceKm),
+            totalsCard(totalsMetrics(leg.segment.durationMinutes, leg.segment.tss, leg.segment.distanceKm,
+                                     family: leg.segment.family),
                        basis: leg.segment.tssBasis)
             activityCard(leg.segment.details, title: "\(leg.name) · Metrics")
             zonesCard(leg.segment.details)
@@ -382,19 +383,20 @@ struct TrainingDetailView: View {
     }
 
     /// The totals of a workout or of one multisport leg.
-    private func totalsMetrics(_ durationMinutes: Double, _ tss: Double?, _ distanceKm: Double) -> [HeroMetric] {
+    private func totalsMetrics(_ durationMinutes: Double, _ tss: Double?, _ distanceKm: Double,
+                               family: SportFamily) -> [HeroMetric] {
         var metrics: [HeroMetric] = [
             HeroMetric(value: durationHM(durationMinutes), label: "Duration"),
             HeroMetric(value: tss.map { "\(Int($0.rounded()))" } ?? "—", label: "TSS"),
         ]
         if distanceKm > 0 {
-            metrics.append(HeroMetric(value: String(format: "%.1f km", distanceKm), label: "Distance"))
+            metrics.append(HeroMetric(value: family.distanceLabel(distanceKm, decimals: 1), label: "Distance"))
         }
         return metrics
     }
 
     private var heroMetrics: [HeroMetric] {
-        totalsMetrics(record.durationMinutes, record.tss, record.distanceKm)
+        totalsMetrics(record.durationMinutes, record.tss, record.distanceKm, family: family)
     }
 
     private func totalsRow(_ metrics: [HeroMetric], basis: String?) -> some View {
@@ -478,8 +480,8 @@ struct TrainingDetailView: View {
             let plannedKm = planned.meters / 1000
             let prefix = planned.source == .fixed ? "" : "~"
             rows.append(.init(label: "Distance",
-                              planned: prefix + String(format: "%.2f km", plannedKm),
-                              completed: String(format: "%.2f km", record.distanceKm),
+                              planned: prefix + family.distanceLabel(plannedKm),
+                              completed: family.distanceLabel(record.distanceKm),
                               delta: signedKm(record.distanceKm - plannedKm)))
         }
 
@@ -544,7 +546,7 @@ struct TrainingDetailView: View {
     }
     private func signedKm(_ km: Double) -> String? {
         guard abs(km) >= 0.01 else { return nil }
-        return (km >= 0 ? "+" : "−") + String(format: "%.2f km", abs(km))
+        return (km >= 0 ? "+" : "−") + family.distanceLabel(abs(km))
     }
     private func signedInt(_ value: Double) -> String? {
         let rounded = Int(value.rounded())
@@ -834,9 +836,9 @@ struct TrainingDetailView: View {
     /// The tab's secondary line: the race distance for Total, else the leg's own
     /// rate — falling back to its distance for a transition, which has no rate.
     private func tabDetail(_ leg: Leg?) -> String {
-        guard let leg else { return String(format: "%.1f km", record.distanceKm) }
+        guard let leg else { return family.distanceLabel(record.distanceKm, decimals: 1) }
         if let rate = Self.rateLabel(leg.segment.details) { return rate }
-        return leg.segment.distanceKm > 0 ? String(format: "%.2f km", leg.segment.distanceKm) : "—"
+        return leg.segment.distanceKm > 0 ? leg.segment.family.distanceLabel(leg.segment.distanceKm) : "—"
     }
 
     // MARK: Splits — the race broken into its legs (Total tab)
@@ -889,7 +891,7 @@ struct TrainingDetailView: View {
     private func splitDetail(_ leg: Leg) -> String {
         var parts: [String] = []
         if leg.segment.distanceKm > 0 {
-            parts.append(String(format: "%.2f km", leg.segment.distanceKm))
+            parts.append(leg.segment.family.distanceLabel(leg.segment.distanceKm))
         }
         if let rate = Self.rateLabel(leg.segment.details) {
             parts.append(rate)
@@ -941,7 +943,7 @@ struct TrainingDetailView: View {
     /// "1:12:04 · 40.2 km · 118 TSS" — the parts this leg actually measured.
     private func legSummary(_ segment: WorkoutSegment) -> String {
         var parts = [Self.elapsed(segment.durationMinutes)]
-        if segment.distanceKm > 0 { parts.append(String(format: "%.2f km", segment.distanceKm)) }
+        if segment.distanceKm > 0 { parts.append(segment.family.distanceLabel(segment.distanceKm)) }
         if let tss = segment.tss { parts.append("\(Int(tss.rounded())) TSS") }
         return parts.joined(separator: " · ")
     }
