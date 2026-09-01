@@ -408,7 +408,6 @@ struct CoachChatView: View {
                 onStop: { viewModel.stop() }
             )
         }
-        .navigationTitle("Coach")
         // Workout cards push their detail view onto the chat's own stack; the
         // record is resolved at tap time — completed first, so a finished
         // (folded) plan's card opens the actual session.

@@ -6,7 +6,7 @@ extension Notification.Name {
     /// Posted (on the main actor) whenever the local training store is mutated —
     /// activities, performance metrics or scheduled workouts, from any path
     /// (coach tools, a sync, or a user action). Views that render from a cached
-    /// snapshot (Dashboard, Calendar, Performance Insights) observe this to reload
+    /// snapshot (Dashboard, Calendar, Statistics) observe this to reload
     /// without triggering a full network re-sync. Emission is coalesced, so a
     /// burst of mutations (one sync) yields a single notification.
     static let trainingDataDidChange = Notification.Name("trigenius.trainingDataDidChange")
@@ -205,7 +205,7 @@ extension WorkoutRecord {
 // MARK: - Metric-key namespace
 //
 // Canonical snake_case keys for the `PerformanceMetricRecord` time series, split
-// by purpose. Shared by ingest, the Performance Insights UI and the
+// by purpose. Shared by ingest, the Statistics UI and the
 // "delete historical performance data" dev action so the sets never drift.
 enum MetricKeys {
     /// Physiological capacity markers (FTP, VO2max, thresholds, zones, weight).
@@ -1579,7 +1579,7 @@ final class TrainingDataStore {
     }
 
     /// Ascending day-by-day history for one metric key — the progression the
-    /// Performance Insights charts plot.
+    /// Statistics charts plot.
     func metricHistory(_ key: String) -> [MetricPoint] {
         let records = (try? context.fetch(
             FetchDescriptor<PerformanceMetricRecord>(

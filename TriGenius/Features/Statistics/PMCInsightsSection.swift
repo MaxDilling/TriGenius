@@ -222,7 +222,7 @@ struct PMCInsightsSection: View {
             HStack(spacing: 16) {
                 legend(.blue, "Fitness (CTL)")
                 legend(.pink, "Fatigue (ATL)")
-                legend(.green, "Form (TSB, right)")
+                legend(.green, "Form (TSB)")
             }
             .font(.caption2)
             .foregroundStyle(.secondary)

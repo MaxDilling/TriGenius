@@ -3,19 +3,21 @@ import Combine
 
 // MARK: - Dashboard View
 //
-// The athlete's home screen. Card-based layout: a fixed header (greeting +
-// Settings entry), then the `DashboardSection` cards in the athlete's configured
-// order/visibility (`AppSettings.dashboardLayout`, Settings → Dashboard layout):
-//   • Plan banner: current ATP period + countdown to the next A event; taps
-//     through to the Plan tab.
-//   • Performance Insights: CTL / ATL / TSB stat tiles — display-only (the full
-//     PMC chart is reached via the Statistics card).
-//   • Statistics: this week's CTL gain + actual-vs-planned CTL trend + mini
-//     sport share — the whole card taps through to StatisticsView.
-//   • Weekly Target (Volume): per-discipline rings, actual vs. target.
+// The athlete's home screen. A fixed header (greeting + Settings entry), then the
+// `DashboardSection` blocks in the athlete's configured order/visibility
+// (`AppSettings.dashboardLayout`, Settings → Dashboard layout):
+//   • Plan banner: current ATP period + countdown to the next A event → Plan tab.
+//   • Up Next: today's completed + upcoming planned workouts, one row per
+//     workout → its detail screen.
+//   • Fitness & Form: CTL / ATL / TSB stat tiles over the actual-vs-planned CTL
+//     trend and this week's sport share → StatisticsView.
+//   • Weekly Target (Volume): per-discipline rings, actual vs. target → Plan tab.
 //   • AI insight: the coach's one-line read on the week, in the Apple
-//     Intelligence look (its own tile).
-//   • Up Next: today's completed + upcoming planned workouts, one tile.
+//     Intelligence look → chat, prefilled.
+//
+// Layering: a section is a page-level `sectionHeading` over its content; cards
+// never carry a title of their own, and every card has a destination — with no
+// chevrons anywhere, a dead card would be indistinguishable from a live one.
 //
 // Everything reads from the local DB via DashboardViewModel (source-agnostic).
 
@@ -50,7 +52,7 @@ struct DashboardView: View {
             // One GlassEffectContainer so the dashboard's glass panes blend as a
             // single system instead of stacking independent glass layers.
             GlassEffectContainer(spacing: Theme.Spacing.l) {
-                VStack(spacing: 20) {
+                VStack(spacing: Theme.Spacing.xl) {
                     if viewModel.isLoading && viewModel.pmc == nil {
                         ProgressView("Loading…").padding(.top, 60)
                     } else {
@@ -64,7 +66,7 @@ struct DashboardView: View {
                     }
                 }
             }
-            .padding()
+            .padding(Theme.Spacing.l)
         }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
@@ -100,16 +102,23 @@ struct DashboardView: View {
         }
     }
 
+    /// Page-level section heading. Deliberately outside the cards and a clear size
+    /// step above anything inside one, so a heading visibly scopes the block below
+    /// it. Cards carry no title of their own; a card that needs to name itself uses
+    /// a small secondary caption row (see `trendCard`).
+    private func sectionHeading(_ title: String) -> some View {
+        Text(title).font(.title2.bold())
+    }
+
     /// Renders one configurable dashboard section (order + visibility come from
     /// `AppSettings.dashboardLayout`; the header stays fixed above them).
     @ViewBuilder private func sectionView(_ section: DashboardSection) -> some View {
         switch section {
         case .planBanner: planBanner
-        case .performance: performanceInsights
-        case .weeklyTarget: weeklyTarget
-        case .statistics: statistics
-        case .aiInsight: aiInsightCard
         case .upNext: upNext
+        case .performance: fitnessAndForm
+        case .weeklyTarget: weeklyTarget
+        case .aiInsight: aiInsightCard
         }
     }
 
@@ -191,33 +200,80 @@ struct DashboardView: View {
         }
     }
 
-    // MARK: Performance Insights
+    // MARK: Fitness & Form
 
-    /// The CTL / ATL / TSB read of the moment, as three non-interactive stat
-    /// tiles at the top of the dashboard — the full PMC chart lives behind the
-    /// Statistics card, so these are display-only.
-    private var performanceInsights: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Performance Insights").font(.headline)
+    /// The PMC read of the moment: three stat tiles over the fitness-vs-plan trend
+    /// and this week's sport split. The block taps through to the statistics
+    /// screen, where these same numbers open into the full PMC chart.
+    private var fitnessAndForm: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            sectionHeading("Fitness & Form")
 
             if let result = viewModel.pmc, let s = result.snapshot {
-                HStack(spacing: 10) {
-                    PMCStatCard(title: "Fitness", caption: "CTL", dot: .blue,
-                                value: Int(s.ctl.rounded()), delta: viewModel.ctlDelta,
-                                status: fitnessStatus(delta: viewModel.ctlDelta))
-                    PMCStatCard(title: "Fatigue", caption: "ATL", dot: .pink,
-                                value: Int(s.atl.rounded()), delta: viewModel.atlDelta,
-                                status: fatigueStatus(atl: s.atl, ctl: s.ctl))
-                    PMCStatCard(title: "Form", caption: "TSB", dot: .orange,
-                                value: Int(s.tsb.rounded()), delta: viewModel.tsbDelta,
-                                status: formStatus(tsb: s.tsb))
+                NavigationLink {
+                    StatisticsView()
+                } label: {
+                    VStack(spacing: Theme.Spacing.m) {
+                        HStack(spacing: 10) {
+                            PMCStatCard(title: "Fitness", caption: "CTL", dot: .blue,
+                                        value: Int(s.ctl.rounded()), delta: viewModel.ctlDelta,
+                                        status: fitnessStatus(delta: viewModel.ctlDelta))
+                            PMCStatCard(title: "Fatigue", caption: "ATL", dot: .pink,
+                                        value: Int(s.atl.rounded()), delta: viewModel.atlDelta,
+                                        status: fatigueStatus(atl: s.atl, ctl: s.ctl))
+                            PMCStatCard(title: "Form", caption: "TSB", dot: .orange,
+                                        value: Int(s.tsb.rounded()), delta: viewModel.tsbDelta,
+                                        status: formStatus(tsb: s.tsb))
+                        }
+                        if !viewModel.ctlTrend.actual.isEmpty || viewModel.currentWeek != nil {
+                            trendCard
+                        }
+                    }
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
             } else {
                 Text("No training-load data yet. Sync your activities to see CTL / ATL / TSB.")
                     .font(.subheadline).foregroundStyle(.secondary)
                     .dashCard()
             }
         }
+    }
+
+    /// Fitness against plan plus the week's sport split. The caption row carries
+    /// the ramp rate, so the card names itself without a second headline.
+    private var trendCard: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            if !viewModel.ctlTrend.actual.isEmpty {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                    HStack {
+                        Text("Fitness vs plan, ±15 days").font(.caption).foregroundStyle(.secondary)
+                        Spacer()
+                        if let delta = RampRate.weeklySeries(points: viewModel.pmc?.points ?? [], weeks: 2).last?.delta {
+                            Text(delta, format: .number.precision(.fractionLength(1)).sign(strategy: .always()))
+                                .font(.caption.bold().monospacedDigit())
+                                .foregroundStyle(RampRate.safeBand.contains(delta) ? Theme.Palette.success
+                                                 : delta > RampRate.safeBand.upperBound ? Theme.Palette.warning : .secondary)
+                            Text("CTL/wk").font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                    CTLTrendChart(model: viewModel.ctlTrend)
+                }
+            }
+            if let week = viewModel.currentWeek {
+                ProportionBar(
+                    segments: SportFamily.allCases.map { family in
+                        let tss = week.totals(for: family).tss
+                        return ProportionBar.Segment(label: family.displayName,
+                                                     color: family.color,
+                                                     value: tss,
+                                                     display: "\(Int(tss.rounded()))")
+                    },
+                    showLegend: false
+                )
+            }
+        }
+        .dashCard()
     }
 
     private func fitnessStatus(delta: Int) -> String {
@@ -242,84 +298,39 @@ struct DashboardView: View {
 
     @ViewBuilder private var weeklyTarget: some View {
         if !viewModel.visibleFamilies.isEmpty {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack {
-                    Text("Weekly Target").font(.headline)
-                    Spacer()
-                    VolumeMetricToggle(metric: $volumeMetric)
-                }
-
-                HStack(alignment: .top, spacing: 8) {
-                    ForEach(viewModel.visibleFamilies) { family in
-                        // Actual comes from the projection (its own weekly sum) so the
-                        // solid arc and the projection arc share one number.
-                        let target = viewModel.target(for: family)
-                        let projection = viewModel.projection(for: family)
-                        VolumeRing(family: family,
-                                   metric: volumeMetric,
-                                   actualTSS: projection.actualTSS,
-                                   targetTSS: target.tss,
-                                   actualKm: projection.actualKm,
-                                   targetKm: target.distanceKm,
-                                   projectedTSS: projection.projectedTSS,
-                                   projectedKm: projection.projectedKm,
-                                   creditedTSS: projection.creditedTSS,
-                                   projectedCreditTSS: projection.projectedCreditTSS)
-                    }
-                }
-            }
-            .dashCard()
-        }
-    }
-
-    // MARK: Statistics
-
-    /// Entry card to the statistics screen: this week's fitness gain, the
-    /// actual-vs-planned CTL trend, and a mini sport-share bar of the current
-    /// week. The whole card — background included — is the tap target, so the
-    /// glass surface lives *inside* the link label.
-    private var statistics: some View {
-        NavigationLink {
-            StatisticsView()
-        } label: {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                HStack {
-                    Text("Statistics").font(.headline)
-                    Spacer()
-                    if let delta = RampRate.weeklySeries(points: viewModel.pmc?.points ?? [], weeks: 2).last?.delta {
-                        Text(delta, format: .number.precision(.fractionLength(1)).sign(strategy: .always()))
-                            .font(.subheadline.bold().monospacedDigit())
-                            .foregroundStyle(RampRate.safeBand.contains(delta) ? Theme.Palette.success
-                                             : delta > RampRate.safeBand.upperBound ? Theme.Palette.warning : .secondary)
-                        Text("CTL/wk").font(.caption).foregroundStyle(.secondary)
+                sectionHeading("Weekly Target")
+
+                VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                    HStack {
+                        Spacer()
+                        VolumeMetricToggle(metric: $volumeMetric)
                     }
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.tertiary)
-                }
-                if !viewModel.ctlTrend.actual.isEmpty {
-                    VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                        Text("Fitness vs plan, ±15 days").font(.caption).foregroundStyle(.secondary)
-                        CTLTrendChart(model: viewModel.ctlTrend)
+
+                    HStack(alignment: .top, spacing: 8) {
+                        ForEach(viewModel.visibleFamilies) { family in
+                            // Actual comes from the projection (its own weekly sum) so the
+                            // solid arc and the projection arc share one number.
+                            let target = viewModel.target(for: family)
+                            let projection = viewModel.projection(for: family)
+                            VolumeRing(family: family,
+                                       metric: volumeMetric,
+                                       actualTSS: projection.actualTSS,
+                                       targetTSS: target.tss,
+                                       actualKm: projection.actualKm,
+                                       targetKm: target.distanceKm,
+                                       projectedTSS: projection.projectedTSS,
+                                       projectedKm: projection.projectedKm,
+                                       creditedTSS: projection.creditedTSS,
+                                       projectedCreditTSS: projection.projectedCreditTSS)
+                        }
                     }
                 }
-                if let week = viewModel.currentWeek {
-                    ProportionBar(
-                        segments: SportFamily.allCases.map { family in
-                            let tss = week.totals(for: family).tss
-                            return ProportionBar.Segment(label: family.displayName,
-                                                         color: family.color,
-                                                         value: tss,
-                                                         display: "\(Int(tss.rounded()))")
-                        },
-                        showLegend: false
-                    )
-                }
+                .dashCard()
+                .contentShape(Rectangle())
+                .onTapGesture { router.selectedTab = .plan }
             }
-            .dashCard()
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
     }
 
     // MARK: AI insight
@@ -404,8 +415,8 @@ struct DashboardView: View {
     }
 
     private var upNext: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Up Next").font(.headline)
+        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            sectionHeading("Up Next")
 
             let items = upNextItems
             if items.isEmpty {

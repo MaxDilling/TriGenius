@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Statistics
 //
-// The analysis screen behind the dashboard's Statistics card: the PMC (stat
+// The analysis screen behind the dashboard's Fitness & Form section: the PMC (stat
 // cards + chart), fitness ramp rate, sport share, time in zone, and the
 // physiological-marker grid. All charts render shared `Shared/Charts/`
 // components from plain value models; missing data shows as absence, never a

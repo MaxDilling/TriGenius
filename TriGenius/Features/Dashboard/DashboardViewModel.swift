@@ -32,7 +32,7 @@ final class DashboardViewModel {
     /// The derived season plan — feeds the training-plan banner (current period +
     /// countdown to the next A event) and the CTL trend below.
     var atpPlan: ATPPlan?
-    /// Actual vs ATP-planned CTL around today — the dashboard Statistics card's chart.
+    /// Actual vs ATP-planned CTL around today — the dashboard Fitness & Form chart.
     var ctlTrend = CTLTrendModel(actual: [], planned: [])
     var weeklyBuckets: [TrainingVolume.WeekBucket] = []
     var targets: [SportFamily: WeeklyTarget] = [:]

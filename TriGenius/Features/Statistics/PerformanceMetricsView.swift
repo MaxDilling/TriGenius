@@ -3,14 +3,12 @@ import Charts
 
 // MARK: - Performance Metrics (physiological markers)
 //
-// FEATURES.md "Erweitere Performance Insights um weitere Daten wie VO2Max, FTP,
-// Laktatschwellenwert": the Performance Insights screen now surfaces the
-// athlete's physiological performance markers next to the PMC chart. Each marker
-// is read as a time series from `TrainingDataStore.metricHistory(_:)` so its
-// progression — not just the latest scalar — is charted: a current value, the
+// The athlete's physiological performance markers on the Statistics screen. Each
+// marker is read as a time series from `TrainingDataStore.metricHistory(_:)` so
+// its progression — not just the latest scalar — is charted: a current value, the
 // trend vs the first stored point, and a sparkline.
 
-/// One physiological marker the Performance Insights screen can display, with
+/// One physiological marker the Statistics screen can display, with
 /// everything needed to read, format and color it. Internal (not private): the
 /// chat's metric-trend card validates its token key against this catalog and
 /// reuses `MetricCard`.
@@ -109,7 +107,7 @@ struct PerformanceMetric: Identifiable {
 
 // MARK: - Section
 
-/// The grid of physiological-marker cards on the Performance Insights screen.
+/// The grid of physiological-marker cards on the Statistics screen.
 /// Reads each marker's history from the store on appear; renders nothing when
 /// no marker has any data yet.
 struct PerformanceMetricsSection: View {
