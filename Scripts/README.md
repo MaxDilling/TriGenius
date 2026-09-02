@@ -33,11 +33,26 @@ Two manual scripts, run from your own Mac (the one with Xcode-beta) — there is
 
 ## Cutting a release
 
-From a clean working tree (no uncommitted changes):
+Untracked files (notes, `ref/`, scratch dirs) do not block a release — `dist/` is
+gitignored too. Uncommitted or staged changes to *tracked* files do block, because
+the release commit stages `project.pbxproj` and `git commit` would sweep anything
+else already staged into the tagged commit.
 
 ```
-Scripts/release.sh 1.1.0
+Scripts/release.sh 1.1.0      # explicit version
+Scripts/release.sh            # patch-bump the last release tag (v0.3.1 -> 0.3.2)
+Scripts/release.sh --withios  # ...and push the same build to TestFlight
 ```
+
+With no version, the next one is derived from the newest `v*` **tag**, not from
+`MARKETING_VERSION` in the project — the tag records what actually shipped, so a
+version already bumped in the project between releases still gets released rather
+than skipped. Pass the version explicitly for a minor or major bump.
+
+`--withios` runs `testflight.sh --no-bump` once the macOS release is published, so
+both platforms ship the identical version/build pair. It runs last on purpose: if
+the upload fails, the macOS release stands and only the iOS half needs retrying
+(`Scripts/testflight.sh --no-bump`).
 
 This will:
 1. Bump `MARKETING_VERSION`/`CURRENT_PROJECT_VERSION` in the Xcode project
@@ -72,6 +87,10 @@ Scripts/testflight.sh
 ```
 
 Bumps `CURRENT_PROJECT_VERSION`, archives, signs and uploads. The build appears in TestFlight after a few minutes of "Processing".
+
+`--no-bump` reuses the current build number instead of incrementing it — how
+`release.sh --withios` keeps both platforms on one version/build pair. Standalone
+runs should omit it, since App Store Connect rejects a duplicate build number.
 
 ## Getting it to testers
 

@@ -3,7 +3,9 @@
 # TestFlight / App Store Connect. Bumps only the build number — MARKETING_VERSION
 # is owned by release.sh (macOS). No git commit/tag, no GitHub release.
 #
-# Usage: Scripts/testflight.sh
+# Usage: Scripts/testflight.sh [--no-bump]
+#   --no-bump  reuse the current CURRENT_PROJECT_VERSION instead of incrementing it,
+#              for when a caller already owns the version (release.sh --withios).
 #
 # One-time setup (not done by this script):
 #   1. Create the app record in App Store Connect (bundle id net.Narica.TriGenius).
@@ -13,6 +15,17 @@
 #        export ASC_KEY_ID=XXXXXXXXXX
 #        export ASC_ISSUER_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 set -euo pipefail
+
+BUMP_BUILD=1
+for arg in "$@"; do
+	case "$arg" in
+	--no-bump) BUMP_BUILD=0 ;;
+	*)
+		echo "error: unknown argument: $arg (usage: Scripts/testflight.sh [--no-bump])" >&2
+		exit 1
+		;;
+	esac
+done
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -44,9 +57,14 @@ if [[ -z "$IDENTITIES" ]]; then
 fi
 
 CURRENT_BUILD="$(grep -m1 'CURRENT_PROJECT_VERSION = ' "$PROJECT/project.pbxproj" | sed -E 's/[^0-9]*([0-9]+);.*/\1/')"
-NEXT_BUILD=$((CURRENT_BUILD + 1))
-echo "Bumping CURRENT_PROJECT_VERSION $CURRENT_BUILD -> $NEXT_BUILD"
-sed -i '' -E "s/CURRENT_PROJECT_VERSION = [^;]+;/CURRENT_PROJECT_VERSION = $NEXT_BUILD;/g" "$PROJECT/project.pbxproj"
+if [[ "$BUMP_BUILD" -eq 1 ]]; then
+	NEXT_BUILD=$((CURRENT_BUILD + 1))
+	echo "Bumping CURRENT_PROJECT_VERSION $CURRENT_BUILD -> $NEXT_BUILD"
+	sed -i '' -E "s/CURRENT_PROJECT_VERSION = [^;]+;/CURRENT_PROJECT_VERSION = $NEXT_BUILD;/g" "$PROJECT/project.pbxproj"
+else
+	NEXT_BUILD="$CURRENT_BUILD"
+	echo "Reusing CURRENT_PROJECT_VERSION $NEXT_BUILD (--no-bump)"
+fi
 
 WORK_DIR="$(mktemp -d)"
 echo "Using temporary work dir: $WORK_DIR"
