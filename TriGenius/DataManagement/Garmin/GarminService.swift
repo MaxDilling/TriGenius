@@ -335,7 +335,8 @@ nonisolated final class GarminService: Sendable {
 
     // MARK: - Activity fetch
 
-    func getActivities(sport: String?, count: Int = 10, days: Int?) async -> String {
+    func getActivities(sport: String?, count: Int = 10, days: Int?,
+                       progress: SyncProgressHandler? = nil) async -> String {
         do {
             let fetchCount = sport != nil ? count * 3 : count
             let raw = try await client.getActivities(start: 0, limit: min(fetchCount, 100))
@@ -353,7 +354,8 @@ nonisolated final class GarminService: Sendable {
 
             var formatted: [[String: Any]] = []
             var toIngest: [IngestedActivity] = []
-            for activity in raw {
+            for (i, activity) in raw.enumerated() {
+                await progress?(i, raw.count)
                 if let targetIDs, let sid = (activity["sportTypeId"] as? NSNumber)?.intValue, !targetIDs.contains(sid) {
                     continue
                 }
@@ -403,19 +405,22 @@ nonisolated final class GarminService: Sendable {
     // or nil on failure. FEATURES.md "Deeper Garmin history backfill".
     /// `force` re-fetches & recomputes even already-stored activities (the
     /// "recompute all" path); otherwise stored activities are skipped (the cache).
-    func backfillActivities(startDate: String, endDate: String, force: Bool = false) async -> Int? {
+    func backfillActivities(startDate: String, endDate: String, force: Bool = false,
+                            progress: SyncProgressHandler? = nil) async -> Int? {
         do {
             let raw = try await client.getActivitiesByDate(start: startDate, end: endDate)
             let candidateIDs = Set(raw.compactMap { ($0["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" } })
             let cache = await TrainingDataStore.shared.cachedActivities(ids: candidateIDs)
             var toIngest: [IngestedActivity] = []
-            for activity in raw {
+            for (i, activity) in raw.enumerated() {
+                await progress?(i, raw.count)
                 let gid = (activity["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" }
                 if !force, let gid, cache[gid] != nil { continue }   // cache: skip known
                 // TSS + effective distance are scored by the store at ingest; the
                 // athlete's manual edits re-apply there from the override layer.
                 if let dto = ingestDTO(await formatActivityRecord(activity)) { toIngest.append(dto) }
             }
+            await progress?(raw.count, raw.count)
             await TrainingDataStore.shared.ingest(toIngest)
             return toIngest.count
         } catch {

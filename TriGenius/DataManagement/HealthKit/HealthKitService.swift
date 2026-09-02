@@ -86,10 +86,12 @@ final class HealthKitService {
 
     /// Recent workouts as scored-ready DTOs. The store scores TSS and buckets the
     /// zone streams at ingest, against the thresholds current on each workout's date.
-    func fetchActivities(count: Int = 10, since: Date? = nil) async throws -> [IngestedActivity] {
+    func fetchActivities(count: Int = 10, since: Date? = nil,
+                         progress: SyncProgressHandler? = nil) async throws -> [IngestedActivity] {
         let workouts = try await fetchWorkouts(count: count, since: since)
         var out: [IngestedActivity] = []
-        for workout in workouts {
+        for (i, workout) in workouts.enumerated() {
+            await progress?(i, workouts.count)
             let (rec, powerCurveJSON, streamsData, zones) = try await normalizedRecord(for: workout)
             let (segments, legZones) = await segmentsJSON(for: workout)
             if let dto = Self.ingestDTO(from: rec, powerCurveJSON: powerCurveJSON,
@@ -98,6 +100,7 @@ final class HealthKitService {
                 out.append(dto)
             }
         }
+        await progress?(workouts.count, workouts.count)
         return out
     }
 

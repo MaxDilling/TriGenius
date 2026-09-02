@@ -10,12 +10,39 @@ import Foundation
 // (and subsequent syncs) persisted. This keeps conversations fast and offline-
 // resilient, and guarantees the PMC engine and the coach see the same history.
 
+/// Reports `(done, total)` from a source's per-activity fetch loop. `@Sendable` and
+/// async because the loops run outside the main actor, in the sources.
+typealias SyncProgressHandler = @Sendable (Int, Int) async -> Void
+
+@Observable
 @MainActor
 final class DataSyncCoordinator {
     static let shared = DataSyncCoordinator()
     private init() {}
 
     private let store = TrainingDataStore.shared
+
+    /// Progress of the running sync's activity loop, nil when idle. Only that loop
+    /// is counted: it is the part that costs one network round-trip per workout,
+    /// while the metric range calls are a handful of requests that finish before any
+    /// total is known.
+    struct SyncProgress: Equatable {
+        var done: Int
+        var total: Int
+    }
+    private(set) var progress: SyncProgress?
+
+    /// The handler handed to a source, plus the guarantee that the bar clears however
+    /// the sync ends. Nested syncs would fight over one bar, so the inner one reports
+    /// nothing rather than resetting the outer's total.
+    private func withProgress<T>(_ body: (SyncProgressHandler?) async throws -> T) async rethrows -> T {
+        guard progress == nil else { return try await body(nil) }
+        progress = SyncProgress(done: 0, total: 0)
+        defer { progress = nil }
+        return try await body { @Sendable @MainActor done, total in
+            self.progress = SyncProgress(done: done, total: total)
+        }
+    }
 
     /// How many recent activities to pull per sync.
     private let syncCount = 100
@@ -92,7 +119,9 @@ final class DataSyncCoordinator {
             }
             // getActivities ingests (and the store scores) into the store as a side effect.
             let ap = Perf.begin("garmin.activities")
-            let result = await GarminService.shared.getActivities(sport: nil, count: syncCount, days: days)
+            let result = await withProgress {
+                await GarminService.shared.getActivities(sport: nil, count: syncCount, days: days, progress: $0)
+            }
             Perf.end(ap)
             // Only advance the watermark on success, else a network failure would
             // skip the failed window on the next (now smaller) incremental sync.
@@ -124,7 +153,9 @@ final class DataSyncCoordinator {
                 // Build the rich per-workout record (HR/power/pace + the raw zone
                 // streams); the store buckets and scores it against each workout's own
                 // thresholds at ingest.
-                let dtos = try await HealthKitService.shared.fetchActivities(count: count, since: since)
+                let dtos = try await withProgress {
+                    try await HealthKitService.shared.fetchActivities(count: count, since: since, progress: $0)
+                }
                 store.ingest(dtos)
                 // Reconcile: remove HealthKit records no longer returned within the
                 // synced window — chiefly Garmin Connect workouts now filtered out
@@ -193,11 +224,14 @@ final class DataSyncCoordinator {
         if AppSettings.storedMetricsSource() == .garmin {
             await syncGarminMetrics(from: from, to: today)
         }
-        let count = await GarminService.shared.backfillActivities(
-            startDate: DateFormatter.ymd.string(from: from),
-            endDate: DateFormatter.ymd.string(from: today),
-            force: force
-        )
+        let count = await withProgress {
+            await GarminService.shared.backfillActivities(
+                startDate: DateFormatter.ymd.string(from: from),
+                endDate: DateFormatter.ymd.string(from: today),
+                force: force,
+                progress: $0
+            )
+        }
         if count != nil { markSynced(source) }
         return count
     }

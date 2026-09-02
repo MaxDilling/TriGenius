@@ -1738,6 +1738,12 @@ struct ReadSourceSyncSection: View {
             }
             .disabled(isWorking)
 
+            if isWorking, let p = DataSyncCoordinator.shared.progress, p.total > 0 {
+                ProgressView(value: Double(p.done), total: Double(p.total)) {
+                    Text("Activity \(p.done) of \(p.total)…")
+                }
+            }
+
             if let statusMessage {
                 Label(statusMessage, systemImage: isError ? "exclamationmark.triangle.fill" : "checkmark.circle")
                     .foregroundStyle(isError ? .orange : .secondary)
