@@ -30,6 +30,9 @@ nonisolated struct WorkoutSegment {
     /// whichever discipline the watch happened to record (steps/min), so a bike
     /// leg sliced out of it charts running cadence.
     var streamsData: Data = Data()
+    /// This leg's own value→seconds zone distribution (`ZoneHistogram`), so a
+    /// threshold change re-buckets the leg exactly.
+    var zoneHistogramData: Data = Data()
 
     var sport: String { details["sport"] as? String ?? "other" }
     var family: SportFamily { SportFamily(sportKey: sport) }
@@ -52,6 +55,7 @@ nonisolated enum WorkoutSegments {
             if let tss = s.tss { obj["tss"] = tss }
             if let basis = s.tssBasis { obj["tss_basis"] = basis }
             if !s.streamsData.isEmpty { obj["streams"] = s.streamsData.base64EncodedString() }
+            if !s.zoneHistogramData.isEmpty { obj["zone_histogram"] = s.zoneHistogramData.base64EncodedString() }
             return obj
         }
         return String(compactJSON: array)
@@ -68,7 +72,8 @@ nonisolated enum WorkoutSegments {
                 tss: Coerce.double(obj["tss"]),
                 tssBasis: obj["tss_basis"] as? String,
                 details: obj["details"] as? [String: Any] ?? [:],
-                streamsData: (obj["streams"] as? String).flatMap { Data(base64Encoded: $0) } ?? Data()
+                streamsData: (obj["streams"] as? String).flatMap { Data(base64Encoded: $0) } ?? Data(),
+                zoneHistogramData: (obj["zone_histogram"] as? String).flatMap { Data(base64Encoded: $0) } ?? Data()
             )
         }
     }

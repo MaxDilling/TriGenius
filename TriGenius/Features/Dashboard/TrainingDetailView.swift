@@ -1120,10 +1120,17 @@ struct TrainingDetailView: View {
 
     private func snapshotDict(_ s: PerformanceSnapshot) -> [String: Any] {
         var d: [String: Any] = [:]
-        if let v = s.cyclingFTP { d["cycling_ftp_w"] = v }
+        if let v = s.cyclingFTP {
+            d["cycling_ftp_w"] = v
+            d["cycling_ftp_is_estimated"] = s.cyclingFTPIsEstimated
+        }
         if let v = s.runningFTP { d["running_ftp_w"] = v }
         if let v = s.cssPaceSeconds { d["css_pace_s_per_100m"] = v }
-        if let v = s.lactateThrHR { d["lactate_thr_hr_bpm"] = v }
+        if let v = s.lactateThrHR {
+            d["lactate_thr_hr_bpm"] = v
+            d["lactate_thr_hr_is_estimated"] = s.lactateThrHRIsEstimated
+            d["lactate_thr_hr_is_anchored"] = s.lactateThrHRIsAnchored
+        }
         if let v = s.maxHR { d["max_hr_bpm"] = v }
         if let v = s.lactateThrPaceSeconds { d["lactate_thr_pace_s_per_km"] = v }
         if let v = s.vo2maxRunning { d["vo2max_running"] = v }

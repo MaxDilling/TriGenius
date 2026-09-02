@@ -193,14 +193,18 @@ final class CoachMemory: ObservableObject {
         // it changed. Garmin running power is deliberately not rendered (its watt
         // scale isn't comparable to cycling and invites bad comparisons).
         var markers: [String] = []
-        func marker(_ label: String, _ cur: String?, _ was: String?) {
+        // `note` is appended *after* the comparison: an "estimated" annotation on the
+        // current value must not make an unchanged marker read as a change.
+        func marker(_ label: String, _ cur: String?, _ was: String?, _ note: String = "") {
             guard let cur else { return }
-            markers.append(was != nil && was != cur ? "\(label) \(cur) (was \(was!))" : "\(label) \(cur)")
+            markers.append(was != nil && was != cur
+                           ? "\(label) \(cur)\(note) (was \(was!))" : "\(label) \(cur)\(note)")
         }
-        marker("FTP", now.cyclingFTP.map { now.cyclingFTPIsEstimated ? "~\($0) W (estimated from VO2max)" : "\($0) W" },
-               prev.cyclingFTP.map { "\($0) W" })
+        marker("FTP", now.cyclingFTP.map { "\($0) W" }, prev.cyclingFTP.map { "\($0) W" },
+               now.cyclingFTPIsEstimated ? " (estimated from VO2max)" : "")
         marker("max HR", now.maxHR.map { "\($0) bpm" }, prev.maxHR.map { "\($0) bpm" })
-        marker("LTHR", now.lactateThrHR.map { "\($0) bpm" }, prev.lactateThrHR.map { "\($0) bpm" })
+        marker("LTHR", now.lactateThrHR.map { "\($0) bpm" }, prev.lactateThrHR.map { "\($0) bpm" },
+               now.lactateThrHRIsEstimated ? " (estimated from max HR)" : "")
         marker("LT pace", now.lactateThrPaceFormatted.map { "\($0)/km" }, prev.lactateThrPaceFormatted.map { "\($0)/km" })
         marker("CSS", now.cssPaceFormatted.map { "\($0)/100m" }, prev.cssPaceFormatted.map { "\($0)/100m" })
         marker("VO2max run", now.vo2maxRunning.map { String(format: "%.0f", $0) }, prev.vo2maxRunning.map { String(format: "%.0f", $0) })

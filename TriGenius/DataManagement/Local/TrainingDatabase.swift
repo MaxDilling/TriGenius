@@ -122,9 +122,20 @@ final class WorkoutRecord {
     /// Max-mean power per grid duration, computed at ingest from the source's raw
     /// power stream (`PowerCurve.encode`). "" when the activity has no power stream.
     var powerCurveJSON: String = ""
+    /// Best *steady* 20-minute mean HR in this activity (`LTHREstimate.steadyWindow`),
+    /// 0 when none qualified. Stored raw and unfiltered: rejection against HRmax
+    /// happens at read time, so correcting a wrong HRmax re-filters the whole history
+    /// without re-ingesting it.
+    var steadyHR20: Double = 0
+    /// This activity's peak HR, the input to that rejection.
+    var peakHR: Double = 0
     /// Downsampled metric streams (`WorkoutStreams.encode`), the detail charts'
     /// data. Empty when the source delivered no streams for this activity.
     var streamsData: Data = Data()
+    /// Value→seconds zone distribution (`ZoneHistogram`), kept so a threshold change
+    /// re-buckets time-in-zone exactly without re-fetching the raw stream. Empty for
+    /// a multisport row — its legs carry their own.
+    var zoneHistogramData: Data = Data()
     /// The legs of a multisport session (`WorkoutSegments.encode`), "" for a
     /// single-sport row. When present, `tss` and `distanceKm` are the sum over
     /// these and every per-sport reader goes through `sportContributions`.
@@ -152,7 +163,10 @@ final class WorkoutRecord {
         tssBasis: String? = nil,
         detailsJSON: String = "",
         powerCurveJSON: String = "",
+        steadyHR20: Double = 0,
+        peakHR: Double = 0,
         streamsData: Data = Data(),
+        zoneHistogramData: Data = Data(),
         segmentsJSON: String = ""
     ) {
         self.id = id
@@ -176,7 +190,10 @@ final class WorkoutRecord {
         self.tssBasis = tssBasis
         self.detailsJSON = detailsJSON
         self.powerCurveJSON = powerCurveJSON
+        self.steadyHR20 = steadyHR20
+        self.peakHR = peakHR
         self.streamsData = streamsData
+        self.zoneHistogramData = zoneHistogramData
         self.segmentsJSON = segmentsJSON
     }
 }
@@ -370,6 +387,11 @@ struct PerformanceSnapshot: Sendable {
     /// Swim critical-swim-speed pace, in seconds per 100 m.
     var cssPaceSeconds: Double?
     var lactateThrHR: Int?
+    /// True when `lactateThrHR` was derived (`LTHREstimate`) rather than measured.
+    var lactateThrHRIsEstimated: Bool = false
+    /// False when the estimate rests on the HRmax fraction alone, with no
+    /// near-maximal sustained effort to anchor it — a floor, not a reading.
+    var lactateThrHRIsAnchored: Bool = false
     /// Maximum heart rate, in bpm.
     var maxHR: Int?
     /// Running lactate-threshold pace, in seconds per km.
@@ -406,27 +428,51 @@ struct PerformanceHistory: Sendable {
         let rank: Int
     }
 
-    /// metricKey → readings, ascending by date.
-    private let byKey: [String: [Entry]]
-    /// Whether a missing `cycling_ftp` may be filled from VO2max + mass. Carried on
-    /// the resolver so every consumer of `snapshot(asOf:)` sees the same answer.
-    private let estimateFTPFromVO2max: Bool
+    /// `sourceRank` of a hand-entered reading — the tier an estimate must not replace.
+    static let manualRank = 3
 
-    init(byKey: [String: [Entry]], estimateFTPFromVO2max: Bool) {
-        self.byKey = byKey.mapValues { $0.sorted { $0.date < $1.date } }
-        self.estimateFTPFromVO2max = estimateFTPFromVO2max
+    /// One activity's sustained-HR evidence, the input to `LTHREstimate`.
+    struct HRObservation: Sendable {
+        let date: Date
+        let steadyHR20: Double
+        let peakHR: Double
     }
 
-    /// Value of one metric as it stood on `date`: the newest reading on or before
-    /// `date`, ties broken by source rank. Nil when no reading exists yet by then.
-    private func value(_ key: String, asOf date: Date) -> Double? {
+    /// metricKey → readings, ascending by date.
+    private let byKey: [String: [Entry]]
+    /// Carried on the resolver so every consumer of `snapshot(asOf:)` sees the same
+    /// answer. Both are opt-ins: an estimate replaces the source's value only when
+    /// the athlete asked for it.
+    private let estimateFTPFromVO2max: Bool
+    private let estimateLTHRFromHRMax: Bool
+    private let hrObservations: [HRObservation]
+
+    init(byKey: [String: [Entry]], estimateFTPFromVO2max: Bool,
+         estimateLTHRFromHRMax: Bool = false, hrObservations: [HRObservation] = []) {
+        self.byKey = byKey.mapValues { $0.sorted { $0.date < $1.date } }
+        self.estimateFTPFromVO2max = estimateFTPFromVO2max
+        self.estimateLTHRFromHRMax = estimateLTHRFromHRMax
+        self.hrObservations = hrObservations.sorted { $0.date < $1.date }
+    }
+
+    /// The reading of one metric as it stood on `date`: the newest on or before
+    /// `date`, ties broken by source rank. Nil when none exists yet by then.
+    private func entry(_ key: String, asOf date: Date) -> Entry? {
         guard let entries = byKey[key] else { return nil }
         var best: Entry?
         for e in entries where e.date <= date {
             guard let b = best else { best = e; continue }
             if e.date > b.date || (e.date == b.date && e.rank > b.rank) { best = e }
         }
-        return best?.value
+        return best
+    }
+
+    private func value(_ key: String, asOf date: Date) -> Double? { entry(key, asOf: date)?.value }
+
+    /// A hand-entered reading is the athlete correcting the record, so an estimate
+    /// never displaces it — unlike a synced one, which is what opting in is for.
+    private func isManual(_ key: String, asOf date: Date) -> Bool {
+        entry(key, asOf: date)?.rank == Self.manualRank
     }
 
     /// The metric snapshot as it stood on `date`, assembled for the TSS engine.
@@ -444,13 +490,32 @@ struct PerformanceHistory: Sendable {
         snap.vo2maxRunning = value("vo2max_running", asOf: date)
         snap.vo2maxCycling = value("vo2max_cycling", asOf: date)
         snap.weightKg = value("weight_kg", asOf: date)
-        // A measured FTP always outranks the estimate; the estimate only fills a
-        // gap, and only on opt-in. Both inputs resolve `asOf: date` like every other
-        // threshold, so a January ride is scored against January's VO2max and mass.
-        if snap.cyclingFTP == nil, estimateFTPFromVO2max,
+        // Opting in *replaces* the synced source's value: the reason to enable this is
+        // that the watch's own number is absent or stale, so preferring it would defeat
+        // the setting. A manual reading outranks the estimate, or the athlete's own
+        // correction would be unreachable. The source value still stands when the
+        // estimate cannot be computed — a nil threshold silently drops TL scoring.
+        // Both inputs resolve `asOf: date` like every other threshold, so a January
+        // ride is scored against January's VO2max and mass.
+        if estimateFTPFromVO2max, !isManual("cycling_ftp", asOf: date),
            let watts = FTPEstimate.fromVO2max(snap.vo2maxCycling, massKg: snap.weightKg) {
             snap.cyclingFTP = Int(watts.rounded())
             snap.cyclingFTPIsEstimated = true
+        }
+        if estimateLTHRFromHRMax, !isManual("lactate_threshold_hr", asOf: date),
+           let hrMax = snap.maxHR, hrMax > 0 {
+            // `.distantFuture` asks for the latest value, so the observation window
+            // has to hang off today — not off a date 180 days before the year 4000.
+            let anchor = min(date, .now)
+            let cutoff = anchor.addingTimeInterval(-Double(LTHREstimate.historyDays) * 86_400)
+            let windows = hrObservations
+                .filter { $0.date > cutoff && $0.date <= anchor && $0.peakHR <= Double(hrMax) }
+                .map(\.steadyHR20)
+            if let est = LTHREstimate.estimate(hrMax: Double(hrMax), steadyWindows: windows) {
+                snap.lactateThrHR = Int(est.bpm.rounded())
+                snap.lactateThrHRIsEstimated = true
+                snap.lactateThrHRIsAnchored = est.isAnchored
+            }
         }
         return snap
     }
@@ -536,6 +601,7 @@ final class TrainingDataStore {
     private var changePending = false
     private func markChanged() {
         cachedLatestSnapshot = nil
+        cachedHRObservations = nil
         guard !changePending else { return }
         changePending = true
         DispatchQueue.main.async { [weak self] in
@@ -801,8 +867,9 @@ final class TrainingDataStore {
         let durationMinutes: Double, distanceKm: Double
         let tss: Double?, tssBasis: String?
         let detailsJSON: String, powerCurveJSON: String
-        let streamsData: Data
+        let streamsData: Data, zoneHistogramData: Data
         let segmentsJSON: String
+        let steadyHR20: Double, peakHR: Double
 
         init(_ a: IngestedActivity, scored: ScoredActivity) {
             source = a.source; date = a.date
@@ -811,7 +878,9 @@ final class TrainingDataStore {
             durationMinutes = a.durationMinutes; distanceKm = scored.distanceKm
             tss = scored.tss; tssBasis = scored.basis
             detailsJSON = scored.detailsJSON; powerCurveJSON = a.powerCurveJSON
-            streamsData = a.streamsData; segmentsJSON = scored.segmentsJSON
+            streamsData = a.streamsData; zoneHistogramData = scored.zoneHistogramData
+            segmentsJSON = scored.segmentsJSON
+            steadyHR20 = scored.steadyHR20; peakHR = scored.peakHR
         }
 
         init(_ r: WorkoutRecord) {
@@ -820,7 +889,9 @@ final class TrainingDataStore {
             durationMinutes = r.durationMinutes; distanceKm = r.distanceKm
             tss = r.tss; tssBasis = r.tssBasis
             detailsJSON = r.detailsJSON; powerCurveJSON = r.powerCurveJSON
-            streamsData = r.streamsData; segmentsJSON = r.segmentsJSON
+            streamsData = r.streamsData; zoneHistogramData = r.zoneHistogramData
+            segmentsJSON = r.segmentsJSON
+            steadyHR20 = r.steadyHR20; peakHR = r.peakHR
         }
     }
 
@@ -846,7 +917,10 @@ final class TrainingDataStore {
         record.detailsJSON = c.detailsJSON
         record.powerCurveJSON = c.powerCurveJSON
         record.streamsData = c.streamsData
+        record.zoneHistogramData = c.zoneHistogramData
         record.segmentsJSON = c.segmentsJSON
+        record.steadyHR20 = c.steadyHR20
+        record.peakHR = c.peakHR
     }
 
     /// Re-materialize the athlete's stored edits (`overridesJSON`) onto a freshly
@@ -861,7 +935,7 @@ final class TrainingDataStore {
         if let name = ov["manual_name"] as? String { r.name = name }
         if ov["manual_distance_m"] != nil {
             let (km, tss, basis) = TSSScoring.score(&details, snapshot: history.snapshot(asOf: r.date),
-                                                    zoneSamples: [:])
+                                                    zoneSamples: ZoneHistogram.decode(r.zoneHistogramData) ?? [:])
             r.distanceKm = km
             r.tss = tss
             r.tssBasis = basis
@@ -883,6 +957,9 @@ final class TrainingDataStore {
     struct ScoredActivity {
         let tss: Double?, distanceKm: Double, detailsJSON: String, basis: String?
         var segmentsJSON: String = ""
+        var steadyHR20: Double = 0
+        var peakHR: Double = 0
+        var zoneHistogramData: Data = Data()
     }
 
     /// Score one incoming activity against the thresholds current on its date.
@@ -890,20 +967,36 @@ final class TrainingDataStore {
     /// carry no per-discipline data, so only the legs are scorable.
     private static func score(_ a: IngestedActivity, history: PerformanceHistory) -> ScoredActivity {
         let snapshot = history.snapshot(asOf: a.date)
+        // The HR stream the sources already shape for zone bucketing also carries the
+        // LTHR evidence, so it is read here rather than in any source.
+        // One window per scored unit: legs are separate efforts, and concatenating
+        // them would let a 20-minute window straddle a transition.
+        let hrStreams = a.zoneSamples[.heartRate].map { [$0] }
+            ?? a.legZoneSamples.values.compactMap { $0[.heartRate] }
+        let steady = hrStreams.compactMap(LTHREstimate.steadyWindow).max() ?? 0
+        let peak = hrStreams.flatMap { $0.map(\.value) }.max() ?? 0
         if !a.segmentsJSON.isEmpty {
             var segments = WorkoutSegments.decode(a.segmentsJSON)
+            for i in segments.indices {
+                guard let samples = segments[i].sourceId.flatMap({ a.legZoneSamples[$0] }) else { continue }
+                segments[i].zoneHistogramData = ZoneHistogram.encode(samples)
+            }
             let (km, tss, basis) = TSSScoring.scoreSegments(&segments, snapshot: snapshot,
                                                            zoneSamples: a.legZoneSamples)
             return ScoredActivity(tss: tss, distanceKm: km, detailsJSON: a.detailsJSON,
-                                  basis: basis, segmentsJSON: WorkoutSegments.encode(segments))
+                                  basis: basis, segmentsJSON: WorkoutSegments.encode(segments),
+                                  steadyHR20: steady, peakHR: peak)
         }
         guard var details = jsonObject(a.detailsJSON) else {
-            return ScoredActivity(tss: nil, distanceKm: a.distanceKm, detailsJSON: a.detailsJSON, basis: nil)
+            return ScoredActivity(tss: nil, distanceKm: a.distanceKm, detailsJSON: a.detailsJSON,
+                                  basis: nil, steadyHR20: steady, peakHR: peak)
         }
         let (km, tss, basis) = TSSScoring.score(&details, snapshot: snapshot,
                                                 zoneSamples: a.zoneSamples)
         return ScoredActivity(tss: tss, distanceKm: km,
-                              detailsJSON: jsonString(details) ?? a.detailsJSON, basis: basis)
+                              detailsJSON: jsonString(details) ?? a.detailsJSON, basis: basis,
+                              steadyHR20: steady, peakHR: peak,
+                              zoneHistogramData: ZoneHistogram.encode(a.zoneSamples))
     }
 
     /// Cached `(tss, detailsJSON)` for the given ids — a resync passes the ids it is
@@ -946,7 +1039,7 @@ final class TrainingDataStore {
 
     private func rescore(_ r: WorkoutRecord, details: inout [String: Any]) {
         let (km, tss, basis) = TSSScoring.score(&details, snapshot: performanceHistory().snapshot(asOf: r.date),
-                                                zoneSamples: [:])
+                                                zoneSamples: ZoneHistogram.decode(r.zoneHistogramData) ?? [:])
         r.distanceKm = km
         r.tss = tss
         r.tssBasis = basis
@@ -1576,7 +1669,7 @@ final class TrainingDataStore {
     /// its day (see `setManualMetric`).
     private static func sourceRank(_ source: String) -> Int {
         switch source {
-        case "manual": return 3
+        case "manual": return PerformanceHistory.manualRank
         case "garmin": return 2
         default: return 1   // "healthkit"
         }
@@ -1591,34 +1684,66 @@ final class TrainingDataStore {
                 .init(date: r.date, value: r.value, rank: Self.sourceRank(r.source))
             )
         }
+        let estimateLTHR = UserDefaults.standard.bool(forKey: AppSettings.estimateLTHRFromHRMaxKey)
+        // Only fetched when the LTHR estimate is switched on, and cached because this
+        // runs per list row: `WorkoutRecord` has no partial fault here, so each fetch
+        // otherwise materializes every stored stream blob.
+        var observations: [PerformanceHistory.HRObservation] = []
+        if estimateLTHR {
+            if let cached = cachedHRObservations { observations = cached } else {
+                let rows = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
+                    predicate: #Predicate { $0.isCompleted && $0.steadyHR20 > 0 }))) ?? []
+                observations = rows.map { .init(date: $0.date, steadyHR20: $0.steadyHR20, peakHR: $0.peakHR) }
+                cachedHRObservations = observations
+            }
+        }
         return PerformanceHistory(
             byKey: byKey,
-            estimateFTPFromVO2max: UserDefaults.standard.bool(forKey: AppSettings.estimateFTPFromVO2maxKey))
+            estimateFTPFromVO2max: UserDefaults.standard.bool(forKey: AppSettings.estimateFTPFromVO2maxKey),
+            estimateLTHRFromHRMax: estimateLTHR,
+            hrObservations: observations)
     }
 
-    /// Re-score every completed activity in place against the current thresholds.
-    /// The hook for a settings change that shifts thresholds retroactively (the FTP
-    /// estimate) — a resync would re-fetch every stream to reach the same result.
-    /// Returns the number of rows rescored.
+    /// Re-bucketing input for one multisport row: each leg's stored histogram, keyed
+    /// the way `scoreSegments` looks legs up.
+    private static func legZoneSamples(_ segments: [WorkoutSegment]) -> [String: ZoneSamples] {
+        Dictionary(segments.compactMap { s in
+            s.sourceId.flatMap { id in ZoneHistogram.decode(s.zoneHistogramData).map { (id, $0) } }
+        }, uniquingKeysWith: { a, _ in a })
+    }
+
+    /// Re-score every completed activity in place against the current thresholds —
+    /// the hook for a threshold opt-in that moves every past date. Time in zone is
+    /// re-bucketed from each row's stored `ZoneHistogram`, so the result matches a
+    /// full re-ingest exactly; a row stored before histograms existed keeps the zones
+    /// it was ingested with and needs a `resync(source:)` to pick them up.
+    /// Reports `(done, total)` as it goes and yields periodically so the caller can
+    /// render it; everything stays on the main actor, where the models live.
     @discardableResult
-    func rescoreAllActivities() -> Int {
+    func rescoreAllActivities(progress: (Int, Int) -> Void = { _, _ in }) async -> Int {
         let rows = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
             predicate: #Predicate { $0.isCompleted }))) ?? []
         let history = performanceHistory()
-        for r in rows {
+        for (i, r) in rows.enumerated() {
             let snapshot = history.snapshot(asOf: r.date)
             // Overrides are already materialised into detailsJSON, so re-scoring the
             // stored details preserves the athlete's edits.
             if !r.segmentsJSON.isEmpty {
                 var segments = WorkoutSegments.decode(r.segmentsJSON)
-                let (km, tss, basis) = TSSScoring.scoreSegments(&segments, snapshot: snapshot,
-                                                               zoneSamples: [:])
+                let (km, tss, basis) = TSSScoring.scoreSegments(
+                    &segments, snapshot: snapshot, zoneSamples: Self.legZoneSamples(segments))
                 r.segmentsJSON = WorkoutSegments.encode(segments)
                 (r.distanceKm, r.tss, r.tssBasis) = (km, tss, basis)
             } else if var details = Self.jsonObject(r.detailsJSON) {
-                let (km, tss, basis) = TSSScoring.score(&details, snapshot: snapshot, zoneSamples: [:])
+                let (km, tss, basis) = TSSScoring.score(
+                    &details, snapshot: snapshot,
+                    zoneSamples: ZoneHistogram.decode(r.zoneHistogramData) ?? [:])
                 (r.distanceKm, r.tss, r.tssBasis) = (km, tss, basis)
                 r.detailsJSON = Self.jsonString(details) ?? r.detailsJSON
+            }
+            if i % 25 == 0 || i == rows.count - 1 {
+                progress(i + 1, rows.count)
+                await Task.yield()
             }
         }
         try? context.save()
@@ -1629,11 +1754,17 @@ final class TrainingDataStore {
     /// Latest value per metric key — the source for the coach's prompt context,
     /// the Settings display, and the planned-workout estimators. Cached because the
     /// estimators read it per list row; `markChanged()` invalidates on any mutation.
-    private var cachedLatestSnapshot: PerformanceSnapshot?
+    /// The estimate opt-ins change how a threshold resolves without touching a row,
+    /// so the cache carries the flags it was built under rather than relying on
+    /// whoever flips them to invalidate it.
+    private var cachedLatestSnapshot: (flags: [Bool], snapshot: PerformanceSnapshot)?
+    private var cachedHRObservations: [PerformanceHistory.HRObservation]?
     func latestSnapshot() -> PerformanceSnapshot {
-        if let cached = cachedLatestSnapshot { return cached }
+        let flags = [UserDefaults.standard.bool(forKey: AppSettings.estimateFTPFromVO2maxKey),
+                     UserDefaults.standard.bool(forKey: AppSettings.estimateLTHRFromHRMaxKey)]
+        if let cached = cachedLatestSnapshot, cached.flags == flags { return cached.snapshot }
         let snap = performanceHistory().snapshot(asOf: .distantFuture)
-        cachedLatestSnapshot = snap
+        cachedLatestSnapshot = (flags, snap)
         return snap
     }
 

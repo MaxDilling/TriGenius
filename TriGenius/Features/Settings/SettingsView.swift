@@ -194,6 +194,16 @@ final class AppSettings: ObservableObject {
     }
     static let estimateFTPFromVO2maxKey = "estimate_ftp_from_vo2max"
 
+    /// Derive LTHR from the athlete's max HR plus sustained efforts in their history
+    /// (`LTHREstimate`), for watches that never detect one. Off by default; when on it
+    /// *replaces* the source's LTHR, which is the point — the stored one is typically
+    /// absent or a hand-entered placeholder. Read by `TrainingDataStore` via
+    /// `estimateLTHRFromHRMaxKey`.
+    @Published var estimateLTHRFromHRMax: Bool {
+        didSet { UserDefaults.standard.set(estimateLTHRFromHRMax, forKey: Self.estimateLTHRFromHRMaxKey) }
+    }
+    static let estimateLTHRFromHRMaxKey = "estimate_lthr_from_hrmax"
+
     /// A curated shortlist of tool-capable OpenRouter model ids. OpenRouter
     /// exposes hundreds; these are the ones worth defaulting to for the coach.
     static let availableOpenRouterModels = [
@@ -217,6 +227,7 @@ final class AppSettings: ObservableObject {
         openRouterModel = Self.storedOpenRouterModel()
         openRouterWebSearch = UserDefaults.standard.bool(forKey: "openrouter_web_search")
         estimateFTPFromVO2max = UserDefaults.standard.bool(forKey: Self.estimateFTPFromVO2maxKey)
+        estimateLTHRFromHRMax = UserDefaults.standard.bool(forKey: Self.estimateLTHRFromHRMaxKey)
         readSources = Self.loadReadSources()
         metricsSource = Self.loadMetricsSource()
         writeTarget = Self.loadWriteTarget()
@@ -360,6 +371,7 @@ struct SettingsView: View {
     @State private var showClearConfirm = false
     @State private var showClearDataConfirm = false
     @State private var showCloudConsent = false
+    @State private var rescoreProgress: (done: Int, total: Int)?
     #if DEBUG
     @State private var showClearDBConfirm = false
     @State private var showDeletePerfConfirm = false
@@ -505,22 +517,33 @@ struct SettingsView: View {
                 })
                 profileRow("Threshold power (run)", value: performance.runningFTP.map { "\($0) W" })
                 profileRow("CSS", value: performance.cssPaceFormatted.map { "\($0)/100m" })
-                profileRow("Lactate threshold HR", value: performance.lactateThrHR.map { "\($0) bpm" })
+                profileRow("Lactate threshold HR", value: performance.lactateThrHR.map {
+                    performance.lactateThrHRIsEstimated
+                        ? "~\($0) bpm (\(performance.lactateThrHRIsAnchored ? "estimated" : "rough estimate"))"
+                        : "\($0) bpm"
+                })
                 profileRow("Lactate threshold pace", value: performance.lactateThrPaceFormatted.map { "\($0)/km" })
                 profileRow("VO₂max (run)", value: performance.vo2maxRunning.map { String(format: "%.1f", $0) })
                 profileRow("VO₂max (cycling)", value: performance.vo2maxCycling.map { String(format: "%.1f", $0) })
                 profileRow("Max HR", value: performance.maxHR.map { "\($0) bpm" })
                 profileRow("Weight", value: performance.weightKg.map { String(format: "%.1f kg", $0) })
                 Toggle("Estimate FTP from VO₂max", isOn: $settings.estimateFTPFromVO2max)
-                    .onChange(of: settings.estimateFTPFromVO2max) {
-                        // Thresholds just moved for every past date — rescore in place
-                        // rather than re-fetching every stream.
-                        TrainingDataStore.shared.rescoreAllActivities()
+                Toggle("Estimate LTHR from max HR", isOn: $settings.estimateLTHRFromHRMax)
+                if let p = rescoreProgress {
+                    ProgressView(value: Double(p.done), total: Double(max(p.total, 1))) {
+                        Text("Recomputing \(p.done) of \(p.total)…")
                     }
+                } else {
+                    Button {
+                        Task { await recomputeHistory() }
+                    } label: {
+                        Label("Recompute history", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                }
             } header: {
                 Text("Performance")
             } footer: {
-                Text("Synced automatically from \(settings.metricsSource.displayName). History is kept in the local database.\n\nWatches that don't measure FTP (fēnix 6 and older) still report cycling VO₂max, which pins it closely. A measured FTP always takes precedence, and estimated values are marked \"~\". Needs cycling VO₂max and weight — Apple Health reports VO₂max for running only.")
+                Text("Synced automatically from \(settings.metricsSource.displayName). History is kept in the local database.\n\nWatches that don't measure FTP or LTHR (fēnix 6 and older) still report the inputs to estimate them. Each estimate **replaces** the synced value while switched on — enable it only when that value is missing, stale or a placeholder. A value you entered by hand is never replaced. Estimated values are marked \"~\".\n\nFTP needs cycling VO₂max and weight; Apple Health reports VO₂max for running only. LTHR needs your max HR to be set correctly — everything derived from it shifts with it — and reads sustained efforts from your last \(LTHREstimate.historyDays) days. Without a hard 20-minute effort in that window it falls back to a rough fraction of max HR.\n\nA change applies to newly synced activities right away. **Recompute history** rewrites training load and time in zone for everything already stored — worth doing after switching an estimate on or off, and safe to run at any time.")
             }
 
             // Privacy & Data — user-facing controls Apple review expects: the
@@ -821,6 +844,18 @@ struct SettingsView: View {
     }
 
     // MARK: - Helpers
+
+    /// A threshold opt-in moves every past date's thresholds, but rewriting the whole
+    /// history is the athlete's call: it takes a while and it restates numbers they may
+    /// have been reading. Activities stored before zone histograms existed keep the
+    /// time in zone they were ingested with until the next re-sync.
+    private func recomputeHistory() async {
+        rescoreProgress = (0, 0)
+        await TrainingDataStore.shared.rescoreAllActivities { done, total in
+            rescoreProgress = (done, total)
+        }
+        rescoreProgress = nil
+    }
 
     private func profileRow(_ label: String, value: String?) -> some View {
         HStack {

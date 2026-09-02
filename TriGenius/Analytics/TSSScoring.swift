@@ -17,9 +17,9 @@ nonisolated enum TSSScoring {
     /// Mutates `details` (swimming.cleaned_distance_m / swim_time_s, distance_km,
     /// time-in-zone) and returns the resolved distance (km) + TSS + how the TSS was
     /// derived (the provenance label surfaced to the athlete/coach; nil when no TSS
-    /// was produced). `zoneSamples` are the source's raw streams for this unit; empty
-    /// on the recompute path, which re-scores from stored details and has no streams
-    /// to re-bucket — the zones already in `details` then stand.
+    /// was produced). `zoneSamples` are the bucketing input for this unit: the
+    /// source's raw stream at ingest, the stored `ZoneHistogram` re-expanded on the
+    /// recompute path. Empty leaves the zones already in `details` standing.
     static func score(_ details: inout [String: Any], snapshot: PerformanceSnapshot,
                       zoneSamples: ZoneSamples) -> (distanceKm: Double, tss: Double?, basis: String?) {
         // 1. Swim: re-clean from the stored active lengths.

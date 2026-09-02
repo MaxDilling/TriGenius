@@ -39,6 +39,17 @@ nonisolated enum ZoneMetric: String, CaseIterable, Codable, Sendable {
         }
     }
 
+    /// Multiplier `ZoneHistogram` quantizes a sample value by before using it as a
+    /// bin key. Heart rate and power arrive as integers, so binning them is lossless;
+    /// grade-adjusted speed is continuous and bins at 1 cm/s, far finer than the
+    /// spacing of any zone bound.
+    var quantum: Double {
+        switch self {
+        case .heartRate, .power: 1
+        case .pace: 100
+        }
+    }
+
     /// How the athlete sees the metric — the bar's title.
     var displayName: String {
         switch self {
