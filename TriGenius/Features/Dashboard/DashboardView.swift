@@ -645,11 +645,3 @@ private struct VolumeRing: View {
     }
 }
 
-// MARK: - Helpers
-
-/// Format minutes as "1h 05m" (or "45m" under an hour).
-func durationHM(_ minutes: Double) -> String {
-    let total = Int(minutes.rounded())
-    let h = total / 60, m = total % 60
-    return h > 0 ? "\(h)h \(String(format: "%02d", m))m" : "\(m)m"
-}

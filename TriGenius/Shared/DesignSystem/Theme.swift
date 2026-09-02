@@ -69,6 +69,13 @@ enum Theme {
     }
 }
 
+/// The app-wide duration format: "1:05h", "0:45h". Always hours-and-minutes —
+/// a bare "50m" reads as 50 metres next to a swim's distances.
+func durationHM(_ minutes: Double) -> String {
+    let total = Int(minutes.rounded())
+    return String(format: "%d:%02dh", total / 60, total % 60)
+}
+
 // MARK: - SportFamily presentation
 
 extension SportFamily {
