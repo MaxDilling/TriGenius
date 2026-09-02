@@ -52,7 +52,8 @@ private let transitionLeg: [String: Any] = ["sport": "transition", "duration_min
         WorkoutSegment(offsetSeconds: Double($0.offset) * 3600, sourceId: nil,
                        tss: nil, tssBasis: nil, details: $0.element)
     }
-    let r = TSSScoring.scoreSegments(&segments, snapshot: snapshot(ftp: 250, runThrPace: 240, css: 90))
+    let r = TSSScoring.scoreSegments(&segments, snapshot: snapshot(ftp: 250, runThrPace: 240, css: 90),
+                                     zoneSamples: [:])
     #expect(r.tss == 184)
     #expect(r.distanceKm == 53.0)
     #expect(segments[0].tss == 56)
@@ -66,7 +67,7 @@ private let transitionLeg: [String: Any] = ["sport": "transition", "duration_min
 @Test func scoreSegments_noScorableLegYieldsNoTSS() {
     var segments = [WorkoutSegment(offsetSeconds: 0, sourceId: nil, tss: nil,
                                    tssBasis: nil, details: transitionLeg)]
-    let r = TSSScoring.scoreSegments(&segments, snapshot: snapshot())
+    let r = TSSScoring.scoreSegments(&segments, snapshot: snapshot(), zoneSamples: [:])
     #expect(r.tss == nil)
     #expect(r.basis == nil)
 }

@@ -683,21 +683,21 @@ struct TrainingDetailView: View {
         }
     }
 
-    // MARK: Zones — time-in-zone distribution (HR and, for cycling, power)
+    // MARK: Zones — time-in-zone distribution, per metric this workout recorded
 
     @ViewBuilder
     private func zonesCard(_ details: [String: Any]) -> some View {
-        let hr = ZoneDistribution.zoneSeconds(details: details, source: .heartRate)
-        let power = ZoneDistribution.zoneSeconds(details: details, source: .power)
-        if hr != nil || power != nil {
+        let zones: [ZoneMetric: [Double]] = ZoneMetric.allCases.reduce(into: [:]) {
+            $0[$1] = ZoneDistribution.zoneSeconds(details: details, metric: $1)
+        }
+        // The bounds this workout was actually bucketed against, not today's.
+        let bounds: [ZoneMetric: [Double]] = ZoneMetric.allCases.reduce(into: [:]) {
+            $0[$1] = ZoneDistribution.zoneBounds(details: details, metric: $1)
+        }
+        if !ZoneDistributionStack.isEmpty(zones) {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
                 Text("Time in zone").font(.headline)
-                if let hr {
-                    ZoneDistributionBar(model: ZoneDistributionModel(title: "Heart rate", seconds: hr))
-                }
-                if let power {
-                    ZoneDistributionBar(model: ZoneDistributionModel(title: "Power", seconds: power))
-                }
+                ZoneDistributionStack(seconds: zones, bounds: bounds)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .cardSurface()

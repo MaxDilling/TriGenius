@@ -188,9 +188,16 @@ nonisolated enum GarminTransform {
     /// `NormalizedStream`. Grade-less runs (no `directGrade`/`directElevation`) reduce
     /// to plain normalized speed.
     static func normalizedSpeedMps(_ details: [String: Any]) -> Double? {
-        let samples = gradedSpeedSamples(details)
+        let samples = gradeAdjustedSamples(details)
         guard !samples.isEmpty else { return nil }
-        return NormalizedStream.normalized(GradeAdjustedPace.adjusted(samples))
+        return NormalizedStream.normalized(samples)
+    }
+
+    /// The run's speed stream as equivalent FLAT speed (m/s), 1 s per sample — the
+    /// shared input both NGP and the pace-zone bucketing read, so a hilly run's
+    /// zones and its rTSS rest on the same numbers. Empty without a speed stream.
+    static func gradeAdjustedSamples(_ details: [String: Any]) -> [NormalizedStream.Sample] {
+        GradeAdjustedPace.adjusted(gradedSpeedSamples(details))
     }
 
     /// Walk the activity-detail rows once into index-aligned `directSpeed` samples (m/s,

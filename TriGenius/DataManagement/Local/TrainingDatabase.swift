@@ -293,6 +293,13 @@ struct IngestedActivity: Sendable {
     /// Multisport legs (`WorkoutSegments.encode`), "" for a single-sport activity.
     /// Also *unscored* — the store scores each leg and sums at ingest.
     let segmentsJSON: String
+    /// Full-resolution stream input for time-in-zone. Transient: bucketed into the
+    /// details at ingest (`ZoneBucketing`) against the thresholds of the activity's
+    /// own date, then dropped — only the bucketed seconds are stored. Split the same
+    /// way the details are, so each scored unit gets its own streams: this activity's
+    /// own, and one entry per multisport leg keyed by that leg's `sourceId`.
+    let zoneSamples: ZoneSamples
+    let legZoneSamples: [String: ZoneSamples]
 }
 
 /// The cached, already-computed result of a stored activity — lets a resync reuse
@@ -837,7 +844,8 @@ final class TrainingDataStore {
         for (k, v) in ov { details[k] = v }
         if let name = ov["manual_name"] as? String { r.name = name }
         if ov["manual_distance_m"] != nil {
-            let (km, tss, basis) = TSSScoring.score(&details, snapshot: history.snapshot(asOf: r.date))
+            let (km, tss, basis) = TSSScoring.score(&details, snapshot: history.snapshot(asOf: r.date),
+                                                    zoneSamples: [:])
             r.distanceKm = km
             r.tss = tss
             r.tssBasis = basis
@@ -868,14 +876,16 @@ final class TrainingDataStore {
         let snapshot = history.snapshot(asOf: a.date)
         if !a.segmentsJSON.isEmpty {
             var segments = WorkoutSegments.decode(a.segmentsJSON)
-            let (km, tss, basis) = TSSScoring.scoreSegments(&segments, snapshot: snapshot)
+            let (km, tss, basis) = TSSScoring.scoreSegments(&segments, snapshot: snapshot,
+                                                           zoneSamples: a.legZoneSamples)
             return ScoredActivity(tss: tss, distanceKm: km, detailsJSON: a.detailsJSON,
                                   basis: basis, segmentsJSON: WorkoutSegments.encode(segments))
         }
         guard var details = jsonObject(a.detailsJSON) else {
             return ScoredActivity(tss: nil, distanceKm: a.distanceKm, detailsJSON: a.detailsJSON, basis: nil)
         }
-        let (km, tss, basis) = TSSScoring.score(&details, snapshot: snapshot)
+        let (km, tss, basis) = TSSScoring.score(&details, snapshot: snapshot,
+                                                zoneSamples: a.zoneSamples)
         return ScoredActivity(tss: tss, distanceKm: km,
                               detailsJSON: jsonString(details) ?? a.detailsJSON, basis: basis)
     }
@@ -919,7 +929,8 @@ final class TrainingDataStore {
     }
 
     private func rescore(_ r: WorkoutRecord, details: inout [String: Any]) {
-        let (km, tss, basis) = TSSScoring.score(&details, snapshot: performanceHistory().snapshot(asOf: r.date))
+        let (km, tss, basis) = TSSScoring.score(&details, snapshot: performanceHistory().snapshot(asOf: r.date),
+                                                zoneSamples: [:])
         r.distanceKm = km
         r.tss = tss
         r.tssBasis = basis

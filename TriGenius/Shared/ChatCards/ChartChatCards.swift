@@ -116,19 +116,14 @@ struct ZonesChatCard: View {
     let sport: SportFamily
     let weeks: Int
 
-    @State private var hr: [Double] = []
-    @State private var power: [Double] = []
+    @State private var zones: [ZoneMetric: [Double]] = [:]
+    @State private var bounds: [ZoneMetric: [Double]] = [:]
     @State private var loaded = false
 
     var body: some View {
         ChartChatCard(title: "\(sport.displayName) time in zone") {
-            if hr.contains(where: { $0 > 0 }) {
-                ZoneDistributionBar(model: ZoneDistributionModel(title: "Heart rate", seconds: hr))
-            }
-            if power.contains(where: { $0 > 0 }) {
-                ZoneDistributionBar(model: ZoneDistributionModel(title: "Power", seconds: power))
-            }
-            if loaded && !hr.contains(where: { $0 > 0 }) && !power.contains(where: { $0 > 0 }) {
+            ZoneDistributionStack(seconds: zones, bounds: bounds, boundsNote: "current thresholds")
+            if loaded, ZoneDistributionStack.isEmpty(zones) {
                 NoChartData(text: "No zone data in this period.")
             }
         }
@@ -136,8 +131,13 @@ struct ZonesChatCard: View {
             let now = Date()
             guard let start = TrainingVolume.recentWeekStarts(weeks: weeks, today: now).first else { return }
             let records = TrainingDataStore.shared.activities(from: start, to: now)
-            hr = ZoneDistribution.aggregate(records: records, source: .heartRate, family: sport)
-            power = ZoneDistribution.aggregate(records: records, source: .power, family: sport)
+            zones = ZoneMetric.allCases.reduce(into: [:]) {
+                $0[$1] = ZoneDistribution.aggregate(records: records, metric: $1, family: sport)
+            }
+            let snapshot = TrainingDataStore.shared.latestSnapshot()
+            bounds = ZoneMetric.allCases.reduce(into: [:]) {
+                $0[$1] = $1.upperBounds(snapshot: snapshot, family: sport)
+            }
             loaded = true
         }
     }

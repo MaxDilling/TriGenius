@@ -14,10 +14,14 @@ import Foundation
 
 nonisolated enum TSSScoring {
 
-    /// Mutates `details` (swimming.cleaned_distance_m / swim_time_s, distance_km)
-    /// and returns the resolved distance (km) + TSS + how the TSS was derived (the
-    /// provenance label surfaced to the athlete/coach; nil when no TSS was produced).
-    static func score(_ details: inout [String: Any], snapshot: PerformanceSnapshot) -> (distanceKm: Double, tss: Double?, basis: String?) {
+    /// Mutates `details` (swimming.cleaned_distance_m / swim_time_s, distance_km,
+    /// time-in-zone) and returns the resolved distance (km) + TSS + how the TSS was
+    /// derived (the provenance label surfaced to the athlete/coach; nil when no TSS
+    /// was produced). `zoneSamples` are the source's raw streams for this unit; empty
+    /// on the recompute path, which re-scores from stored details and has no streams
+    /// to re-bucket — the zones already in `details` then stand.
+    static func score(_ details: inout [String: Any], snapshot: PerformanceSnapshot,
+                      zoneSamples: ZoneSamples) -> (distanceKm: Double, tss: Double?, basis: String?) {
         // 1. Swim: re-clean from the stored active lengths.
         if var swimming = details["swimming"] as? [String: Any],
            let pool = Coerce.double(swimming["pool_length_m"]), pool > 0,
@@ -42,7 +46,11 @@ nonisolated enum TSSScoring {
         let distanceKm = round2(effectiveM / 1000)
         details["distance_km"] = distanceKm
 
-        // 3. TSS from the resolved details + current thresholds.
+        // 3. Time in zone, bucketed from the source's raw streams against this date's
+        // thresholds — one model for every source (`ZoneBucketing`).
+        ZoneBucketing.apply(zoneSamples, to: &details, snapshot: snapshot)
+
+        // 4. TSS from the resolved details + current thresholds.
         let (tss, basis) = TSSCalculator.compute(details: details, snapshot: snapshot)
         return (distanceKm, tss, basis?.label)
     }
@@ -53,12 +61,14 @@ nonisolated enum TSSScoring {
     /// rTSS. Row TSS is their sum (nil when no leg scored, e.g. a session that
     /// is only transitions); the basis lists the distinct per-leg bases in
     /// order, so a partly HR-derived total isn't over-trusted.
-    static func scoreSegments(_ segments: inout [WorkoutSegment], snapshot: PerformanceSnapshot)
+    static func scoreSegments(_ segments: inout [WorkoutSegment], snapshot: PerformanceSnapshot,
+                              zoneSamples: [String: ZoneSamples])
         -> (distanceKm: Double, tss: Double?, basis: String?) {
         var distanceKm = 0.0, total = 0.0, scored = false
         var bases: [String] = []
         for i in segments.indices {
-            let (km, tss, basis) = score(&segments[i].details, snapshot: snapshot)
+            let legSamples = segments[i].sourceId.flatMap { zoneSamples[$0] } ?? [:]
+            let (km, tss, basis) = score(&segments[i].details, snapshot: snapshot, zoneSamples: legSamples)
             segments[i].tss = tss
             segments[i].tssBasis = basis
             distanceKm += km

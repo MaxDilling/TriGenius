@@ -35,8 +35,10 @@ final class StatisticsViewModel {
 
     private(set) var pmc: PMCResult?
     private(set) var share = SportShareModel(metric: .tss, weeks: [])
-    private(set) var zoneHR: [Double] = []
-    private(set) var zonePower: [Double] = []
+    private(set) var zones: [ZoneMetric: [Double]] = [:]
+    /// Today's bounds, not each workout's own — the range can span a threshold
+    /// change, so the card labels them as current (`ZoneDistributionStack`).
+    private(set) var zoneBounds: [ZoneMetric: [Double]] = [:]
     private(set) var ramp: [RampWeek] = []
     private(set) var powerCurve: [PowerCurve.Point] = []
 
@@ -65,8 +67,13 @@ final class StatisticsViewModel {
     }
 
     private func rebuildZones() {
-        zoneHR = ZoneDistribution.aggregate(records: records, source: .heartRate, family: zoneSport)
-        zonePower = ZoneDistribution.aggregate(records: records, source: .power, family: zoneSport)
+        let snapshot = TrainingDataStore.shared.latestSnapshot()
+        zones = ZoneMetric.allCases.reduce(into: [:]) {
+            $0[$1] = ZoneDistribution.aggregate(records: records, metric: $1, family: zoneSport)
+        }
+        zoneBounds = ZoneMetric.allCases.reduce(into: [:]) {
+            $0[$1] = $1.upperBounds(snapshot: snapshot, family: zoneSport)
+        }
     }
 
 }

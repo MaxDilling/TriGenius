@@ -10,7 +10,8 @@ import UIKit
 // power curve's log duration), from two inputs at once: long-press-then-drag for
 // touch, and pointer hover for the macOS cursor, a trackpad on iPad, and Apple
 // Pencil hover. Charts render their own tooltip from the selected value via
-// `ChartTooltip`.
+// `ChartTooltip`. `horizontalScrubbing` carries the same two inputs to a plain
+// (non-Chart) view such as `ProportionBar`.
 
 extension View {
     /// Bind the X value under the finger or pointer — nil when idle.
@@ -53,7 +54,7 @@ extension View {
 /// natively with UIScrollView — a swipe cancels it and scrolls; a ~0.2 s hold
 /// recognizes, excludes the pan, and tracks the finger to scrub. macOS has no touch
 /// to track, so a hit-testable rectangle carries the hover on its own.
-@ViewBuilder private func scrubSurface(onTouch: @escaping (CGPoint?) -> Void) -> some View {
+@ViewBuilder func scrubSurface(onTouch: @escaping (CGPoint?) -> Void) -> some View {
     #if os(iOS)
     ScrubTouchOverlay(onChange: onTouch)
     #else
@@ -95,6 +96,35 @@ private struct ScrubTouchOverlay: UIViewRepresentable {
     }
 }
 #endif
+
+extension View {
+    /// Scrubbing for a plain view: reports the pointer/finger X as a 0…1 fraction of
+    /// the view's own width, nil when idle. Same two inputs as `chartScrubbing`, so a
+    /// bar inside a ScrollView still scrolls on a swipe and scrubs on a hold.
+    /// `hitInset` grows the surface vertically past the view's bounds — a 10 pt bar is
+    /// a poor finger target — without touching layout or the width the fraction is of.
+    func horizontalScrubbing(_ fraction: Binding<Double?>, hitInset: CGFloat = 0) -> some View {
+        overlay {
+            GeometryReader { geo in
+                let width = geo.size.width
+                scrubSurface { point in
+                    fraction.wrappedValue = width > 0
+                        ? point.map { min(max($0.x / width, 0), 1) }
+                        : nil
+                }
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let location):
+                        fraction.wrappedValue = width > 0 ? min(max(location.x / width, 0), 1) : nil
+                    case .ended:
+                        fraction.wrappedValue = nil
+                    }
+                }
+                .padding(.vertical, -hitInset)
+            }
+        }
+    }
+}
 
 /// The floating value readout shown at the scrubbed date.
 ///

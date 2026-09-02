@@ -152,16 +152,12 @@ struct StatisticsView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            if viewModel.zoneHR.isEmpty && viewModel.zonePower.isEmpty {
-                Text("No heart-rate or power zone data recorded in this range.")
+            if ZoneDistributionStack.isEmpty(viewModel.zones) {
+                Text("No zone data recorded in this range.")
                     .font(.subheadline).foregroundStyle(.secondary)
             } else {
-                if !viewModel.zoneHR.isEmpty {
-                    ZoneDistributionBar(model: ZoneDistributionModel(title: "Heart rate", seconds: viewModel.zoneHR))
-                }
-                if !viewModel.zonePower.isEmpty {
-                    ZoneDistributionBar(model: ZoneDistributionModel(title: "Power", seconds: viewModel.zonePower))
-                }
+                ZoneDistributionStack(seconds: viewModel.zones, bounds: viewModel.zoneBounds,
+                                      boundsNote: "current thresholds")
             }
         }
         .glassCard()

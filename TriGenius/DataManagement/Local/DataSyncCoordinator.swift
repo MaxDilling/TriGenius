@@ -121,11 +121,10 @@ final class DataSyncCoordinator {
                     let metrics = (try? await HealthKitService.shared.fetchPerformanceMetrics()) ?? []
                     store.ingestMetrics(metrics)
                 }
-                // Build the rich per-workout record (HR/power/pace/zones), deriving HR
-                // zone bounds from the athlete's thresholds as of each workout's date so
-                // a power/pace-less session still scores TSS on heart rate.
-                let dtos = try await HealthKitService.shared.fetchActivities(
-                    count: count, since: since, history: store.performanceHistory())
+                // Build the rich per-workout record (HR/power/pace + the raw zone
+                // streams); the store buckets and scores it against each workout's own
+                // thresholds at ingest.
+                let dtos = try await HealthKitService.shared.fetchActivities(count: count, since: since)
                 store.ingest(dtos)
                 // Reconcile: remove HealthKit records no longer returned within the
                 // synced window — chiefly Garmin Connect workouts now filtered out
@@ -216,8 +215,7 @@ final class DataSyncCoordinator {
         }
         if id.hasPrefix("healthkit:") {
             guard let uuid = UUID(uuidString: TrainingDataStore.rawId(id)),
-                  let dto = try? await HealthKitService.shared.fetchActivity(
-                      uuid: uuid, history: store.performanceHistory())
+                  let dto = try? await HealthKitService.shared.fetchActivity(uuid: uuid)
             else { return false }
             store.ingest([dto])
             return true

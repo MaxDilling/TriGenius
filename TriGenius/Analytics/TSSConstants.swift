@@ -50,15 +50,34 @@ nonisolated enum TSSConstants {
     static let hrZoneMidFractionOfLTHR: [Double] = [0.74, 0.84, 0.89, 0.94, 1.03]
     static let hrZoneLoadScale = 0.77
 
-    // MARK: HR zone boundaries (time-in-zone bucketing for sources without zones)
+    // MARK: Zone boundaries (time-in-zone bucketing — see `ZoneMetric.upperBounds`)
     //
-    // Upper %LTHR bounds for zones 1–4 (zone 5 is open-ended), taken as the
-    // midpoints between adjacent zone-load fractions above — so bucketing and
-    // scoring share one model. Used when a source (e.g. Apple Health) provides an
-    // HR stream but no time-in-zone, so we bucket it against the athlete's LTHR.
+    // Upper bounds for zones 1–4 as a fraction of the athlete's threshold; zone 5 is
+    // open-ended. Every source's stream is bucketed against these, so the boundaries
+    // are the app's own — never a provider's zone configuration.
+
+    /// %LTHR, taken as the midpoints between adjacent zone-load fractions above — so
+    /// bucketing and HR scoring share one model.
     static let hrZoneUpperFractionsOfLTHR: [Double] = zip(hrZoneMidFractionOfLTHR,
                                                           hrZoneMidFractionOfLTHR.dropFirst())
         .map { ($0 + $1) / 2 }
+
+    /// Fraction of threshold SPEED for running (the axis rises with intensity, unlike
+    /// pace). Friel's running pace zones as published by TrainingPeaks ("Setting Pace
+    /// Zones (Running)"), using their speed percentages: z1 <78%, z2 →88%, z3 →94%,
+    /// z4 →101%, z5a 100–103%, z5b →111%, z5c above. Zones 5a–c collapse into one z5,
+    /// and the z4/z5a overlap the published table carries (101% vs 100%) resolves at
+    /// threshold itself: z5 is what is run at or above threshold speed, which is what
+    /// the 5a–c subdivisions are subdivisions OF.
+    ///
+    /// Unlike the HR fractions above, these are the literature model — not calibrated
+    /// against athlete data in `ref/tss_lab/`.
+    static let paceZoneUpperFractionsOfThresholdSpeed: [Double] = [0.78, 0.88, 0.94, 1.00]
+
+    /// Fraction of FTP for cycling: Coggan's classic power zones, whose top three
+    /// (VO2max / anaerobic / neuromuscular) collapse into one z5 the same way the
+    /// running 5a–c do. Literature model, uncalibrated here.
+    static let powerZoneUpperFractionsOfFTP: [Double] = [0.55, 0.75, 0.90, 1.05]
 
     // MARK: Swimming
     //
