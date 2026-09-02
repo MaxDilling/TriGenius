@@ -185,6 +185,15 @@ final class AppSettings: ObservableObject {
     static let crossTrainingCreditKey = "cross_training_credit"
     static let defaultCrossTrainingCredit = 0.5
 
+    /// Fill a missing cycling FTP from the reported cycling VO2max and body mass
+    /// (`FTPEstimate`), for watches that never compute one. Off by default — it is a
+    /// derived stand-in, so the athlete opts in. Read by `TrainingDataStore`
+    /// (outside SwiftUI) via `estimateFTPFromVO2maxKey`.
+    @Published var estimateFTPFromVO2max: Bool {
+        didSet { UserDefaults.standard.set(estimateFTPFromVO2max, forKey: Self.estimateFTPFromVO2maxKey) }
+    }
+    static let estimateFTPFromVO2maxKey = "estimate_ftp_from_vo2max"
+
     /// A curated shortlist of tool-capable OpenRouter model ids. OpenRouter
     /// exposes hundreds; these are the ones worth defaulting to for the coach.
     static let availableOpenRouterModels = [
@@ -207,6 +216,7 @@ final class AppSettings: ObservableObject {
         cloudAIConsent = UserDefaults.standard.bool(forKey: "cloud_ai_consent")
         openRouterModel = Self.storedOpenRouterModel()
         openRouterWebSearch = UserDefaults.standard.bool(forKey: "openrouter_web_search")
+        estimateFTPFromVO2max = UserDefaults.standard.bool(forKey: Self.estimateFTPFromVO2maxKey)
         readSources = Self.loadReadSources()
         metricsSource = Self.loadMetricsSource()
         writeTarget = Self.loadWriteTarget()
@@ -490,7 +500,9 @@ struct SettingsView: View {
             // local time-series DB; read-only here.
             Section {
                 let performance = TrainingDataStore.shared.latestSnapshot()
-                profileRow("FTP (cycling)", value: performance.cyclingFTP.map { "\($0) W" })
+                profileRow("FTP (cycling)", value: performance.cyclingFTP.map {
+                    performance.cyclingFTPIsEstimated ? "~\($0) W (estimated)" : "\($0) W"
+                })
                 profileRow("Threshold power (run)", value: performance.runningFTP.map { "\($0) W" })
                 profileRow("CSS", value: performance.cssPaceFormatted.map { "\($0)/100m" })
                 profileRow("Lactate threshold HR", value: performance.lactateThrHR.map { "\($0) bpm" })
@@ -499,10 +511,16 @@ struct SettingsView: View {
                 profileRow("VO₂max (cycling)", value: performance.vo2maxCycling.map { String(format: "%.1f", $0) })
                 profileRow("Max HR", value: performance.maxHR.map { "\($0) bpm" })
                 profileRow("Weight", value: performance.weightKg.map { String(format: "%.1f kg", $0) })
+                Toggle("Estimate FTP from VO₂max", isOn: $settings.estimateFTPFromVO2max)
+                    .onChange(of: settings.estimateFTPFromVO2max) {
+                        // Thresholds just moved for every past date — rescore in place
+                        // rather than re-fetching every stream.
+                        TrainingDataStore.shared.rescoreAllActivities()
+                    }
             } header: {
                 Text("Performance")
             } footer: {
-                Text("Synced automatically from \(settings.metricsSource.displayName). History is kept in the local database.")
+                Text("Synced automatically from \(settings.metricsSource.displayName). History is kept in the local database.\n\nWatches that don't measure FTP (fēnix 6 and older) still report cycling VO₂max, which pins it closely. A measured FTP always takes precedence, and estimated values are marked \"~\". Needs cycling VO₂max and weight — Apple Health reports VO₂max for running only.")
             }
 
             // Privacy & Data — user-facing controls Apple review expects: the

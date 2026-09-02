@@ -362,6 +362,10 @@ struct MetricPoint: Sendable, Identifiable {
 /// system-prompt context and the Settings display.
 struct PerformanceSnapshot: Sendable {
     var cyclingFTP: Int?
+    /// True when `cyclingFTP` was derived from VO2max + mass (`FTPEstimate`) rather
+    /// than measured. Rendered wherever the value is shown so an estimate is never
+    /// read as a measurement.
+    var cyclingFTPIsEstimated: Bool = false
     var runningFTP: Int?
     /// Swim critical-swim-speed pace, in seconds per 100 m.
     var cssPaceSeconds: Double?
@@ -404,9 +408,13 @@ struct PerformanceHistory: Sendable {
 
     /// metricKey → readings, ascending by date.
     private let byKey: [String: [Entry]]
+    /// Whether a missing `cycling_ftp` may be filled from VO2max + mass. Carried on
+    /// the resolver so every consumer of `snapshot(asOf:)` sees the same answer.
+    private let estimateFTPFromVO2max: Bool
 
-    init(byKey: [String: [Entry]]) {
+    init(byKey: [String: [Entry]], estimateFTPFromVO2max: Bool) {
         self.byKey = byKey.mapValues { $0.sorted { $0.date < $1.date } }
+        self.estimateFTPFromVO2max = estimateFTPFromVO2max
     }
 
     /// Value of one metric as it stood on `date`: the newest reading on or before
@@ -436,6 +444,14 @@ struct PerformanceHistory: Sendable {
         snap.vo2maxRunning = value("vo2max_running", asOf: date)
         snap.vo2maxCycling = value("vo2max_cycling", asOf: date)
         snap.weightKg = value("weight_kg", asOf: date)
+        // A measured FTP always outranks the estimate; the estimate only fills a
+        // gap, and only on opt-in. Both inputs resolve `asOf: date` like every other
+        // threshold, so a January ride is scored against January's VO2max and mass.
+        if snap.cyclingFTP == nil, estimateFTPFromVO2max,
+           let watts = FTPEstimate.fromVO2max(snap.vo2maxCycling, massKg: snap.weightKg) {
+            snap.cyclingFTP = Int(watts.rounded())
+            snap.cyclingFTPIsEstimated = true
+        }
         return snap
     }
 }
@@ -1575,7 +1591,39 @@ final class TrainingDataStore {
                 .init(date: r.date, value: r.value, rank: Self.sourceRank(r.source))
             )
         }
-        return PerformanceHistory(byKey: byKey)
+        return PerformanceHistory(
+            byKey: byKey,
+            estimateFTPFromVO2max: UserDefaults.standard.bool(forKey: AppSettings.estimateFTPFromVO2maxKey))
+    }
+
+    /// Re-score every completed activity in place against the current thresholds.
+    /// The hook for a settings change that shifts thresholds retroactively (the FTP
+    /// estimate) — a resync would re-fetch every stream to reach the same result.
+    /// Returns the number of rows rescored.
+    @discardableResult
+    func rescoreAllActivities() -> Int {
+        let rows = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
+            predicate: #Predicate { $0.isCompleted }))) ?? []
+        let history = performanceHistory()
+        for r in rows {
+            let snapshot = history.snapshot(asOf: r.date)
+            // Overrides are already materialised into detailsJSON, so re-scoring the
+            // stored details preserves the athlete's edits.
+            if !r.segmentsJSON.isEmpty {
+                var segments = WorkoutSegments.decode(r.segmentsJSON)
+                let (km, tss, basis) = TSSScoring.scoreSegments(&segments, snapshot: snapshot,
+                                                               zoneSamples: [:])
+                r.segmentsJSON = WorkoutSegments.encode(segments)
+                (r.distanceKm, r.tss, r.tssBasis) = (km, tss, basis)
+            } else if var details = Self.jsonObject(r.detailsJSON) {
+                let (km, tss, basis) = TSSScoring.score(&details, snapshot: snapshot, zoneSamples: [:])
+                (r.distanceKm, r.tss, r.tssBasis) = (km, tss, basis)
+                r.detailsJSON = Self.jsonString(details) ?? r.detailsJSON
+            }
+        }
+        try? context.save()
+        markChanged()
+        return rows.count
     }
 
     /// Latest value per metric key — the source for the coach's prompt context,

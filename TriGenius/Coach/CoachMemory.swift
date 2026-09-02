@@ -197,7 +197,8 @@ final class CoachMemory: ObservableObject {
             guard let cur else { return }
             markers.append(was != nil && was != cur ? "\(label) \(cur) (was \(was!))" : "\(label) \(cur)")
         }
-        marker("FTP", now.cyclingFTP.map { "\($0) W" }, prev.cyclingFTP.map { "\($0) W" })
+        marker("FTP", now.cyclingFTP.map { now.cyclingFTPIsEstimated ? "~\($0) W (estimated from VO2max)" : "\($0) W" },
+               prev.cyclingFTP.map { "\($0) W" })
         marker("max HR", now.maxHR.map { "\($0) bpm" }, prev.maxHR.map { "\($0) bpm" })
         marker("LTHR", now.lactateThrHR.map { "\($0) bpm" }, prev.lactateThrHR.map { "\($0) bpm" })
         marker("LT pace", now.lactateThrPaceFormatted.map { "\($0)/km" }, prev.lactateThrPaceFormatted.map { "\($0)/km" })
