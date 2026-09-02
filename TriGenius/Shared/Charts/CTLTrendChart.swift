@@ -46,12 +46,12 @@ struct CTLTrendChart: View {
         Chart {
             ForEach(model.planned) { p in
                 LineMark(x: .value("Date", p.date), y: .value("Plan", p.ctl), series: .value("Series", "Plan"))
-                    .foregroundStyle(Color.gray.opacity(0.45))
+                    .foregroundStyle(Theme.Palette.plan.opacity(0.45))
                     .lineStyle(StrokeStyle(lineWidth: 3))
             }
             ForEach(model.actual) { p in
                 LineMark(x: .value("Date", p.date), y: .value("CTL", p.ctl), series: .value("Series", "Actual"))
-                    .foregroundStyle(Theme.Palette.info)
+                    .foregroundStyle(Theme.Palette.fitness)
                     .lineStyle(StrokeStyle(lineWidth: 2))
             }
             RuleMark(x: .value("Today", Calendar.current.startOfDay(for: Date())))
@@ -79,11 +79,11 @@ struct CTLTrendChart: View {
     private func tooltip(for day: Date) -> ChartTooltip {
         var rows: [ChartTooltip.Row] = []
         if let actual = value(in: model.actual, on: day) {
-            rows.append(.init(color: Theme.Palette.info, label: "Fitness",
+            rows.append(.init(color: Theme.Palette.fitness, label: "Fitness",
                               value: actual.formatted(.number.precision(.fractionLength(1)))))
         }
         if let plan = value(in: model.planned, on: day) {
-            rows.append(.init(color: .gray, label: "Plan",
+            rows.append(.init(color: Theme.Palette.plan, label: "Plan",
                               value: plan.formatted(.number.precision(.fractionLength(1)))))
         }
         return ChartTooltip(title: day.formatted(.dateTime.day().month(.abbreviated)), rows: rows)

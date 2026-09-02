@@ -714,11 +714,11 @@ struct SettingsView: View {
 
             if settings.openRouterAPIKey.isEmpty {
                 Label("API key required for OpenRouter", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Theme.Palette.warning)
                     .font(.caption)
             } else {
                 Label("OpenRouter configured", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Theme.Palette.success)
                     .font(.caption)
             }
 
@@ -754,7 +754,7 @@ struct SettingsView: View {
                     .onChange(of: settings.useAppleCloudCompute) { onBackendChanged() }
             } else {
                 Label("Requires iOS 27 / macOS 27", systemImage: "xmark.circle.fill")
-                    .foregroundStyle(.red)
+                    .foregroundStyle(Theme.Palette.danger)
                     .font(.caption)
             }
         }
@@ -792,7 +792,7 @@ struct SettingsView: View {
 
             if settings.lmStudioBaseURL.isEmpty {
                 Label("Server URL required for LM Studio", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Theme.Palette.warning)
                     .font(.caption)
             } else {
                 Label("Start LM Studio's local server, then pick the loaded model id.", systemImage: "desktopcomputer")
@@ -866,7 +866,7 @@ struct GarminLoginSection: View {
         Group {
             if isConnected {
                 Label("Connected to Garmin", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Theme.Palette.success)
                     .font(.caption)
                 if !settings.garminEmail.isEmpty {
                     Text(settings.garminEmail)
@@ -1158,7 +1158,7 @@ struct CalendarAccessSection: View {
             switch state {
             case .authorized:
                 Label("Calendar access granted", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
+                    .foregroundStyle(Theme.Palette.success)
                     .font(.caption)
                 CalendarSelectionList()
             case .notDetermined:
@@ -1176,7 +1176,7 @@ struct CalendarAccessSection: View {
                 .disabled(isWorking)
             case .denied:
                 Label("Calendar access denied — enable it in the Settings app.", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(Theme.Palette.warning)
                     .font(.caption)
             }
         }

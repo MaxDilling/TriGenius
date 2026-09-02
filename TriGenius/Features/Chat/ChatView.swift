@@ -698,7 +698,7 @@ private struct ToolCallBubble: View {
                     Image(systemName: expanded ? "chevron.up" : "chevron.down")
                         .font(.caption2)
                 }
-                .foregroundStyle(.orange)
+                .foregroundStyle(Theme.Palette.warning)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -715,10 +715,10 @@ private struct ToolCallBubble: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color.orange.opacity(0.08))
+        .background(Theme.Palette.warning.opacity(0.08))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.orange.opacity(0.25), lineWidth: 1)
+                .stroke(Theme.Palette.warning.opacity(0.25), lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .padding(.horizontal, 8)
@@ -782,7 +782,7 @@ private struct InputBar: View {
                 Button(action: onStop) {
                     Image(systemName: "stop.circle.fill")
                         .font(.system(size: 32))
-                        .foregroundStyle(Color.red)
+                        .foregroundStyle(Theme.Palette.danger)
                 }
                 .help("Stop generating")
             } else {

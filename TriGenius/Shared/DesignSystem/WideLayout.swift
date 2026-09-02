@@ -30,7 +30,7 @@ struct WideLayout: DynamicProperty {
 
     /// Width of that tile column; nil in the compact row, where the tiles share the
     /// full width between them.
-    var tileColumnWidth: CGFloat? { isWide ? 200 : nil }
+    var tileColumnWidth: CGFloat? { isWide ? 160 : nil }
 
     /// Height for whichever side would otherwise leave a gap: both sides claim the
     /// row's height on wide, so the taller one sets it and the other fills.

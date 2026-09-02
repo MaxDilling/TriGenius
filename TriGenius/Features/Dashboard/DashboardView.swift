@@ -60,7 +60,7 @@ struct DashboardView: View {
                         ProgressView("Loading…").padding(.top, 60)
                     } else {
                         if let error = viewModel.errorMessage {
-                            Text(error).font(.caption).foregroundStyle(.red)
+                            Text(error).font(.caption).foregroundStyle(Theme.Palette.danger)
                         }
                         header
                         ForEach(settings.dashboardLayout.filter(\.isVisible)) { item in
@@ -180,17 +180,12 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
             SectionHeading("Fitness & Form")
 
-            if let result = viewModel.pmc, let s = result.snapshot {
+            if let result = viewModel.pmc, result.snapshot != nil {
                 NavigationLink {
                     StatisticsView()
                 } label: {
                     wide.outer {
-                        PMCStatTiles(
-                            result: result,
-                            statuses: .init(ctl: fitnessStatus(delta: viewModel.ctlDelta),
-                                            atl: fatigueStatus(atl: s.atl, ctl: s.ctl),
-                                            tsb: formStatus(tsb: s.tsb))
-                        )
+                        PMCStatTiles(result: result)
                         if !viewModel.ctlTrend.actual.isEmpty || viewModel.currentWeek != nil {
                             trendCard
                         }
@@ -243,24 +238,6 @@ struct DashboardView: View {
         // Wide: match the PMC tile column beside it — the chart takes the extra
         // height rather than leaving a gap under the card.
         .frame(maxHeight: wide.rowHeight)
-    }
-
-    private func fitnessStatus(delta: Int) -> String {
-        if delta > 1 { return "Productive build" }
-        if delta < -1 { return "Declining" }
-        return "Maintaining"
-    }
-    private func fatigueStatus(atl: Double, ctl: Double) -> String {
-        atl > ctl ? "High load" : "Moderate load"
-    }
-    private func formStatus(tsb: Double) -> String {
-        switch tsb {
-        case ..<(-30):  return "Overreaching"
-        case ..<(-10):  return "Optimal training"
-        case ..<5:      return "Grey zone"
-        case ..<20:     return "Fresh"
-        default:        return "Very fresh"
-        }
     }
 
     // MARK: Weekly Target (Volume)
@@ -445,7 +422,7 @@ struct DashboardView: View {
 
                 if item.completed {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Theme.Palette.success)
                 }
             }
             .padding(.vertical, 12)

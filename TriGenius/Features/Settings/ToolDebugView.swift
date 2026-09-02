@@ -240,7 +240,7 @@ struct ToolRunnerView: View {
                 if let parseError {
                     Label(parseError, systemImage: "exclamationmark.triangle.fill")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(Theme.Palette.warning)
                 }
 
                 Button {

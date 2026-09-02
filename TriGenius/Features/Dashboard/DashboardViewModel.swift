@@ -255,8 +255,4 @@ final class DashboardViewModel {
         \(summary)
         """
     }
-
-    /// CTL's weekly change, for the Fitness tile's status line — the tiles read
-    /// their own deltas off the same `PMCResult`.
-    var ctlDelta: Int { pmc?.delta(daysAgo: 7) { $0.ctl } ?? 0 }
 }

@@ -85,7 +85,7 @@ private struct WorkoutChatCard: View {
 
                 if let workout {
                     if workout.isCompleted {
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.Palette.success)
                     }
                     dateColumn(workout.date)
                 }

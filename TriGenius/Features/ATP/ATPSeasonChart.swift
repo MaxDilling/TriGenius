@@ -161,7 +161,7 @@ struct ATPSeasonChart: View {
             let r = barRange(w.weekStart)
             RectangleMark(xStart: .value("Start", r.0), xEnd: .value("End", r.1),
                           yStart: .value("Zero", 0), yEnd: .value("Planned TSS", w.plannedTSS))
-                .foregroundStyle(.gray.opacity(0.28))
+                .foregroundStyle(Theme.Palette.plan.opacity(0.28))
         }
         ForEach(completedBars, id: \.week) { b in
             let r = barRange(b.week)
@@ -226,7 +226,7 @@ struct ATPSeasonChart: View {
     @ChartContentBuilder private var curveMarks: some ChartContent {
         ForEach(plan.planCurve) { p in
             LineMark(x: .value("Date", p.date), y: .value("CTL", scaleCTL(p.ctl)), series: .value("c", "plan"))
-                .foregroundStyle(.blue)
+                .foregroundStyle(Theme.Palette.fitness)
         }
         ForEach(actual) { p in
             LineMark(x: .value("Date", p.date), y: .value("CTL", scaleCTL(p.ctl)), series: .value("c", "actual"))
@@ -234,7 +234,7 @@ struct ATPSeasonChart: View {
         }
         ForEach(plan.detrainingCurve) { p in
             LineMark(x: .value("Date", p.date), y: .value("CTL", scaleCTL(p.ctl)), series: .value("c", "detrain"))
-                .foregroundStyle(.gray)
+                .foregroundStyle(Theme.Palette.plan)
                 .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
         }
     }
@@ -336,7 +336,7 @@ struct ATPSeasonChart: View {
                         AxisTick()
                         AxisValueLabel {
                             if let scaled = value.as(Double.self) {
-                                Text("\(Int((scaled / tssMax * ctlMax).rounded()))").foregroundStyle(.blue)
+                                Text("\(Int((scaled / tssMax * ctlMax).rounded()))").foregroundStyle(Theme.Palette.fitness)
                             }
                         }
                     }
@@ -367,9 +367,9 @@ struct ATPSeasonChart: View {
             .padding(.trailing, -edgeBleed)
 
             HStack(spacing: Theme.Spacing.l) {
-                legend(.gray.opacity(0.6), "Plan TSS")
+                legend(Theme.Palette.plan.opacity(0.6), "Plan TSS")
                 legend(Theme.Palette.info, "Completed TSS")
-                legend(.blue, "Plan Fitness")
+                legend(Theme.Palette.fitness, "Plan Fitness")
                 legend(Theme.Palette.success, "Actual Fitness")
                 Button { showForm.toggle() } label: {
                     HStack(spacing: Theme.Spacing.xs) {
@@ -572,7 +572,7 @@ private struct HoverReadoutLayer: View {
             if let w = r.weeksToEvent { row("Weeks to event", "\(w)") }
             row("Plan TSS", "\(Int(r.plannedTSS))")
             row("Completed TSS", "\(Int(r.completedTSS))")
-            row("Plan Fitness", fmt(r.planCTL), color: .blue)
+            row("Plan Fitness", fmt(r.planCTL), color: Theme.Palette.fitness)
             row("Actual Fitness", fmt(r.actualCTL), color: Theme.Palette.success)
             row("Plan Form", fmt(r.planTSB))
             row("Actual Form", fmt(r.actualTSB))

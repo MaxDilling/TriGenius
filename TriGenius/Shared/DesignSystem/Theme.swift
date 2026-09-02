@@ -43,6 +43,16 @@ enum Theme {
         static let info = Color.blue
         static let danger = Color.red
 
+        /// PMC series identity — CTL / ATL / TSB wear these wherever they appear:
+        /// tiles, chart lines, legend, tooltip, the Form axis. The Form *bars* are
+        /// the exception, signalling fresh vs. fatigued with `success` / `warning`.
+        static let fitness = Color.blue
+        static let fatigue = Color.pink
+        static let form = Color.orange
+
+        /// Planned / reference series, drawn behind the actual one it is compared to.
+        static let plan = Color.gray
+
         /// Discipline accent colors — single source for every sport-tinted UI element.
         static func sport(_ family: SportFamily) -> Color {
             switch family {

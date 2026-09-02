@@ -95,7 +95,7 @@ struct PMCInsightsSection: View {
                 yStart: .value("Form", tsbZero),
                 yEnd: .value("Form", scaleTSB(p.tsb))
             )
-            .foregroundStyle(p.tsb >= 0 ? Color.green.opacity(0.6) : Color.orange.opacity(0.6))
+            .foregroundStyle((p.tsb >= 0 ? Theme.Palette.success : Theme.Palette.warning).opacity(0.6))
         }
         // Dashed baseline marking Form = 0 in the vertical middle.
         RuleMark(y: .value("Form zero", tsbZero))
@@ -108,13 +108,13 @@ struct PMCInsightsSection: View {
                 y: .value("Fitness", p.ctl),
                 series: .value("Series", "Fitness")
             )
-            .foregroundStyle(.blue)
+            .foregroundStyle(Theme.Palette.fitness)
             LineMark(
                 x: .value("Date", p.date),
                 y: .value("Fatigue", p.atl),
                 series: .value("Series", "Fatigue")
             )
-            .foregroundStyle(.pink)
+            .foregroundStyle(Theme.Palette.fatigue)
         }
     }
 
@@ -127,7 +127,7 @@ struct PMCInsightsSection: View {
                 yStart: .value("Form", tsbZero),
                 yEnd: .value("Form", scaleTSB(p.tsb))
             )
-            .foregroundStyle((p.tsb >= 0 ? Color.green : Color.orange).opacity(0.22))
+            .foregroundStyle((p.tsb >= 0 ? Theme.Palette.success : Theme.Palette.warning).opacity(0.22))
         }
         ForEach(forecastLine) { p in
             LineMark(
@@ -135,14 +135,14 @@ struct PMCInsightsSection: View {
                 y: .value("Fitness", p.ctl),
                 series: .value("Series", "Fitness (proj)")
             )
-            .foregroundStyle(.blue.opacity(0.45))
+            .foregroundStyle(Theme.Palette.fitness.opacity(0.45))
             .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
             LineMark(
                 x: .value("Date", p.date),
                 y: .value("Fatigue", p.atl),
                 series: .value("Series", "Fatigue (proj)")
             )
-            .foregroundStyle(.pink.opacity(0.45))
+            .foregroundStyle(Theme.Palette.fatigue.opacity(0.45))
             .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
         }
     }
@@ -159,9 +159,9 @@ struct PMCInsightsSection: View {
                     ChartTooltip(
                         title: p.date.formatted(.dateTime.day().month(.abbreviated)),
                         rows: [
-                            .init(color: .blue, label: "Fitness", value: "\(Int(p.ctl.rounded()))"),
-                            .init(color: .pink, label: "Fatigue", value: "\(Int(p.atl.rounded()))"),
-                            .init(color: .orange, label: "Form", value: "\(Int(p.tsb.rounded()))"),
+                            .init(color: Theme.Palette.fitness, label: "Fitness", value: "\(Int(p.ctl.rounded()))"),
+                            .init(color: Theme.Palette.fatigue, label: "Fatigue", value: "\(Int(p.atl.rounded()))"),
+                            .init(color: Theme.Palette.form, label: "Form", value: "\(Int(p.tsb.rounded()))"),
                         ]
                     )
                 }
@@ -192,7 +192,7 @@ struct PMCInsightsSection: View {
                     AxisValueLabel {
                         if let scaled = value.as(Double.self) {
                             Text("\(Int(unscaleTSB(scaled).rounded()))")
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(Theme.Palette.form)
                         }
                     }
                 }
@@ -200,22 +200,30 @@ struct PMCInsightsSection: View {
             .frame(minHeight: 260, maxHeight: wide.isWide ? .infinity : 260)
             .chartLegend(.hidden)
 
-            HStack(spacing: 16) {
-                legend(.blue, "Fitness (CTL)")
-                legend(.pink, "Fatigue (ATL)")
-                legend(.green, "Form (TSB)")
+            legendLayout {
+                HStack(spacing: 16) {
+                    legend(Theme.Palette.fitness, "Fitness (CTL)")
+                    legend(Theme.Palette.fatigue, "Fatigue (ATL)")
+                    legend(Theme.Palette.form, "Form (TSB)")
+                }
+                .foregroundStyle(.secondary)
+
+                if !forecastPoints.isEmpty {
+                    Label("Dashed = projected from planned workouts", systemImage: "chart.line.flattrend.xyaxis")
+                        .foregroundStyle(.tertiary)
+                }
             }
             .font(.caption2)
-            .foregroundStyle(.secondary)
-
-            if !forecastPoints.isEmpty {
-                Label("Dashed = projected from planned workouts", systemImage: "chart.line.flattrend.xyaxis")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-            }
         }
         .glassCard()
         .frame(maxHeight: wide.rowHeight)
+    }
+
+    /// The series legend and the dashed-forecast note share a line where the card
+    /// is wide enough, and stack under it on the phone.
+    private var legendLayout: AnyLayout {
+        wide.isWide ? AnyLayout(HStackLayout(spacing: Theme.Spacing.l))
+                    : AnyLayout(VStackLayout(alignment: .leading, spacing: 6))
     }
 
     private func legend(_ color: Color, _ label: String) -> some View {
