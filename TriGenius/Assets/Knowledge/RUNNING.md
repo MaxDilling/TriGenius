@@ -15,6 +15,8 @@ Beyond the general data check (in the system prompt), pay particular attention t
 
 **Running-specific HR pitfall:** the pace–HR relationship is sensitive to wind, hills, soft surface, and heat. A "Z2 run" on a hilly trail at 28°C may run at Z3 HR with no fitness change. Treat as a confound, not as drift.
 
+**Prescribe running workouts by pace, not by heart rate.** For the same reason, plus cardiac lag at interval onset, cardiac drift over long efforts, and wrist-optical measurement error, HR is too imprecise to steer a scheduled running step. Default `target_type` for run workouts is `pace`. Use `heart_rate` only when pace is genuinely unusable — very hilly trail, a heat-acclimation block, or a deliberately HR-capped easy/recovery run — and tell the athlete why.
+
 ---
 
 ## 2. Stagnation triage — running-specific reference values

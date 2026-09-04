@@ -22,7 +22,7 @@ nonisolated enum WorkoutNormalizer {
     enum Band {
         static let paceFasterSeconds = 20.0   // sec/km subtracted -> faster bound
         static let paceSlowerSeconds = 10.0   // sec/km added -> slower bound
-        static let heartRateBpm = 4.0
+        static let heartRateBpm = 8.0
         static let powerFraction = 0.05       // ±5 %
         static let speedFraction = 0.05       // ±5 % (km/h)
         static let cadenceRpm = 3.0

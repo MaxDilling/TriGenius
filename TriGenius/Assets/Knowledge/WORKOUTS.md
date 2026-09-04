@@ -63,7 +63,7 @@ The app expands it into a band automatically:
 | target | band |
 |--------|------|
 | pace | −20 / +10 s/km (e.g. `300` → 4:40–5:10/km) |
-| heart_rate | ±3 bpm |
+| heart_rate | ±8 bpm |
 | power | ±5 % |
 | cadence | ±3 rpm |
 
