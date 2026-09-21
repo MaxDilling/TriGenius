@@ -20,7 +20,15 @@ extension View {
     /// value changes. The scrub rule + tooltip are chart *content*, so every
     /// write re-collects all marks — snapping turns per-pixel pointer events
     /// into one update per data point crossed.
-    func chartScrubbing<V: Plottable & Equatable>(_ selection: Binding<V?>, snap: @escaping (V) -> V?) -> some View {
+    /// `inFooter`, when bound, reports whether the pointer sits in the bottom
+    /// `footer` fraction of the plot — a strip a chart can hand its own meaning,
+    /// such as `WorkoutStreamChart`'s zone ribbon. A Bool rather than a position,
+    /// so vertical movement re-collects the marks twice, on entry and exit,
+    /// instead of on every pixel.
+    func chartScrubbing<V: Plottable & Equatable>(
+        _ selection: Binding<V?>, footer: Double = 0, inFooter: Binding<Bool>? = nil,
+        snap: @escaping (V) -> V?
+    ) -> some View {
         let snapped = Binding<V?>(
             get: { selection.wrappedValue },
             set: { raw in
@@ -28,9 +36,15 @@ extension View {
                 if value != selection.wrappedValue { selection.wrappedValue = value }
             }
         )
+        func reportFooter(_ y: CGFloat?, in height: CGFloat) {
+            guard let inFooter else { return }
+            let hit = y.map { $0 > height * (1 - footer) } ?? false
+            if hit != inFooter.wrappedValue { inFooter.wrappedValue = hit }
+        }
         return chartOverlay { proxy in
             scrubSurface { point in
                 snapped.wrappedValue = point.flatMap { proxy.value(atX: $0.x, as: V.self) }
+                reportFooter(point?.y, in: proxy.plotSize.height)
             }
             // Hover never enters the touch stream, so it rides alongside the
             // long-press below it rather than competing with it — a hovering
@@ -39,8 +53,10 @@ extension View {
                 switch phase {
                 case .active(let location):
                     snapped.wrappedValue = proxy.value(atX: location.x, as: V.self)
+                    reportFooter(location.y, in: proxy.plotSize.height)
                 case .ended:
                     snapped.wrappedValue = nil
+                    reportFooter(nil, in: proxy.plotSize.height)
                 }
             }
         }

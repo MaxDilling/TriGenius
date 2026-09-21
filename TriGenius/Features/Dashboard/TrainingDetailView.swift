@@ -263,7 +263,7 @@ struct TrainingDetailView: View {
                 activityCard(details)
                 zonesCard(details)
                 feelCard
-                streamsSection(record.streamsData, family: family)
+                streamsSection(record.streamsData, details: details, family: family)
                 swimSection(details)
             } else {
                 multisportSection
@@ -273,9 +273,9 @@ struct TrainingDetailView: View {
 
     private var wideBody: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            if legs.isEmpty {
-                Text(family.displayName).font(.headline).frame(maxWidth: .infinity)
-            } else {
+            // Single sport needs no heading here: the navigation title already
+            // names it, and the rail carries the workout's own header card.
+            if !legs.isEmpty {
                 header
                 segmentStrip
             }
@@ -319,30 +319,34 @@ struct TrainingDetailView: View {
     @ViewBuilder
     private var chartPane: some View {
         if let leg = selectedLegValue {
-            let models = WorkoutStreamModel.models(from: leg.segment.streamsData, family: leg.segment.family)
-            chartGrid(models, columns: models.count > 2 ? 2 : 1, height: 168)
+            let models = WorkoutStreamModel.models(from: leg.segment.streamsData, details: leg.segment.details,
+                                                   family: leg.segment.family)
+            chartGrid(models, siblings: models, columns: models.count > 2 ? 2 : 1, height: 168)
             swimSection(leg.segment.details)
         } else if legs.isEmpty {
-            let models = WorkoutStreamModel.models(from: record.streamsData, family: family)
+            let models = WorkoutStreamModel.models(from: record.streamsData, details: details, family: family)
             if let primary = models.first {
-                chartCard(primary.kind.label, primary, height: 180)
+                WorkoutStreamCard(title: primary.kind.label, model: primary, siblings: models, height: 180)
             }
-            chartGrid(Array(models.dropFirst()), columns: 2, height: 150)
+            chartGrid(Array(models.dropFirst()), siblings: models, columns: 2, height: 150)
             swimSection(details)
         } else {
-            chartGrid(WorkoutStreamModel.raceModels(segments: legs.map(\.segment)),
-                      columns: 1, height: 168, bands: raceBands, suffix: " · full race")
+            let models = WorkoutStreamModel.raceModels(segments: legs.map(\.segment))
+            chartGrid(models, siblings: models, columns: 1, height: 168,
+                      bands: raceBands, suffix: " · full race")
         }
     }
 
-    private func chartGrid(_ models: [WorkoutStreamModel], columns: Int, height: CGFloat,
+    private func chartGrid(_ models: [WorkoutStreamModel], siblings: [WorkoutStreamModel],
+                           columns: Int, height: CGFloat,
                            bands: [WorkoutStreamChart.Band] = [], suffix: String = "") -> some View {
         LazyVGrid(
             columns: Array(repeating: GridItem(.flexible(), spacing: Theme.Spacing.m), count: columns),
             spacing: Theme.Spacing.m
         ) {
             ForEach(models) { model in
-                chartCard(model.kind.label + suffix, model, bands: bands, height: height)
+                WorkoutStreamCard(title: model.kind.label + suffix, model: model,
+                                  siblings: siblings, bands: bands, height: height)
             }
         }
     }
@@ -560,11 +564,18 @@ struct TrainingDetailView: View {
     // activities derive TSS from their stored stream data via `TSSCalculator` —
     // we re-run the same dispatch (read-only) to label the source.
 
+    /// The HR readings this row was scored from — the stored histogram, the same
+    /// input `rescoreAllActivities` replays. Empty for a row written before histograms.
+    private var storedHeartRateSamples: [NormalizedStream.Sample] {
+        (ZoneHistogram.decode(record.zoneHistogramData) ?? [:])[.heartRate] ?? []
+    }
+
     private var tssBasis: String? {
         guard record.tss != nil else { return nil }
         // As-of the activity's own date — the same basis it was scored with at ingest.
         let snapshot = TrainingDataStore.shared.performanceHistory().snapshot(asOf: record.date)
-        return TSSCalculator.compute(details: details, snapshot: snapshot).basis?.label
+        return TSSCalculator.compute(details: details, snapshot: snapshot,
+                                     heartRate: storedHeartRateSamples).basis?.label
     }
 
     // MARK: Coach insight ("Silent AI")
@@ -780,7 +791,8 @@ struct TrainingDetailView: View {
             }
             activityCard(leg.segment.details, title: "Metrics")
             zonesCard(leg.segment.details)
-            streamsSection(leg.segment.streamsData, family: leg.segment.family)
+            streamsSection(leg.segment.streamsData, details: leg.segment.details,
+                               family: leg.segment.family)
             swimSection(leg.segment.details)
         } else {
             splitsCard
@@ -923,8 +935,10 @@ struct TrainingDetailView: View {
     /// The race-long traces, with the legs shaded behind them.
     @ViewBuilder
     private var raceCharts: some View {
-        ForEach(WorkoutStreamModel.raceModels(segments: legs.map(\.segment))) { model in
-            chartCard("\(model.kind.label) · full race", model, bands: raceBands)
+        let models = WorkoutStreamModel.raceModels(segments: legs.map(\.segment))
+        ForEach(models) { model in
+            WorkoutStreamCard(title: "\(model.kind.label) · full race", model: model,
+                              siblings: models, bands: raceBands)
         }
     }
 
@@ -971,20 +985,12 @@ struct TrainingDetailView: View {
     }
 
     @ViewBuilder
-    private func streamsSection(_ data: Data, family: SportFamily) -> some View {
-        ForEach(WorkoutStreamModel.models(from: data, family: family)) { model in
-            chartCard(model.kind.label, model)
+    private func streamsSection(_ data: Data, details: [String: Any],
+                                family: SportFamily) -> some View {
+        let models = WorkoutStreamModel.models(from: data, details: details, family: family)
+        ForEach(models) { model in
+            WorkoutStreamCard(title: model.kind.label, model: model, siblings: models)
         }
-    }
-
-    private func chartCard(_ title: String, _ model: WorkoutStreamModel,
-                           bands: [WorkoutStreamChart.Band] = [], height: CGFloat = 140) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            Text(title).font(.headline)
-            WorkoutStreamChart(model: model, bands: bands, height: height)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .cardSurface()
     }
 
     // MARK: Swim — per-lap intervals + the cleaned lengths (Garmin per-length data)
@@ -1129,7 +1135,7 @@ struct TrainingDetailView: View {
         if let v = s.lactateThrHR {
             d["lactate_thr_hr_bpm"] = v
             d["lactate_thr_hr_is_estimated"] = s.lactateThrHRIsEstimated
-            d["lactate_thr_hr_is_anchored"] = s.lactateThrHRIsAnchored
+            d["lactate_thr_hr_confidence"] = s.lactateThrHRConfidence.rawValue
         }
         if let v = s.maxHR { d["max_hr_bpm"] = v }
         if let v = s.lactateThrPaceSeconds { d["lactate_thr_pace_s_per_km"] = v }
@@ -1184,7 +1190,8 @@ struct TrainingDetailView: View {
 
         let snapshot = TrainingDataStore.shared.performanceHistory().snapshot(asOf: record.date)
         dump["performance_snapshot_asof"] = snapshotDict(snapshot)
-        let recomputed = TSSCalculator.compute(details: details, snapshot: snapshot)
+        let recomputed = TSSCalculator.compute(details: details, snapshot: snapshot,
+                                               heartRate: storedHeartRateSamples)
         var tssDump: [String: Any] = [:]
         if let value = recomputed.tss { tssDump["tss"] = value }
         if let basis = recomputed.basis?.label { tssDump["basis"] = basis }

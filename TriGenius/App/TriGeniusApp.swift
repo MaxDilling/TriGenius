@@ -49,6 +49,13 @@ struct TriGeniusApp: App {
                 }
             case .active where wasBackgrounded:
                 wasBackgrounded = false
+                // The estimated thresholds resolve against `.now` — the observation
+                // window and the staleness a confidence reports both move with the
+                // date, so a day spent in the background changes them
+                // with no row having been written. `refreshIfStale()` alone does not
+                // cover it: below the staleness interval it syncs nothing and posts
+                // nothing, which is why reopening the app showed the old numbers.
+                TrainingDataStore.shared.invalidateResolvedValues()
                 refreshIfStale()
             default:
                 break
@@ -70,6 +77,9 @@ struct TriGeniusApp: App {
         // Mirror the iCloud-KVS ignored-workout blacklist into the local store and
         // keep watching for changes from the athlete's other devices.
         IgnoredWorkouts.startSync()
+        // Same mirror for the threshold-calculation opt-ins: they describe the athlete,
+        // so both devices reading one store must resolve the same numbers.
+        AthleteSettingsSync.startSync(into: settings)
         // Translate pre-layer workout rows (planned slot, actual date/time,
         // override layer) before anything reads or syncs the store.
         TrainingDataStore.shared.migrateWorkoutLayersIfNeeded()
@@ -179,6 +189,9 @@ struct RootTabView: View {
         // shell the dashboard's column layouts assume.
         .tabViewStyle(.sidebarAdaptable)
         .environment(router)
+        // The one place the window's size is knowable; sheets read it back
+        // through `\.windowSize` to size themselves against it.
+        .measuringWindow()
         // Trace marker: aligns the Instruments timeline with each tab switch, so
         // hangs/hitches right after it attribute to that tab's first build + load.
         .onChange(of: router.selectedTab) { old, new in
