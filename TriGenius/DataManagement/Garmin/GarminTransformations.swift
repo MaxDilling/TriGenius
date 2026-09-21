@@ -193,19 +193,32 @@ nonisolated enum GarminTransform {
         return NormalizedStream.normalized(samples)
     }
 
-    /// The run's speed stream as equivalent FLAT speed (m/s), 1 s per sample — the
-    /// shared input both NGP and the pace-zone bucketing read, so a hilly run's
-    /// zones and its rTSS rest on the same numbers. Empty without a speed stream.
+    /// The run's speed stream as equivalent FLAT speed (m/s) — the shared input both
+    /// NGP and the pace-zone bucketing read, so a hilly run's zones and its rTSS rest
+    /// on the same numbers. Empty without a speed stream.
+    ///
+    /// Each sample carries the real time it stands for, through the same
+    /// `ZoneBucketing.durationSamples` the HR stream goes through. Garmin's detail
+    /// rows are NOT a clean 1 Hz grid — they sit ~1 s apart with pauses of tens to
+    /// hundreds of seconds between them, and rows without a speed reading drop out
+    /// here — so a fixed second per sample would make this stream's clock run slow
+    /// against every other stream from the same activity.
     static func gradeAdjustedSamples(_ details: [String: Any]) -> [NormalizedStream.Sample] {
-        GradeAdjustedPace.adjusted(gradedSpeedSamples(details))
+        ZoneBucketing.durationSamples(gradedSpeedSamples(details).map {
+            (offset: $0.offset, value: $0.speed * GradeAdjustedPace.gradeFactor($0.grade))
+        })
     }
 
-    /// Walk the activity-detail rows once into index-aligned `directSpeed` samples (m/s,
-    /// 1 s) and their gradient: `directGrade` (percent) per row when present — Garmin
-    /// pre-smooths it — else the de-noised `GradeAdjustedPace.smoothedGrades` over the
-    /// `directElevation`/`sumDistance` series (last values carried across the odd missing
-    /// row), else flat.
-    private static func gradedSpeedSamples(_ details: [String: Any]) -> [(speed: Double, grade: Double, seconds: Double)] {
+    /// Walk the activity-detail rows once into `directSpeed` samples (m/s) with their
+    /// offset into the activity and their gradient: `directGrade` (percent) per row
+    /// when present — Garmin pre-smooths it — else the de-noised
+    /// `GradeAdjustedPace.smoothedGrades` over the `directElevation`/`sumDistance`
+    /// series (last values carried across the odd missing row), else flat.
+    ///
+    /// The offset comes from `directTimestamp`; without it the row index stands in,
+    /// which is the old fixed-interval behaviour and the best the payload supports.
+    private static func gradedSpeedSamples(_ details: [String: Any])
+        -> [(offset: Double, speed: Double, grade: Double)] {
         guard let descriptors = details["metricDescriptors"] as? [[String: Any]],
               let rows = details["activityDetailMetrics"] as? [[String: Any]],
               !descriptors.isEmpty, !rows.isEmpty else { return [] }
@@ -225,6 +238,9 @@ nonisolated enum GarminTransform {
             return (metrics[idx] as? NSNumber)?.doubleValue
         }
 
+        let timestampIdx = indexes["directTimestamp"]
+        var offsets: [Double] = []
+        var firstTimestamp: Double?
         var speeds: [Double] = []
         var directGrades: [Double] = []
         var elevations: [Double] = []
@@ -234,6 +250,16 @@ nonisolated enum GarminTransform {
         for row in rows {
             guard let metrics = row["metrics"] as? [Any],
                   let speed = value(metrics, speedIdx), speed >= 0 else { continue }
+            // A row missing its timestamp advances one second from the last known
+            // offset — mixing real seconds with row counts in one series would put
+            // the samples in the wrong order.
+            if let ms = value(metrics, timestampIdx) {
+                let base = firstTimestamp ?? ms
+                firstTimestamp = base
+                offsets.append((ms - base) / 1000)
+            } else {
+                offsets.append((offsets.last ?? -1) + 1)
+            }
             speeds.append(speed)
             if let g = value(metrics, gradeIdx) { directGrades.append(g / 100.0) }
             if haveElevation {
@@ -252,7 +278,9 @@ nonisolated enum GarminTransform {
         } else {
             grades = Array(repeating: 0, count: speeds.count)
         }
-        return zip(speeds, grades).map { (speed: $0, grade: $1, seconds: 1.0) }
+        return zip(offsets, zip(speeds, grades)).map {
+            (offset: $0.0, speed: $0.1.0, grade: $0.1.1)
+        }
     }
 
     /// The ACTIVE pool lengths within a single lap (idle/rest lengths carry no

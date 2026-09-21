@@ -10,10 +10,11 @@ import Foundation
 
 nonisolated enum NormalizedStream {
     /// One stream reading: its `value` and the `seconds` of real time it represents
-    /// (its own measurement interval — Apple Health supplies this per sample; a 1 Hz
-    /// stream like Garmin's passes 1). Carrying the duration lets the math run on
+    /// (its own measurement interval — Apple Health supplies this per sample; Garmin's
+    /// detail rows sit roughly a second apart but jump across pauses, so theirs comes
+    /// from the gap to the next reading). Carrying the duration lets the math run on
     /// irregularly-spaced samples directly, with no resampling and no interpolated
-    /// (invented) values.
+    /// (invented) values — and keeps two streams off the same activity on one clock.
     typealias Sample = (value: Double, seconds: Double)
 
     /// Normalize a sample stream: a `window`-**second** rolling time-average, raised

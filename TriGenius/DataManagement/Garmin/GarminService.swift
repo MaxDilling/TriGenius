@@ -24,7 +24,7 @@ nonisolated final class GarminService: Sendable {
     // MARK: - Debug
 
     /// Provenance of a run's normalized pace, recomputed live for the debug export —
-    /// the `directSpeed` stream (1 Hz, each sample covering 1 s) through the shared
+    /// the `directSpeed` stream (each sample covering the gap to the next) through the shared
     /// `NormalizedStream`, plus the raw samples. Mirrors HealthKit's diagnostics so the
     /// export shape is identical across sources. Nil when details can't be fetched.
     func speedStreamDiagnostics(activityId: String) async -> sending [String: Any]? {
