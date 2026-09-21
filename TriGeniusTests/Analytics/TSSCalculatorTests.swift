@@ -6,9 +6,10 @@ import Testing
 // hand-computed IF²·h·100 (rounded) for each dispatch path. Update these in the
 // same change as the formula in Analytics/TSSCalculator.swift.
 
-private func snapshot(ftp: Int? = nil, runThrPace: Double? = nil, css: Double? = nil) -> PerformanceSnapshot {
+private func snapshot(ftp: Int? = nil, runThrPace: Double? = nil, css: Double? = nil,
+                      lthr: Int? = nil) -> PerformanceSnapshot {
     PerformanceSnapshot(cyclingFTP: ftp, runningFTP: nil, cssPaceSeconds: css,
-                        lactateThrHR: nil, maxHR: nil, lactateThrPaceSeconds: runThrPace,
+                        lactateThrHR: lthr, maxHR: nil, lactateThrPaceSeconds: runThrPace,
                         vo2maxRunning: nil, vo2maxCycling: nil, weightKg: nil)
 }
 
@@ -57,6 +58,44 @@ private func snapshot(ftp: Int? = nil, runThrPace: Double? = nil, css: Double? =
     let r = TSSCalculator.compute(details: d, snapshot: snapshot())
     #expect(r.tss == 40)
     #expect(r.basis == .swimDuration)
+}
+
+@Test func hrLoad_scoresEachReadingAtItsOwnHeartRate() {
+    // 1 h at 150 bpm against LTHR 180: (150/180)²·100·0.77 ≈ 53.47 → 53.
+    let d: [String: Any] = ["sport": "strength", "duration_minutes": 60]
+    let r = TSSCalculator.compute(details: d, snapshot: snapshot(lthr: 180),
+                                  heartRate: [(value: 150, seconds: 3600)])
+    #expect(r.tss == 53)
+    #expect(r.basis == .hrLoad)
+}
+
+@Test func hrLoad_doesNotChargeIdleTimeAsEasyRiding() {
+    // A watch left running at 60 bpm: (60/180)²·100·0.77 ≈ 8.56 → 9. The zone form
+    // puts the same hour in the unbounded zone 1 and charges it at 0.74 × LTHR — 42.
+    let d: [String: Any] = ["sport": "cycling", "duration_minutes": 60,
+                            "hr_zones_seconds": ["z1": 3600]]
+    let stream = TSSCalculator.compute(details: d, snapshot: snapshot(lthr: 180),
+                                       heartRate: [(value: 60, seconds: 3600)])
+    #expect(stream.tss == 9)
+    #expect(TSSCalculator.compute(details: d, snapshot: snapshot(lthr: 180)).tss == 42)
+}
+
+@Test func hrLoad_outranksTheZoneBuckets() {
+    // Both available: the reading wins, the buckets are only for rows stored without
+    // a histogram.
+    let d: [String: Any] = ["sport": "cycling", "duration_minutes": 60,
+                            "hr_zones_seconds": ["z3": 3600]]
+    let r = TSSCalculator.compute(details: d, snapshot: snapshot(lthr: 180),
+                                  heartRate: [(value: 150, seconds: 3600)])
+    #expect(r.basis == .hrLoad)
+}
+
+@Test func hrLoad_needsAnLTHRAndFallsBackToZonesWithout() {
+    let d: [String: Any] = ["sport": "cycling", "duration_minutes": 60,
+                            "hr_zones_seconds": ["z3": 3600]]
+    let r = TSSCalculator.compute(details: d, snapshot: snapshot(),
+                                  heartRate: [(value: 150, seconds: 3600)])
+    #expect(r.basis == .hrZones)
 }
 
 @Test func hrZoneLoad_isTheFallbackWhenNoPowerOrPace() {

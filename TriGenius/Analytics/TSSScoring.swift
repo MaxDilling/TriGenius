@@ -51,7 +51,8 @@ nonisolated enum TSSScoring {
         ZoneBucketing.apply(zoneSamples, to: &details, snapshot: snapshot)
 
         // 4. TSS from the resolved details + current thresholds.
-        let (tss, basis) = TSSCalculator.compute(details: details, snapshot: snapshot)
+        let (tss, basis) = TSSCalculator.compute(details: details, snapshot: snapshot,
+                                                 heartRate: zoneSamples[.heartRate] ?? [])
         return (distanceKm, tss, basis?.label)
     }
 

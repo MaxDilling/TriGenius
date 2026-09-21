@@ -43,10 +43,18 @@ nonisolated enum TSSConstants {
     // Bracket 1.00 (finely structured) … 1.14 (single block). `ref/tss_lab` PORTING.
     static let plannedBikeIFUplift = 1.10
 
-    // MARK: HR zone-load fallback (completed activities without power/pace)
+    // MARK: HR load fallback (completed activities without power/pace)
     //
-    // Garmin %LTHR zone midpoints → an IF²-weighted load, then a calibrated scale
-    // so it reproduces power-TSS on cycling. `ref/tss_lab/tss_completed.py`.
+    // An IF²-weighted load — `Σ (HR/LTHR)² · seconds` over the stored readings — times
+    // a calibrated scale so it reproduces power-TSS on cycling.
+    // `ref/tss_lab/tss_completed.py`. Re-fitting it against 151 rides carrying both
+    // power TSS and HR returns 0.769, so the scale carries over unchanged from the
+    // zone-midpoint form it replaced.
+    //
+    // The midpoints remain the zone *boundaries* below and the fallback for rows
+    // stored before histograms; they are not a scoring input for anything with a
+    // stream, because zone 1 is unbounded downward and its 0.74 midpoint charges a
+    // stationary watch as easy riding.
     static let hrZoneMidFractionOfLTHR: [Double] = [0.74, 0.84, 0.89, 0.94, 1.03]
     static let hrZoneLoadScale = 0.77
 
