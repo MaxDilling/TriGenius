@@ -33,9 +33,12 @@ final class BackgroundCoordinator {
     /// (before `application(_:didFinishLaunchingWithOptions:)` returns).
     func register() {
         #if os(iOS)
+        // `.main`, never `nil`: the launch handler is `@MainActor` (this type is),
+        // and BGTaskScheduler would otherwise call it on its own serial queue —
+        // the isolation check traps before `handle` ever runs.
         BGTaskScheduler.shared.register(
             forTaskWithIdentifier: Self.refreshTaskID,
-            using: nil
+            using: .main
         ) { [weak self] task in
             guard let task = task as? BGAppRefreshTask else { return }
             self?.handle(task)
