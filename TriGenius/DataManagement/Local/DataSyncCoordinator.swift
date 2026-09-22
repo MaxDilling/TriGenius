@@ -199,18 +199,30 @@ final class DataSyncCoordinator {
         return allSucceeded
     }
 
-    // MARK: - Deep history backfill (CTL warm-up)
+    // MARK: - Deep history backfill
 
-    /// Pull a deep slice of history into the local database so the PMC engine's
-    /// CTL (Fitness, 42-day EWMA) has a proper >42-day warm-up. Garmin only — the
-    /// Apple Health sync already backfills generously on its first run. Returns
-    /// the number of activities ingested, or nil if unavailable / failed.
+    /// How far back a deep backfill / re-sync reaches.
+    ///
+    /// A full year, so the Statistics charts can actually fill the 1Y range they
+    /// offer, and so the threshold estimates resolve off a whole history rather than
+    /// a truncated one — `LTPaceEstimate` reads 90 days and `LTHREstimate` 180, and a
+    /// window that runs out mid-series makes the estimate step for want of evidence
+    /// in a way that reads as adaptation. Comfortably past the 42-day CTL warm-up the
+    /// backfill originally existed for.
+    static let deepHistoryDays = 365
+
+    /// Pull a deep slice of history (`deepHistoryDays`) into the local database, so
+    /// the PMC engine's CTL has a proper warm-up and the charts and threshold
+    /// estimates have a full year behind them. Garmin only — the Apple Health sync
+    /// already backfills generously on its first run. Returns the number of activities
+    /// ingested, or nil if unavailable / failed.
     /// `force` re-fetches every activity in the window (ignoring the per-activity
     /// cache) and recomputes its TSS + distance — used by the "recompute all" action
     /// so existing activities pick up newly-computed fields (normalized pace, swim
     /// length cleaning). Manual distance overrides are preserved.
     @discardableResult
-    func deepBackfill(source: DataSource, days: Int = 240, force: Bool = false) async -> Int? {
+    func deepBackfill(source: DataSource, days: Int = deepHistoryDays,
+                      force: Bool = false) async -> Int? {
         guard source == .garmin, await GarminAuth.shared.isAuthenticated else { return nil }
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
@@ -279,7 +291,8 @@ final class DataSyncCoordinator {
         let (text, settings) = await settingsTask
         if !history.isEmpty { store.ingestMetrics(history) }
         if let settings {
-            store.ingestMetrics(Self.metrics(fromGarminSettings: settings, date: Date()))
+            store.ingestMetrics(Self.metrics(fromGarminSettings: settings, date: Date(),
+                                             maxHRSeed: store.seedDate(for: "max_hr")))
         }
         return text
     }
@@ -404,10 +417,18 @@ final class DataSyncCoordinator {
     /// and the HR/power zones; the FTP/VO2max/threshold/CSS/weight series come from
     /// `GarminService.fetchMetricHistory`. Shared by the launch/dashboard sync and
     /// the `sync_user_settings` coach tool so both ingest the same way.
-    static func metrics(fromGarminSettings settings: [String: Any], date: Date) -> [IngestedMetric] {
+    /// `maxHRSeed` is the date a first HRmax belongs on, or nil when one is already
+    /// stored. HRmax is an athlete constant and the dominant input to every threshold
+    /// estimate — 4 bpm is worth up to 10 s/km of LT pace — so it is taken from the
+    /// watch profile **once**, as the athlete's own value: written `manual`, which
+    /// outranks every synced source, so a correction here survives the next sync
+    /// instead of being overwritten by whatever the watch still has configured.
+    static func metrics(fromGarminSettings settings: [String: Any], date: Date,
+                        maxHRSeed: Date?) -> [IngestedMetric] {
         var out: [IngestedMetric] = []
-        if let maxHR = (settings["max_hr"] as? NSNumber)?.doubleValue, maxHR > 0 {
-            out.append(IngestedMetric(metricKey: "max_hr", value: maxHR, unit: "bpm", source: "garmin", date: date))
+        if let maxHRSeed, let maxHR = (settings["max_hr"] as? NSNumber)?.doubleValue, maxHR > 0 {
+            out.append(IngestedMetric(metricKey: "max_hr", value: maxHR, unit: "bpm",
+                                      source: "manual", date: maxHRSeed))
         }
         out += zoneMetrics(settings["hr_zones"], prefix: "hr_zone", unit: "bpm", source: "garmin", date: date)
         out += zoneMetrics(settings["power_zones"], prefix: "power_zone", unit: "watts", source: "garmin", date: date)

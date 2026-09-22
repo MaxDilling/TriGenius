@@ -222,7 +222,7 @@ final class BackgroundCoordinator {
     /// night within the last two days, or nil for load-only advice when none.
     private func recentSleepHours() async -> Double? {
         let cutoff = Calendar.current.date(byAdding: .day, value: -2, to: Calendar.current.startOfDay(for: Date()))!
-        let recent = TrainingDataStore.shared.metricHistory("sleep_duration_h").filter { $0.date >= cutoff }
+        let recent = await TrainingDataStore.shared.metricHistory("sleep_duration_h").filter { $0.date >= cutoff }
         guard let last = recent.last, last.value > 0 else { return nil }
         return last.value
     }

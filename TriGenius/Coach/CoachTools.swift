@@ -187,6 +187,8 @@ final class ActivityReadToolHandler: CoachToolHandler {
             return entry
         }
         entry["current"] = currentLine(metric, series: all)
+        // A derived threshold must never read back as a measurement.
+        if all.last?.isEstimated == true, let note = metric.estimateNote { entry["basis"] = note }
         let window = all.filter { $0.date >= start && $0.date <= end }
         guard let first = window.first else {
             entry["history"] = "no readings in this period"

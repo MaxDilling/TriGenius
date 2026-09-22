@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 import SwiftData
 import CoreData
 
@@ -129,6 +130,16 @@ final class WorkoutRecord {
     var steadyHR20: Double = 0
     /// This activity's peak HR, the input to that rejection.
     var peakHR: Double = 0
+    /// Best mean power per duration paired with the heart rate held across those same
+    /// seconds (`VO2maxEstimate.profile`), "" for anything without both streams. Stored
+    /// raw for the same reason as `steadyHR20`: the reconstruction needs HRmax, HRrest
+    /// and mass, so keeping the pair lets a corrected input re-resolve history.
+    var submaxProfileJSON: String = ""
+    /// Heart rate → best grade-adjusted speed for this run (`LTPaceEstimate.profile`),
+    /// "" for anything that isn't a run with both streams. Stored instead of a finished
+    /// MAS for the same reason as `steadyHR20`: the reconstruction needs HRmax and
+    /// HRrest, and keeping the raw profile lets a corrected HRmax re-resolve history.
+    var paceHRProfileJSON: String = ""
     /// Downsampled metric streams (`WorkoutStreams.encode`), the detail charts'
     /// data. Empty when the source delivered no streams for this activity.
     var streamsData: Data = Data()
@@ -165,6 +176,8 @@ final class WorkoutRecord {
         powerCurveJSON: String = "",
         steadyHR20: Double = 0,
         peakHR: Double = 0,
+        paceHRProfileJSON: String = "",
+        submaxProfileJSON: String = "",
         streamsData: Data = Data(),
         zoneHistogramData: Data = Data(),
         segmentsJSON: String = ""
@@ -192,6 +205,8 @@ final class WorkoutRecord {
         self.powerCurveJSON = powerCurveJSON
         self.steadyHR20 = steadyHR20
         self.peakHR = peakHR
+        self.paceHRProfileJSON = paceHRProfileJSON
+        self.submaxProfileJSON = submaxProfileJSON
         self.streamsData = streamsData
         self.zoneHistogramData = zoneHistogramData
         self.segmentsJSON = segmentsJSON
@@ -232,7 +247,7 @@ enum MetricKeys {
         var keys: Set<String> = [
             "cycling_ftp", "running_ftp",
             "vo2max_running", "vo2max_cycling",
-            "lactate_threshold_hr", "lactate_threshold_speed",
+            "lactate_threshold_hr", "lactate_threshold_hr_cycling", "lactate_threshold_speed",
             "swim_css_speed", "max_hr", "weight_kg",
         ]
         for n in 1...5 {
@@ -369,15 +384,59 @@ struct IngestedMetric: Sendable {
 
 /// One performance metric's value on a given day — the unit the Performance
 /// Insights progression charts work on.
-struct MetricPoint: Sendable, Identifiable {
+nonisolated struct MetricPoint: Sendable, Identifiable {
     let date: Date
     let value: Double
+    /// True when the value was derived (`FTPEstimate`/`LTHREstimate`) instead of
+    /// reported by a source. Nothing writes an estimate into the metric series, so
+    /// such a point exists only by re-resolution (`PerformanceHistory.estimatedSeries`)
+    /// — and every reader has to mark it as the estimate it is.
+    var isEstimated: Bool = false
+    /// What the estimate behind this point rests on, when it is one. Nil for a stored
+    /// reading, which is a measurement and carries no confidence.
+    var confidence: EstimateConfidence?
+    /// Whether the point has to be read as provisional: carried forward with no current
+    /// evidence, or resting on a window too thin for the aggregate to be a robust one.
+    /// Drawn dashed — a solid line makes either of those read as a measurement.
+    var isProvisional: Bool { confidence != nil && confidence != .anchored }
     var id: Date { date }
+
+    /// One drawable stretch of a series: consecutive points that share a styling.
+    struct Stretch: Identifiable, Sendable {
+        let id: Int
+        let isProvisional: Bool
+        var points: [MetricPoint]
+    }
+
+    /// Cut a series into stretches a chart can draw as separate lines.
+    ///
+    /// Needed because `lineStyle` in Swift Charts applies to a whole *series*: styling
+    /// each point individually makes one of them style the entire line, which drew a
+    /// three-month window fully dashed and a six-month one fully solid off the same
+    /// data. Each stretch becomes its own series instead.
+    ///
+    /// An edge counts as provisional when **either** end is, so the approach to a
+    /// carried value and the return from it are both drawn as what they are; that also
+    /// makes consecutive stretches share their boundary point and meet on the page.
+    static func stretches(_ points: [MetricPoint]) -> [Stretch] {
+        guard points.count > 1 else { return [] }
+        var out: [Stretch] = []
+        for i in 0 ..< points.count - 1 {
+            let provisional = points[i].isProvisional || points[i + 1].isProvisional
+            if out.last?.isProvisional == provisional {
+                out[out.count - 1].points.append(points[i + 1])
+            } else {
+                out.append(Stretch(id: out.count, isProvisional: provisional,
+                                   points: [points[i], points[i + 1]]))
+            }
+        }
+        return out
+    }
 }
 
 /// Latest value per performance metric, read from the DB to build the coach's
 /// system-prompt context and the Settings display.
-struct PerformanceSnapshot: Sendable {
+nonisolated struct PerformanceSnapshot: Sendable {
     var cyclingFTP: Int?
     /// True when `cyclingFTP` was derived from VO2max + mass (`FTPEstimate`) rather
     /// than measured. Rendered wherever the value is shown so an estimate is never
@@ -386,19 +445,71 @@ struct PerformanceSnapshot: Sendable {
     var runningFTP: Int?
     /// Swim critical-swim-speed pace, in seconds per 100 m.
     var cssPaceSeconds: Double?
+    /// **Running** lactate-threshold HR — the value a watch publishes, and the one that
+    /// stands for every discipline that has nothing of its own. Read through
+    /// `thresholdHR(for:)`, never directly, wherever a sport is known.
     var lactateThrHR: Int?
     /// True when `lactateThrHR` was derived (`LTHREstimate`) rather than measured.
     var lactateThrHRIsEstimated: Bool = false
-    /// False when the estimate rests on the HRmax fraction alone, with no
-    /// near-maximal sustained effort to anchor it — a floor, not a reading.
-    var lactateThrHRIsAnchored: Bool = false
+    /// What the estimate rests on — how many qualifying efforts, and how recent.
+    /// `.rough` means the HRmax fraction alone, with nothing the athlete did behind it.
+    var lactateThrHRConfidence: EstimateConfidence = .rough
+    /// Cycling lactate-threshold HR, reconstructed from power-gated rides. Nil until
+    /// enough ride evidence exists; `thresholdHR(for:)` then answers with the running
+    /// value, which is what the athlete has on record.
+    var cyclingLactateThrHR: Int?
+    var cyclingLactateThrHRIsEstimated: Bool = false
+    var cyclingLactateThrHRConfidence: EstimateConfidence = .rough
     /// Maximum heart rate, in bpm.
     var maxHR: Int?
     /// Running lactate-threshold pace, in seconds per km.
     var lactateThrPaceSeconds: Double?
+    /// True when `lactateThrPaceSeconds` was reconstructed from ordinary runs
+    /// (`LTPaceEstimate`) rather than reported by a source.
+    var lactateThrPaceIsEstimated: Bool = false
+    /// Whether that reconstruction answered from the current window or is carrying an
+    /// older one forward. For a low-volume runner the latter is the common case.
+    var lactateThrPaceConfidence: EstimateConfidence = .rough
+    /// The share of reconstructed MAS the estimate used — the athlete's own setting, or
+    /// what their LTHR implies. Surfaced so the UI shows the value actually applied
+    /// rather than re-deriving it and drifting from the resolver.
+    var ltPaceFractionUsed: Double?
     var vo2maxRunning: Double?
+    /// True when `vo2maxRunning` was reconstructed from ordinary runs — the same MAS
+    /// `lactateThrPaceSeconds` rests on, under the ACSM running economy equation.
+    var vo2maxRunningIsEstimated: Bool = false
+    var vo2maxRunningConfidence: EstimateConfidence = .rough
     var vo2maxCycling: Double?
+    /// True when `vo2maxCycling` was reconstructed from submaximal rides
+    /// (`VO2maxEstimate`) rather than reported by a source.
+    var vo2maxCyclingIsEstimated: Bool = false
     var weightKg: Double?
+
+    /// The lactate-threshold HR that applies to one discipline.
+    ///
+    /// Two values, not one: cycling LTHR runs 5–10 bpm under running LTHR in the same
+    /// athlete, so scoring a ride against the running value reads the ride as easier
+    /// than it was and draws its heart-rate zones on bounds it never trained in.
+    ///
+    /// With no ride evidence the bike falls back to **the lower of** the athlete's
+    /// running LTHR and `LTHREstimate.fractionOfHRMax`. The running value alone is not
+    /// the safer half of that pair, which is the trap: it is measured, but it measures a
+    /// different quantity, and how far above cycling it sits is itself athlete-specific
+    /// — the two reference athletes hold 0.863 and 0.910 of HRmax at running threshold
+    /// against 0.830 and 0.816 at cycling, so using it read 6.9 and **19.1 bpm** high.
+    /// The bound cuts that to 4.2 and 6.9 while adding the constraint that has to hold
+    /// physiologically: the bike threshold cannot sit above the run threshold.
+    ///
+    /// Still a stand-in that reads a few bpm high on both, so rides scored on heart rate
+    /// come out slightly low until a hard ride exists. Dropping to nil instead would
+    /// remove their training load entirely, which is worse.
+    func thresholdHR(for family: SportFamily) -> Int? {
+        guard family == .bike else { return lactateThrHR }
+        if let cyclingLactateThrHR { return cyclingLactateThrHR }
+        guard let lactateThrHR else { return nil }
+        guard let maxHR, maxHR > 0 else { return lactateThrHR }
+        return min(lactateThrHR, Int((LTHREstimate.fractionOfHRMax * Double(maxHR)).rounded()))
+    }
 
     /// CSS pace formatted as "m:ss" per 100 m (matches `GarminTransform.speedToPace`).
     var cssPaceFormatted: String? {
@@ -419,7 +530,7 @@ struct PerformanceSnapshot: Sendable {
 /// a January ride — so TSS at ingest reads `snapshot(asOf: activity.date)`, not the
 /// latest values. Built once from the store and queried per activity in an ingest
 /// loop (avoids a DB round-trip per activity).
-struct PerformanceHistory: Sendable {
+nonisolated struct PerformanceHistory: Sendable {
     /// One dated metric reading, pre-ranked by source so ties resolve the same way
     /// `latestSnapshot` does.
     struct Entry: Sendable {
@@ -431,11 +542,21 @@ struct PerformanceHistory: Sendable {
     /// `sourceRank` of a hand-entered reading — the tier an estimate must not replace.
     static let manualRank = 3
 
-    /// One activity's sustained-HR evidence, the input to `LTHREstimate`.
-    struct HRObservation: Sendable {
+    /// One activity's threshold evidence: the sustained-HR window `LTHREstimate`
+    /// reads and the pace/HR profile `LTPaceEstimate` reads. Both estimates resolve
+    /// from the same fetch — materializing every stored stream blob twice would be
+    /// the expensive part.
+    struct ActivityEvidence: Sendable {
         let date: Date
         let steadyHR20: Double
         let peakHR: Double
+        var paceProfile: [Int: Double] = [:]
+        /// Duration → (best mean power, concurrent mean HR). Empty without power.
+        var submaxProfile: [Int: (watts: Double, hr: Double)] = [:]
+        /// Which sport's threshold this effort can speak to. LTHR differs by 5-10 bpm
+        /// between running and cycling in the same athlete, so pooling them reads a ride
+        /// as a run.
+        var family: SportFamily? = nil
     }
 
     /// metricKey → readings, ascending by date.
@@ -443,16 +564,55 @@ struct PerformanceHistory: Sendable {
     /// Carried on the resolver so every consumer of `snapshot(asOf:)` sees the same
     /// answer. Both are opt-ins: an estimate replaces the source's value only when
     /// the athlete asked for it.
+    private let estimateVO2maxFromRides: Bool
     private let estimateFTPFromVO2max: Bool
     private let estimateLTHRFromHRMax: Bool
-    private let hrObservations: [HRObservation]
+    private let estimateLTPaceFromRuns: Bool
+    private let estimateRunningVO2maxFromRuns: Bool
+    private let estimateCyclingLTHRFromRides: Bool
+    /// The share of reconstructed MAS held at threshold, in force for **every** date —
+    /// the athlete's own measurement (`ltPaceFractionOverride`) or what their resolved
+    /// LTHR implies.
+    ///
+    /// An athlete constant, so it is resolved once from the values standing now rather
+    /// than re-derived per date. Deriving it per date puts the LTHR series' own
+    /// trajectory into the *shape* of the pace series, where only its scale belongs:
+    /// on a real season this athlete's LTHR moved 176 → 184 → 182 bpm, which is 6.8 %
+    /// of fraction and ~20 s/km of pure artifact, in a curve whose whole purpose is
+    /// to show how the pace itself moved.
+    private var ltPaceFraction: Double?
+    private let evidence: [ActivityEvidence]
 
     init(byKey: [String: [Entry]], estimateFTPFromVO2max: Bool,
-         estimateLTHRFromHRMax: Bool = false, hrObservations: [HRObservation] = []) {
+         estimateVO2maxFromRides: Bool = false,
+         estimateLTHRFromHRMax: Bool = false, estimateLTPaceFromRuns: Bool = false,
+         estimateRunningVO2maxFromRuns: Bool = false,
+         estimateCyclingLTHRFromRides: Bool = false,
+         /// The athlete's own %HRR-at-threshold ÷ pool inflation, when they measured it
+         /// in a threshold test. Nil derives the fraction from the resolved LTHR.
+         ltPaceFractionOverride: Double? = nil,
+         evidence: [ActivityEvidence] = []) {
         self.byKey = byKey.mapValues { $0.sorted { $0.date < $1.date } }
         self.estimateFTPFromVO2max = estimateFTPFromVO2max
+        self.estimateVO2maxFromRides = estimateVO2maxFromRides
         self.estimateLTHRFromHRMax = estimateLTHRFromHRMax
-        self.hrObservations = hrObservations.sorted { $0.date < $1.date }
+        self.estimateLTPaceFromRuns = estimateLTPaceFromRuns
+        self.estimateRunningVO2maxFromRuns = estimateRunningVO2maxFromRuns
+        self.estimateCyclingLTHRFromRides = estimateCyclingLTHRFromRides
+        self.evidence = evidence.sorted { $0.date < $1.date }
+        guard estimateLTPaceFromRuns else { return }
+        if let ltPaceFractionOverride {
+            ltPaceFraction = ltPaceFractionOverride
+            return
+        }
+        let now = Date()
+        // The resolved LTHR, so the fraction matches the threshold HR the athlete is
+        // shown rather than whichever reading happens to be stored.
+        guard let lthr = snapshot(asOf: now, resolving: ["lactate_threshold_hr"]).lactateThrHR,
+              let hrMax = value("max_hr", asOf: now), let hrRest = restingHR(asOf: now)
+        else { return }
+        ltPaceFraction = LTPaceEstimate.fractionOfMAS(lthr: Double(lthr), hrRest: hrRest,
+                                                      hrMax: hrMax)
     }
 
     /// The reading of one metric as it stood on `date`: the newest on or before
@@ -469,15 +629,53 @@ struct PerformanceHistory: Sendable {
 
     private func value(_ key: String, asOf date: Date) -> Double? { entry(key, asOf: date)?.value }
 
+    /// Days of resting-HR readings the heart-rate reserve is taken over.
+    static let restingHRBaselineDays = 28.0
+
+    /// Resting HR as a *baseline* rather than as one morning's reading.
+    ///
+    /// The reserve scales an aggregate built from three months of running, so a single
+    /// day's value is the wrong quantity: submaximal heart rate fluctuates 2-8 bpm
+    /// day to day (Achten & Jeukendrup 2003; Blagrove 2017) and this athlete's series
+    /// spans 45-56 bpm, which is the sawtooth on the threshold-pace chart, not fitness.
+    /// The median over the trailing window rejects the single bad night that a mean
+    /// would carry. Falls back to the latest reading before the window has filled.
+    private func restingHR(asOf date: Date) -> Double? {
+        guard let entries = byKey["resting_hr"] else { return nil }
+        let cutoff = date.addingTimeInterval(-Self.restingHRBaselineDays * 86_400)
+        let window = entries.filter { $0.date > cutoff && $0.date <= date }.map(\.value).sorted()
+        guard !window.isEmpty else { return value("resting_hr", asOf: date) }
+        let mid = window.count / 2
+        return window.count.isMultiple(of: 2) ? (window[mid - 1] + window[mid]) / 2 : window[mid]
+    }
+
     /// A hand-entered reading is the athlete correcting the record, so an estimate
     /// never displaces it — unlike a synced one, which is what opting in is for.
     private func isManual(_ key: String, asOf date: Date) -> Bool {
         entry(key, asOf: date)?.rank == Self.manualRank
     }
 
+    /// What each estimated key needs resolved ahead of it: FTP reads the resolved
+    /// VO2max. Anything outside a key's set is work a caller asking for that one
+    /// series never uses.
+    private static let estimateDependencies: [String: Set<String>] = [
+        "vo2max_cycling": ["vo2max_cycling"],
+        "cycling_ftp": ["cycling_ftp", "vo2max_cycling"],
+        "lactate_threshold_hr": ["lactate_threshold_hr"],
+        "lactate_threshold_hr_cycling": ["lactate_threshold_hr_cycling"],
+        "lactate_threshold_speed": ["lactate_threshold_speed"],
+        "vo2max_running": ["vo2max_running"],
+    ]
+
     /// The metric snapshot as it stood on `date`, assembled for the TSS engine.
     /// Pass `.distantFuture` to get the latest value of every metric.
-    func snapshot(asOf date: Date) -> PerformanceSnapshot {
+    ///
+    /// `resolving` narrows which estimates actually run; nil runs every one that is
+    /// switched on, which is what the TSS engine needs. `estimatedSeries` passes a
+    /// single key's dependencies instead — it evaluates this per date, and running the
+    /// other three estimates on each of them was half the cost of drawing the charts.
+    func snapshot(asOf date: Date, resolving: Set<String>? = nil) -> PerformanceSnapshot {
+        func wanted(_ key: String) -> Bool { resolving?.contains(key) ?? true }
         var snap = PerformanceSnapshot()
         snap.cyclingFTP = value("cycling_ftp", asOf: date).map { Int($0.rounded()) }
         snap.runningFTP = value("running_ftp", asOf: date).map { Int($0.rounded()) }
@@ -485,11 +683,37 @@ struct PerformanceHistory: Sendable {
         // pace-seconds the snapshot (and the TSS engine) consume.
         if let s = value("swim_css_speed", asOf: date), s > 0 { snap.cssPaceSeconds = 100.0 / s }
         snap.lactateThrHR = value("lactate_threshold_hr", asOf: date).map { Int($0.rounded()) }
+        snap.cyclingLactateThrHR = value("lactate_threshold_hr_cycling", asOf: date).map { Int($0.rounded()) }
         snap.maxHR = value("max_hr", asOf: date).map { Int($0.rounded()) }
         if let s = value("lactate_threshold_speed", asOf: date), s > 0 { snap.lactateThrPaceSeconds = 1000.0 / s }
         snap.vo2maxRunning = value("vo2max_running", asOf: date)
         snap.vo2maxCycling = value("vo2max_cycling", asOf: date)
         snap.weightKg = value("weight_kg", asOf: date)
+        // `.distantFuture` asks for the latest value, so every observation window has to
+        // hang off today — not off a window ending in the year 4000.
+        let anchor = min(date, .now)
+
+        if estimateVO2maxFromRides, wanted("vo2max_cycling"), !isManual("vo2max_cycling", asOf: date),
+           let hrMax = snap.maxHR, hrMax > 0,
+           let hrRest = restingHR(asOf: date), hrRest > 0,
+           let mass = snap.weightKg, mass > 0 {
+            // A ride peaking above the athlete's own maximum has a misreading sensor,
+            // and an HR that is wrong in either direction moves the reserve the whole
+            // reconstruction scales by. Dropped whole, as on the other two paths.
+            let efforts = evidence
+                .filter { $0.family == .bike && $0.peakHR <= Double(hrMax) }
+                .flatMap { o in
+                o.submaxProfile.map {
+                    VO2maxEstimate.Effort(date: o.date, seconds: $0.key,
+                                          watts: $0.value.watts, heartRate: $0.value.hr)
+                }
+            }
+            if let est = VO2maxEstimate.estimate(efforts: efforts, hrMax: Double(hrMax),
+                                                 hrRest: hrRest, massKg: mass, asOf: anchor) {
+                snap.vo2maxCycling = est.vo2max
+                snap.vo2maxCyclingIsEstimated = true
+            }
+        }
         // Opting in *replaces* the synced source's value: the reason to enable this is
         // that the watch's own number is absent or stale, so preferring it would defeat
         // the setting. A manual reading outranks the estimate, or the athlete's own
@@ -497,27 +721,194 @@ struct PerformanceHistory: Sendable {
         // estimate cannot be computed — a nil threshold silently drops TL scoring.
         // Both inputs resolve `asOf: date` like every other threshold, so a January
         // ride is scored against January's VO2max and mass.
-        if estimateFTPFromVO2max, !isManual("cycling_ftp", asOf: date),
+        if estimateFTPFromVO2max, wanted("cycling_ftp"), !isManual("cycling_ftp", asOf: date),
            let watts = FTPEstimate.fromVO2max(snap.vo2maxCycling, massKg: snap.weightKg) {
             snap.cyclingFTP = Int(watts.rounded())
             snap.cyclingFTPIsEstimated = true
         }
-        if estimateLTHRFromHRMax, !isManual("lactate_threshold_hr", asOf: date),
+        // Running LTHR specifically. Cycling LTHR runs 5-10 bpm lower in the same
+        // athlete, so one pooled value would read a ride as a run — and this is the
+        // value Garmin publishes and the HR zones are drawn against.
+        if estimateLTHRFromHRMax, wanted("lactate_threshold_hr"), !isManual("lactate_threshold_hr", asOf: date),
            let hrMax = snap.maxHR, hrMax > 0 {
-            // `.distantFuture` asks for the latest value, so the observation window
-            // has to hang off today — not off a date 180 days before the year 4000.
-            let anchor = min(date, .now)
-            let cutoff = anchor.addingTimeInterval(-Double(LTHREstimate.historyDays) * 86_400)
-            let windows = hrObservations
-                .filter { $0.date > cutoff && $0.date <= anchor && $0.peakHR <= Double(hrMax) }
-                .map(\.steadyHR20)
-            if let est = LTHREstimate.estimate(hrMax: Double(hrMax), steadyWindows: windows) {
+            let efforts = evidence
+                .filter { $0.family == .run && $0.peakHR <= Double(hrMax) }
+                .map { LTHREstimate.Effort(date: $0.date, steadyHR: $0.steadyHR20) }
+            if let est = LTHREstimate.estimate(efforts: efforts, hrMax: Double(hrMax),
+                                               gate: .heartRate, asOf: anchor) {
                 snap.lactateThrHR = Int(est.bpm.rounded())
                 snap.lactateThrHRIsEstimated = true
-                snap.lactateThrHRIsAnchored = est.isAnchored
+                snap.lactateThrHRConfidence = est.confidence
+            }
+        }
+        // Cycling LTHR, from the power-gated rides. The gate is on watts and not on heart
+        // rate because on a power sport the intensity is *measured*: one ride at 57 % of
+        // this athlete's test power but 9 bpm higher heart rate had set his threshold
+        // 11 bpm high under a heart-rate gate, having cleared every artifact filter.
+        //
+        // `.rough` is refused rather than published: with no qualifying ride the
+        // population fraction (0.85 × HRmax) buried both reference athletes' measured
+        // cycling values, and `thresholdHR(for:)` falling through to the athlete's own
+        // running LTHR is the better answer than a constant.
+        if estimateCyclingLTHRFromRides, wanted("lactate_threshold_hr_cycling"),
+           !isManual("lactate_threshold_hr_cycling", asOf: date),
+           let hrMax = snap.maxHR, hrMax > 0 {
+            let efforts = evidence.compactMap { o -> LTHREstimate.Effort? in
+                guard o.family == .bike, o.peakHR <= Double(hrMax),
+                      let best = o.submaxProfile[LTHREstimate.windowSeconds] else { return nil }
+                return LTHREstimate.Effort(date: o.date, steadyHR: best.hr, watts: best.watts)
+            }
+            if let est = LTHREstimate.estimate(efforts: efforts, hrMax: Double(hrMax),
+                                               gate: .power, asOf: anchor),
+               est.confidence != .rough {
+                snap.cyclingLactateThrHR = Int(est.bpm.rounded())
+                snap.cyclingLactateThrHRIsEstimated = true
+                snap.cyclingLactateThrHRConfidence = est.confidence
+            }
+        }
+        // One reconstruction, two thresholds: MAS is LT pace in one unit and running
+        // VO2max in another, so it is resolved once here and read by both opt-ins
+        // rather than aggregated twice over the same pool.
+        //
+        // Resting HR is a hard input, not a defaulted one: without it the reserve the
+        // whole reconstruction scales by does not exist.
+        let wantsPace = estimateLTPaceFromRuns && wanted("lactate_threshold_speed")
+            && !isManual("lactate_threshold_speed", asOf: date)
+        let wantsVO2 = estimateRunningVO2maxFromRuns && wanted("vo2max_running")
+            && !isManual("vo2max_running", asOf: date)
+        if wantsPace || wantsVO2, let hrMax = snap.maxHR, hrMax > 0,
+           let hrRest = restingHR(asOf: date), hrRest > 0 {
+            // Runs only, as `LTHREstimate` above. A triathlon or brick leg carries a
+            // `ZoneMetric.pace` stream like any run, but not the relation the
+            // reconstruction rests on: after hours of prior work heart rate no longer
+            // tracks the metabolic cost, so `MAS = v / %HRR` reads high. One race leg
+            // in a 90-day window moved this athlete's peak 12 s/km — and the pool
+            // inflation the fraction divides by is calibrated on runs alone.
+            let runs = evidence.compactMap { o -> (date: Date, speeds: [Double])? in
+                guard o.family == .run, o.date <= anchor, o.peakHR <= Double(hrMax)
+                else { return nil }
+                let speeds = LTPaceEstimate.aerobicSpeeds(
+                    profile: o.paceProfile, hrMax: Double(hrMax), hrRest: hrRest)
+                return speeds.isEmpty ? nil : (o.date, speeds)
+            }
+            snap.ltPaceFractionUsed = ltPaceFraction
+            if let est = LTPaceEstimate.estimate(runs: runs, asOf: anchor) {
+                if wantsPace, let fraction = ltPaceFraction,
+                   let speed = LTPaceEstimate.ltSpeed(mas: est.masMps, fractionOfMAS: fraction) {
+                    snap.lactateThrPaceSeconds = 1000.0 / speed
+                    snap.lactateThrPaceIsEstimated = true
+                    snap.lactateThrPaceConfidence = est.confidence
+                }
+                if wantsVO2, let vo2 = VO2maxEstimate.running(mas: est.masMps) {
+                    snap.vo2maxRunning = vo2
+                    snap.vo2maxRunningIsEstimated = true
+                    snap.vo2maxRunningConfidence = est.confidence
+                }
             }
         }
         return snap
+    }
+
+    /// The thresholds an opt-in can resolve from an estimate instead of a stored
+    /// reading. Nothing writes those estimates to the metric series, so their
+    /// progression only exists by re-resolution — a reader of the series asks for it
+    /// through `estimatedSeries`.
+    static let estimatedKeys = ["vo2max_cycling", "cycling_ftp", "lactate_threshold_hr",
+                                "lactate_threshold_hr_cycling", "lactate_threshold_speed",
+                                "vo2max_running"]
+
+    /// One estimated threshold's resolved progression: `snapshot(asOf:)` evaluated on
+    /// every date the value can move — the estimate's inputs, the metric's own readings
+    /// (a manual one outranks the estimate), and for LTHR both the day a sustained
+    /// effort was recorded and the day it ages out of the observation window. Only
+    /// change dates are kept, plus a final point at today so the series runs to the
+    /// value in force now. Empty when the athlete hasn't opted in — the stored series
+    /// stands then.
+    func estimatedSeries(_ key: String) -> [MetricPoint] {
+        var dates: Set<Date>
+        switch key {
+        case "vo2max_cycling":
+            guard estimateVO2maxFromRides else { return [] }
+            dates = readingDates(["max_hr", "resting_hr", "weight_kg", key])
+            for o in evidence where !o.submaxProfile.isEmpty { dates.insert(o.date) }
+        case "cycling_ftp":
+            guard estimateFTPFromVO2max else { return [] }
+            dates = readingDates(["vo2max_cycling", "weight_kg", key])
+        case "lactate_threshold_hr":
+            guard estimateLTHRFromHRMax else { return [] }
+            dates = readingDates(["max_hr", key])
+            for o in evidence where o.steadyHR20 > 0 {
+                dates.insert(o.date)
+                dates.insert(o.date.addingTimeInterval(Double(LTHREstimate.historyDays) * 86_400))
+            }
+        case "lactate_threshold_hr_cycling":
+            guard estimateCyclingLTHRFromRides else { return [] }
+            dates = readingDates(["max_hr", key])
+            for o in evidence where o.submaxProfile[LTHREstimate.windowSeconds] != nil {
+                dates.insert(o.date)
+                dates.insert(o.date.addingTimeInterval(Double(LTHREstimate.historyDays) * 86_400))
+            }
+        case "lactate_threshold_speed", "vo2max_running":
+            guard key == "vo2max_running" ? estimateRunningVO2maxFromRuns
+                                          : estimateLTPaceFromRuns else { return [] }
+            dates = readingDates(["max_hr", "resting_hr", key])
+            for o in evidence where !o.paceProfile.isEmpty {
+                dates.insert(o.date)
+                dates.insert(o.date.addingTimeInterval(Double(LTPaceEstimate.historyDays) * 86_400))
+            }
+        default:
+            return []
+        }
+        let now = Date()
+        var out: [MetricPoint] = []
+        for date in dates.filter({ $0 < now }).sorted() + [now] {
+            let snap = snapshot(asOf: date, resolving: Self.estimateDependencies[key])
+            // The series is stored in the metric's own unit, so LT pace goes back to
+            // the m/s the `*_speed` key holds.
+            // Only an estimate carries a confidence — VO2max and FTP resolve without
+            // one, a stored reading is a measurement.
+            let resolved: (value: Double, isEstimated: Bool, confidence: EstimateConfidence?)?
+            switch key {
+            case "vo2max_cycling":
+                resolved = snap.vo2maxCycling.map { ($0, snap.vo2maxCyclingIsEstimated, nil) }
+            case "cycling_ftp":
+                resolved = snap.cyclingFTP.map { (Double($0), snap.cyclingFTPIsEstimated, nil) }
+            case "lactate_threshold_hr":
+                resolved = snap.lactateThrHR.map {
+                    (Double($0), snap.lactateThrHRIsEstimated,
+                     snap.lactateThrHRIsEstimated ? snap.lactateThrHRConfidence : nil)
+                }
+            case "lactate_threshold_hr_cycling":
+                resolved = snap.cyclingLactateThrHR.map {
+                    (Double($0), snap.cyclingLactateThrHRIsEstimated,
+                     snap.cyclingLactateThrHRIsEstimated ? snap.cyclingLactateThrHRConfidence : nil)
+                }
+            case "vo2max_running":
+                resolved = snap.vo2maxRunning.map {
+                    ($0, snap.vo2maxRunningIsEstimated,
+                     snap.vo2maxRunningIsEstimated ? snap.vo2maxRunningConfidence : nil)
+                }
+            default:
+                resolved = snap.lactateThrPaceSeconds.map {
+                    (1000.0 / $0, snap.lactateThrPaceIsEstimated,
+                     snap.lactateThrPaceIsEstimated ? snap.lactateThrPaceConfidence : nil)
+                }
+            }
+            guard let resolved else { continue }
+            let point = MetricPoint(date: date, value: resolved.value,
+                                    isEstimated: resolved.isEstimated,
+                                    confidence: resolved.confidence)
+            if date < now, let last = out.last, last.value == point.value,
+               last.isEstimated == point.isEstimated,
+               last.isProvisional == point.isProvisional { continue }
+            out.append(point)
+        }
+        return out
+    }
+
+    /// Every date on which one of `keys` has a stored reading.
+    private func readingDates(_ keys: [String]) -> Set<Date> {
+        Set(keys.flatMap { byKey[$0]?.map(\.date) ?? [] })
     }
 }
 
@@ -600,8 +991,34 @@ final class TrainingDataStore {
     /// activities + scheduled + metrics in sequence) collapses into a single post.
     private var changePending = false
     private func markChanged() {
+        cachedEvidence = nil
+        invalidateResolvedValues()
+    }
+
+    /// Whether the stored training load and time in zone were scored against thresholds
+    /// the athlete has since changed.
+    ///
+    /// The threshold a card shows resolves on read and so is right immediately; every
+    /// activity's *score* was written at ingest against the thresholds in force then,
+    /// and only `rescoreAllActivities` rewrites it. Without a marker that gap is silent
+    /// — the value and the load it produced disagree with nothing on screen saying so.
+    /// In UserDefaults rather than the store: it describes the store's contents, so the
+    /// DB clear that resolves it must not take it along.
+    static let historyNeedsRescoreKey = "history_needs_rescore"
+    static var historyNeedsRescore: Bool {
+        UserDefaults.standard.bool(forKey: historyNeedsRescoreKey)
+    }
+
+    /// Re-resolve every estimated threshold, without a store write having happened.
+    ///
+    /// These values resolve on *read* from two inputs no row records: the calculation
+    /// opt-ins, and today's date (the observation window and the staleness a confidence
+    /// reports both hang off `.now`). Nothing posts
+    /// `trainingDataDidChange` for either, and every surface refreshes only on that —
+    /// so a flipped switch and a day passing were both invisible until the next sync
+    /// happened to write something.
+    func invalidateResolvedValues() {
         cachedLatestSnapshot = nil
-        cachedHRObservations = nil
         guard !changePending else { return }
         changePending = true
         DispatchQueue.main.async { [weak self] in
@@ -758,6 +1175,22 @@ final class TrainingDataStore {
         markChanged()
     }
 
+    /// Drop every stored reading of one metric key.
+    ///
+    /// Needed because a *setting* synced as a dated observation can never be
+    /// corrected in place: each sync stamps today, so a wrong value stays on the
+    /// dates it was written and no resync rewrites it. Returns how many rows went.
+    @discardableResult
+    func deleteMetricSeries(_ key: String) -> Int {
+        let rows = (try? context.fetch(FetchDescriptor<PerformanceMetricRecord>(
+            predicate: #Predicate { $0.metricKey == key }))) ?? []
+        guard !rows.isEmpty else { return 0 }
+        for r in rows { context.delete(r) }
+        try? context.save()
+        markChanged()
+        return rows.count
+    }
+
     /// One-time translation of rows written before the planned/actual/override
     /// layers existed: give every plan its own `plannedDate`/`plannedStartMinute`,
     /// move every completed row's `date`/`startMinute` to the activity's real start
@@ -811,8 +1244,17 @@ final class TrainingDataStore {
     func ingest(_ activities: [IngestedActivity]) {
         guard !activities.isEmpty else { return }
         let perf = Perf.begin("ingest", "\(activities.count)"); defer { Perf.end(perf) }
-        let history = performanceHistory()
+        // Blacklisted by the athlete → never give it a row (so it stays gone from every
+        // surface and never re-syncs). Dropped before scoring and folding.
         let ignored = IgnoredWorkouts.ids
+        let incoming = activities.filter { !ignored.contains($0.id) }
+        // The LTHR estimate reads its sustained efforts out of the stored rows, so a
+        // pass that rewrites those rows would score itself against the evidence it is
+        // replacing — and a full re-sync, which rewrites everything, against none at
+        // all. Reading the batch's evidence first and resolving the thresholds with it
+        // makes the pass self-consistent: no re-score afterwards to get the same answer.
+        let evidence = incoming.map(Self.evidence)
+        let history = performanceHistory(adding: evidence)
         // Plans keyed by their completion link: a folded plan refreshes its actuals
         // in place on re-sync; an open plan absorbs the linked activity when it
         // arrives. `externalRefs` is JSON-decoded, so it can't sit in a
@@ -824,11 +1266,8 @@ final class TrainingDataStore {
             guard let aid = plan.externalRefs[Self.completedRefKey] else { continue }
             if plan.isCompleted { foldedPlans[aid] = plan } else { linkedOpenPlans[aid] = plan }
         }
-        for a in activities {
-            // Blacklisted by the athlete → never give it a row (so it stays gone from
-            // every surface and never re-syncs). Checked before scoring/folding.
-            if ignored.contains(a.id) { continue }
-            let scored = Self.score(a, history: history)
+        for (a, hr) in zip(incoming, evidence) {
+            let scored = Self.score(a, history: history, hr: hr)
             let id = a.id
             let record: WorkoutRecord
             // 1) Already folded into a completed plan (its actuals live on the plan
@@ -870,6 +1309,8 @@ final class TrainingDataStore {
         let streamsData: Data, zoneHistogramData: Data
         let segmentsJSON: String
         let steadyHR20: Double, peakHR: Double
+        let paceHRProfileJSON: String
+        let submaxProfileJSON: String
 
         init(_ a: IngestedActivity, scored: ScoredActivity) {
             source = a.source; date = a.date
@@ -881,6 +1322,8 @@ final class TrainingDataStore {
             streamsData = a.streamsData; zoneHistogramData = scored.zoneHistogramData
             segmentsJSON = scored.segmentsJSON
             steadyHR20 = scored.steadyHR20; peakHR = scored.peakHR
+            paceHRProfileJSON = scored.paceHRProfileJSON
+            submaxProfileJSON = scored.submaxProfileJSON
         }
 
         init(_ r: WorkoutRecord) {
@@ -892,6 +1335,8 @@ final class TrainingDataStore {
             streamsData = r.streamsData; zoneHistogramData = r.zoneHistogramData
             segmentsJSON = r.segmentsJSON
             steadyHR20 = r.steadyHR20; peakHR = r.peakHR
+            paceHRProfileJSON = r.paceHRProfileJSON
+            submaxProfileJSON = r.submaxProfileJSON
         }
     }
 
@@ -919,8 +1364,10 @@ final class TrainingDataStore {
         record.streamsData = c.streamsData
         record.zoneHistogramData = c.zoneHistogramData
         record.segmentsJSON = c.segmentsJSON
+        record.submaxProfileJSON = c.submaxProfileJSON
         record.steadyHR20 = c.steadyHR20
         record.peakHR = c.peakHR
+        record.paceHRProfileJSON = c.paceHRProfileJSON
     }
 
     /// Re-materialize the athlete's stored edits (`overridesJSON`) onto a freshly
@@ -959,22 +1406,51 @@ final class TrainingDataStore {
         var segmentsJSON: String = ""
         var steadyHR20: Double = 0
         var peakHR: Double = 0
+        var paceHRProfileJSON: String = ""
+        var submaxProfileJSON: String = ""
         var zoneHistogramData: Data = Data()
+    }
+
+    /// The threshold evidence one incoming activity carries (`LTHREstimate`,
+    /// `LTPaceEstimate`), read here rather than in any source: the HR and
+    /// grade-adjusted pace streams the sources already shape for zone bucketing are
+    /// the same input. One unit per scored effort — legs are separate efforts, and
+    /// concatenating them would let a 20-minute window straddle a transition, or pair
+    /// a bike heart rate with a run pace.
+    private static func evidence(_ a: IngestedActivity) -> PerformanceHistory.ActivityEvidence {
+        let units = a.zoneSamples.isEmpty ? Array(a.legZoneSamples.values) : [a.zoneSamples]
+        let hrStreams = units.compactMap { $0[.heartRate] }
+        // Only a unit carrying BOTH streams can be paired; `ZoneMetric.pace` exists
+        // for runs alone, so this is empty for every other sport.
+        var profile: [Int: Double] = [:]
+        for unit in units {
+            guard let pace = unit[.pace], let hr = unit[.heartRate] else { continue }
+            for (bpm, speed) in LTPaceEstimate.profile(gradeAdjustedSpeed: pace, heartRate: hr)
+            where speed > profile[bpm] ?? 0 {
+                profile[bpm] = speed
+            }
+        }
+        var submax: [Int: (watts: Double, hr: Double)] = [:]
+        for unit in units {
+            guard let power = unit[.power], let hr = unit[.heartRate] else { continue }
+            for (seconds, pair) in VO2maxEstimate.profile(power: power, heartRate: hr)
+            where pair.watts > submax[seconds]?.watts ?? 0 {
+                submax[seconds] = pair
+            }
+        }
+        return .init(date: a.date,
+                     steadyHR20: hrStreams.compactMap(LTHREstimate.steadyWindow).max() ?? 0,
+                     peakHR: hrStreams.flatMap { $0.map(\.value) }.max() ?? 0,
+                     paceProfile: profile, submaxProfile: submax,
+                     family: SportFamily(sportKey: a.sport))
     }
 
     /// Score one incoming activity against the thresholds current on its date.
     /// A multisport activity is scored per leg and summed — its parent details
     /// carry no per-discipline data, so only the legs are scorable.
-    private static func score(_ a: IngestedActivity, history: PerformanceHistory) -> ScoredActivity {
+    private static func score(_ a: IngestedActivity, history: PerformanceHistory,
+                              hr: PerformanceHistory.ActivityEvidence) -> ScoredActivity {
         let snapshot = history.snapshot(asOf: a.date)
-        // The HR stream the sources already shape for zone bucketing also carries the
-        // LTHR evidence, so it is read here rather than in any source.
-        // One window per scored unit: legs are separate efforts, and concatenating
-        // them would let a 20-minute window straddle a transition.
-        let hrStreams = a.zoneSamples[.heartRate].map { [$0] }
-            ?? a.legZoneSamples.values.compactMap { $0[.heartRate] }
-        let steady = hrStreams.compactMap(LTHREstimate.steadyWindow).max() ?? 0
-        let peak = hrStreams.flatMap { $0.map(\.value) }.max() ?? 0
         if !a.segmentsJSON.isEmpty {
             var segments = WorkoutSegments.decode(a.segmentsJSON)
             for i in segments.indices {
@@ -985,17 +1461,23 @@ final class TrainingDataStore {
                                                            zoneSamples: a.legZoneSamples)
             return ScoredActivity(tss: tss, distanceKm: km, detailsJSON: a.detailsJSON,
                                   basis: basis, segmentsJSON: WorkoutSegments.encode(segments),
-                                  steadyHR20: steady, peakHR: peak)
+                                  steadyHR20: hr.steadyHR20, peakHR: hr.peakHR,
+                                  paceHRProfileJSON: LTPaceEstimate.encode(hr.paceProfile),
+                                  submaxProfileJSON: VO2maxEstimate.encode(hr.submaxProfile))
         }
         guard var details = jsonObject(a.detailsJSON) else {
             return ScoredActivity(tss: nil, distanceKm: a.distanceKm, detailsJSON: a.detailsJSON,
-                                  basis: nil, steadyHR20: steady, peakHR: peak)
+                                  basis: nil, steadyHR20: hr.steadyHR20, peakHR: hr.peakHR,
+                                  paceHRProfileJSON: LTPaceEstimate.encode(hr.paceProfile),
+                                  submaxProfileJSON: VO2maxEstimate.encode(hr.submaxProfile))
         }
         let (km, tss, basis) = TSSScoring.score(&details, snapshot: snapshot,
                                                 zoneSamples: a.zoneSamples)
         return ScoredActivity(tss: tss, distanceKm: km,
                               detailsJSON: jsonString(details) ?? a.detailsJSON, basis: basis,
-                              steadyHR20: steady, peakHR: peak,
+                              steadyHR20: hr.steadyHR20, peakHR: hr.peakHR,
+                              paceHRProfileJSON: LTPaceEstimate.encode(hr.paceProfile),
+                              submaxProfileJSON: VO2maxEstimate.encode(hr.submaxProfile),
                               zoneHistogramData: ZoneHistogram.encode(a.zoneSamples))
     }
 
@@ -1676,7 +2158,9 @@ final class TrainingDataStore {
     }
 
     /// The full performance-metric history as a point-in-time–queryable resolver.
-    func performanceHistory() -> PerformanceHistory {
+    /// `adding` contributes HR evidence the store doesn't hold yet — the activities of
+    /// an ingest pass in flight (see `ingest`); it never enters the cache.
+    func performanceHistory(adding incoming: [PerformanceHistory.ActivityEvidence] = []) -> PerformanceHistory {
         let records = (try? context.fetch(FetchDescriptor<PerformanceMetricRecord>())) ?? []
         var byKey: [String: [PerformanceHistory.Entry]] = [:]
         for r in records {
@@ -1685,23 +2169,44 @@ final class TrainingDataStore {
             )
         }
         let estimateLTHR = UserDefaults.standard.bool(forKey: AppSettings.estimateLTHRFromHRMaxKey)
-        // Only fetched when the LTHR estimate is switched on, and cached because this
-        // runs per list row: `WorkoutRecord` has no partial fault here, so each fetch
-        // otherwise materializes every stored stream blob.
-        var observations: [PerformanceHistory.HRObservation] = []
-        if estimateLTHR {
-            if let cached = cachedHRObservations { observations = cached } else {
+        let estimateLTPace = UserDefaults.standard.bool(forKey: AppSettings.estimateLTPaceFromRunsKey)
+        let estimateRunVO2 = UserDefaults.standard.bool(forKey: AppSettings.estimateRunningVO2maxFromRunsKey)
+        let estimateBikeLTHR = UserDefaults.standard.bool(forKey: AppSettings.estimateCyclingLTHRFromRidesKey)
+        let estimateFTP = UserDefaults.standard.bool(forKey: AppSettings.estimateFTPFromVO2maxKey)
+        let estimateVO2max = UserDefaults.standard.bool(forKey: AppSettings.estimateVO2maxFromRidesKey)
+        // Only fetched when an estimate that reads it is switched on, and cached
+        // because this runs per list row: `WorkoutRecord` has no partial fault here,
+        // so each fetch otherwise materializes every stored stream blob.
+        var observations: [PerformanceHistory.ActivityEvidence] = []
+        if estimateLTHR || estimateLTPace || estimateVO2max || estimateRunVO2 || estimateBikeLTHR {
+            if let cached = cachedEvidence { observations = cached } else {
                 let rows = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
-                    predicate: #Predicate { $0.isCompleted && $0.steadyHR20 > 0 }))) ?? []
-                observations = rows.map { .init(date: $0.date, steadyHR20: $0.steadyHR20, peakHR: $0.peakHR) }
-                cachedHRObservations = observations
+                    predicate: #Predicate {
+                        $0.isCompleted && ($0.steadyHR20 > 0 || $0.paceHRProfileJSON != ""
+                                           || $0.submaxProfileJSON != "")
+                    }))) ?? []
+                observations = rows.map {
+                    .init(date: $0.date, steadyHR20: $0.steadyHR20, peakHR: $0.peakHR,
+                          paceProfile: LTPaceEstimate.decode($0.paceHRProfileJSON),
+                          submaxProfile: VO2maxEstimate.decode($0.submaxProfileJSON),
+                          family: SportFamily(sportKey: $0.sport))
+                }
+                cachedEvidence = observations
+            }
+            observations += incoming.filter {
+                $0.steadyHR20 > 0 || !$0.paceProfile.isEmpty || !$0.submaxProfile.isEmpty
             }
         }
         return PerformanceHistory(
             byKey: byKey,
-            estimateFTPFromVO2max: UserDefaults.standard.bool(forKey: AppSettings.estimateFTPFromVO2maxKey),
+            estimateFTPFromVO2max: estimateFTP,
+            estimateVO2maxFromRides: estimateVO2max,
             estimateLTHRFromHRMax: estimateLTHR,
-            hrObservations: observations)
+            estimateLTPaceFromRuns: estimateLTPace,
+            estimateRunningVO2maxFromRuns: estimateRunVO2,
+            estimateCyclingLTHRFromRides: estimateBikeLTHR,
+            ltPaceFractionOverride: AppSettings.storedLTPaceFraction,
+            evidence: observations)
     }
 
     /// Re-bucketing input for one multisport row: each leg's stored histogram, keyed
@@ -1747,6 +2252,7 @@ final class TrainingDataStore {
             }
         }
         try? context.save()
+        UserDefaults.standard.set(false, forKey: Self.historyNeedsRescoreKey)
         markChanged()
         return rows.count
     }
@@ -1757,20 +2263,51 @@ final class TrainingDataStore {
     /// The estimate opt-ins change how a threshold resolves without touching a row,
     /// so the cache carries the flags it was built under rather than relying on
     /// whoever flips them to invalidate it.
-    private var cachedLatestSnapshot: (flags: [Bool], snapshot: PerformanceSnapshot)?
-    private var cachedHRObservations: [PerformanceHistory.HRObservation]?
+    /// What the cached snapshot was resolved under.
+    private struct Key: Equatable { let flags: [Bool]; let fraction: Double? }
+    private var cachedLatestSnapshot: (key: Key, snapshot: PerformanceSnapshot)?
+    private var cachedEvidence: [PerformanceHistory.ActivityEvidence]?
     func latestSnapshot() -> PerformanceSnapshot {
-        let flags = [UserDefaults.standard.bool(forKey: AppSettings.estimateFTPFromVO2maxKey),
-                     UserDefaults.standard.bool(forKey: AppSettings.estimateLTHRFromHRMaxKey)]
-        if let cached = cachedLatestSnapshot, cached.flags == flags { return cached.snapshot }
+        // The fraction moves the LT pace without moving a switch, so it is part of the
+        // key too, or the slider stays invisible until something else invalidates.
+        let key = Key(flags: [UserDefaults.standard.bool(forKey: AppSettings.estimateFTPFromVO2maxKey),
+                              UserDefaults.standard.bool(forKey: AppSettings.estimateVO2maxFromRidesKey),
+                              UserDefaults.standard.bool(forKey: AppSettings.estimateLTHRFromHRMaxKey),
+                              UserDefaults.standard.bool(forKey: AppSettings.estimateLTPaceFromRunsKey),
+                              UserDefaults.standard.bool(forKey: AppSettings.estimateRunningVO2maxFromRunsKey),
+                              UserDefaults.standard.bool(forKey: AppSettings.estimateCyclingLTHRFromRidesKey)],
+                      fraction: AppSettings.storedLTPaceFraction)
+        if let cached = cachedLatestSnapshot, cached.key == key { return cached.snapshot }
         let snap = performanceHistory().snapshot(asOf: .distantFuture)
-        cachedLatestSnapshot = (flags, snap)
+        cachedLatestSnapshot = (key, snap)
         return snap
     }
 
     /// Ascending day-by-day history for one metric key — the progression the
-    /// Statistics charts plot.
+    /// Statistics charts plot. A threshold the athlete estimates has no stored series
+    /// to read: it resolves per date, so it is re-derived (and flagged) instead.
     func metricHistory(_ key: String) -> [MetricPoint] {
+        if PerformanceHistory.estimatedKeys.contains(key) {
+            let estimated = performanceHistory().estimatedSeries(key)
+            if !estimated.isEmpty { return estimated }
+        }
+        return storedHistory(key)
+    }
+
+    /// `metricHistory` with the re-resolution off the main actor. The store fetch has
+    /// to stay here — the models are `@MainActor` — but `PerformanceHistory` is a
+    /// `Sendable` value, and for an estimated key the per-date re-resolution is all of
+    /// the cost: a hundred-odd dates over every stored run.
+    func metricHistory(_ key: String) async -> [MetricPoint] {
+        if PerformanceHistory.estimatedKeys.contains(key) {
+            let history = performanceHistory()
+            let estimated = await Task.detached { history.estimatedSeries(key) }.value
+            if !estimated.isEmpty { return estimated }
+        }
+        return storedHistory(key)
+    }
+
+    private func storedHistory(_ key: String) -> [MetricPoint] {
         let records = (try? context.fetch(
             FetchDescriptor<PerformanceMetricRecord>(
                 predicate: #Predicate { $0.metricKey == key },
@@ -1811,6 +2348,25 @@ final class TrainingDataStore {
     }
 
     /// Ascending manual-only points for a key — the athlete's editable entries.
+    /// The date a one-time seed of an athlete constant belongs on: the earliest
+    /// activity on record, so every stored workout is covered by it. `nil` when the
+    /// key already has a reading — the seed is a cold start, never a correction.
+    ///
+    /// Dating it at "now" instead would leave every past date without the value, and
+    /// `snapshot(asOf:)` resolves each threshold against the reading in force on the
+    /// activity's own date — a fresh install would draw no history at all.
+    func seedDate(for key: String) -> Date? {
+        var readings = FetchDescriptor<PerformanceMetricRecord>(
+            predicate: #Predicate { $0.metricKey == key })
+        readings.fetchLimit = 1
+        guard ((try? context.fetch(readings))?.isEmpty ?? true) else { return nil }
+        var first = FetchDescriptor<WorkoutRecord>(
+            predicate: #Predicate { $0.isCompleted },
+            sortBy: [SortDescriptor(\.date, order: .forward)])
+        first.fetchLimit = 1
+        return (try? context.fetch(first))?.first?.date ?? Date()
+    }
+
     func manualMetricEntries(key: String) -> [MetricPoint] {
         let records = (try? context.fetch(
             FetchDescriptor<PerformanceMetricRecord>(

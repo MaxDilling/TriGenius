@@ -190,9 +190,23 @@ final class AppSettings: ObservableObject {
     /// derived stand-in, so the athlete opts in. Read by `TrainingDataStore`
     /// (outside SwiftUI) via `estimateFTPFromVO2maxKey`.
     @Published var estimateFTPFromVO2max: Bool {
-        didSet { UserDefaults.standard.set(estimateFTPFromVO2max, forKey: Self.estimateFTPFromVO2maxKey) }
+        didSet {
+            UserDefaults.standard.set(estimateFTPFromVO2max, forKey: Self.estimateFTPFromVO2maxKey)
+            AthleteSettingsSync.didChange()
+        }
     }
     static let estimateFTPFromVO2maxKey = "estimate_ftp_from_vo2max"
+
+    /// Reconstruct cycling VO₂max from submaximal rides (`VO2maxEstimate`). Separate
+    /// from the FTP switch because the two are independently useful: a watch may report
+    /// a VO₂max worth keeping while its FTP is a placeholder, or the reverse.
+    @Published var estimateVO2maxFromRides: Bool {
+        didSet {
+            UserDefaults.standard.set(estimateVO2maxFromRides, forKey: Self.estimateVO2maxFromRidesKey)
+            AthleteSettingsSync.didChange()
+        }
+    }
+    static let estimateVO2maxFromRidesKey = "estimate_vo2max_from_rides"
 
     /// Derive LTHR from the athlete's max HR plus sustained efforts in their history
     /// (`LTHREstimate`), for watches that never detect one. Off by default; when on it
@@ -200,9 +214,72 @@ final class AppSettings: ObservableObject {
     /// absent or a hand-entered placeholder. Read by `TrainingDataStore` via
     /// `estimateLTHRFromHRMaxKey`.
     @Published var estimateLTHRFromHRMax: Bool {
-        didSet { UserDefaults.standard.set(estimateLTHRFromHRMax, forKey: Self.estimateLTHRFromHRMaxKey) }
+        didSet {
+            UserDefaults.standard.set(estimateLTHRFromHRMax, forKey: Self.estimateLTHRFromHRMaxKey)
+            AthleteSettingsSync.didChange()
+        }
     }
     static let estimateLTHRFromHRMaxKey = "estimate_lthr_from_hrmax"
+
+    /// Reconstruct the **cycling** threshold HR from power-gated rides (`LTHREstimate`
+    /// with `Gate.power`). A separate value, not a variant of the running one: cycling
+    /// LTHR runs 5–10 bpm lower in the same athlete, and no watch publishes it — Garmin's
+    /// is Firstbeat's, detected while running. Read by `TrainingDataStore` via
+    /// `estimateCyclingLTHRFromRidesKey`.
+    @Published var estimateCyclingLTHRFromRides: Bool {
+        didSet {
+            UserDefaults.standard.set(estimateCyclingLTHRFromRides,
+                                      forKey: Self.estimateCyclingLTHRFromRidesKey)
+            AthleteSettingsSync.didChange()
+        }
+    }
+    static let estimateCyclingLTHRFromRidesKey = "estimate_cycling_lthr_from_rides"
+
+    /// Reconstruct the running threshold pace from ordinary runs (`LTPaceEstimate`),
+    /// for watches that report none or a broken one. Off by default; when on it
+    /// *replaces* the source's value. Needs max HR and resting HR. Read by
+    /// `TrainingDataStore` via `estimateLTPaceFromRunsKey`.
+    @Published var estimateLTPaceFromRuns: Bool {
+        didSet {
+            UserDefaults.standard.set(estimateLTPaceFromRuns, forKey: Self.estimateLTPaceFromRunsKey)
+            AthleteSettingsSync.didChange()
+        }
+    }
+    static let estimateLTPaceFromRunsKey = "estimate_lt_pace_from_runs"
+
+    /// Reconstruct running VO2max from ordinary runs. The same MAS the threshold pace
+    /// rests on, read through the ACSM running economy equation — one reconstruction in
+    /// two units, so the two can never describe different athletes. Separate from the
+    /// pace opt-in because a watch that reports a usable VO2max may still report no
+    /// threshold pace, and vice versa.
+    @Published var estimateRunningVO2maxFromRuns: Bool {
+        didSet {
+            UserDefaults.standard.set(estimateRunningVO2maxFromRuns,
+                                      forKey: Self.estimateRunningVO2maxFromRunsKey)
+            AthleteSettingsSync.didChange()
+        }
+    }
+    static let estimateRunningVO2maxFromRunsKey = "estimate_running_vo2max_from_runs"
+
+    /// The athlete's own LT speed as a fraction of reconstructed MAS. Unlike the
+    /// cycling constant this is a property of the athlete — the two reference athletes
+    /// differ by 8.4 %, worth 21 s/km — so it is an input rather than a constant.
+    /// 0 means derive it from the resolved LTHR, which is what an athlete who has never
+    /// run a threshold test should stay on.
+    @Published var ltPaceFractionOfMAS: Double {
+        didSet {
+            UserDefaults.standard.set(ltPaceFractionOfMAS, forKey: Self.ltPaceFractionOfMASKey)
+            AthleteSettingsSync.didChange()
+        }
+    }
+    static let ltPaceFractionOfMASKey = "lt_pace_fraction_of_mas"
+
+    /// Read straight from defaults for `TrainingDataStore`, which resolves thresholds
+    /// off the main actor's settings object.
+    static var storedLTPaceFraction: Double? {
+        let v = UserDefaults.standard.double(forKey: ltPaceFractionOfMASKey)
+        return v > 0 ? v : nil
+    }
 
     /// A curated shortlist of tool-capable OpenRouter model ids. OpenRouter
     /// exposes hundreds; these are the ones worth defaulting to for the coach.
@@ -227,7 +304,12 @@ final class AppSettings: ObservableObject {
         openRouterModel = Self.storedOpenRouterModel()
         openRouterWebSearch = UserDefaults.standard.bool(forKey: "openrouter_web_search")
         estimateFTPFromVO2max = UserDefaults.standard.bool(forKey: Self.estimateFTPFromVO2maxKey)
+        estimateVO2maxFromRides = UserDefaults.standard.bool(forKey: Self.estimateVO2maxFromRidesKey)
         estimateLTHRFromHRMax = UserDefaults.standard.bool(forKey: Self.estimateLTHRFromHRMaxKey)
+        estimateCyclingLTHRFromRides = UserDefaults.standard.bool(forKey: Self.estimateCyclingLTHRFromRidesKey)
+        estimateLTPaceFromRuns = UserDefaults.standard.bool(forKey: Self.estimateLTPaceFromRunsKey)
+        estimateRunningVO2maxFromRuns = UserDefaults.standard.bool(forKey: Self.estimateRunningVO2maxFromRunsKey)
+        ltPaceFractionOfMAS = UserDefaults.standard.double(forKey: Self.ltPaceFractionOfMASKey)
         readSources = Self.loadReadSources()
         metricsSource = Self.loadMetricsSource()
         writeTarget = Self.loadWriteTarget()
@@ -238,6 +320,19 @@ final class AppSettings: ObservableObject {
         proactiveNotifications = UserDefaults.standard.bool(forKey: Self.proactiveNotificationsKey)
         dashboardLayout = Self.loadDashboardLayout()
         crossTrainingCreditFactor = Self.loadCreditFactor()
+    }
+
+    /// Re-read the settings another device changed (`AthleteSettingsSync`). The
+    /// setters below write straight back to the same defaults, which is idempotent —
+    /// the values are already the ones being read.
+    func reloadAthleteSettings() {
+        estimateFTPFromVO2max = UserDefaults.standard.bool(forKey: Self.estimateFTPFromVO2maxKey)
+        estimateVO2maxFromRides = UserDefaults.standard.bool(forKey: Self.estimateVO2maxFromRidesKey)
+        estimateLTHRFromHRMax = UserDefaults.standard.bool(forKey: Self.estimateLTHRFromHRMaxKey)
+        estimateCyclingLTHRFromRides = UserDefaults.standard.bool(forKey: Self.estimateCyclingLTHRFromRidesKey)
+        estimateLTPaceFromRuns = UserDefaults.standard.bool(forKey: Self.estimateLTPaceFromRunsKey)
+        estimateRunningVO2maxFromRuns = UserDefaults.standard.bool(forKey: Self.estimateRunningVO2maxFromRunsKey)
+        ltPaceFractionOfMAS = UserDefaults.standard.double(forKey: Self.ltPaceFractionOfMASKey)
     }
 
     /// Whether a dashboard section is currently shown.
@@ -371,10 +466,10 @@ struct SettingsView: View {
     @State private var showClearConfirm = false
     @State private var showClearDataConfirm = false
     @State private var showCloudConsent = false
-    @State private var rescoreProgress: (done: Int, total: Int)?
     #if DEBUG
     @State private var showClearDBConfirm = false
     @State private var showDeletePerfConfirm = false
+    @State private var showDeleteMaxHRConfirm = false
     @State private var plannedTSSRecomputeCount: Int?
     #endif
 
@@ -519,31 +614,26 @@ struct SettingsView: View {
                 profileRow("CSS", value: performance.cssPaceFormatted.map { "\($0)/100m" })
                 profileRow("Lactate threshold HR", value: performance.lactateThrHR.map {
                     performance.lactateThrHRIsEstimated
-                        ? "~\($0) bpm (\(performance.lactateThrHRIsAnchored ? "estimated" : "rough estimate"))"
+                        ? "~\($0) bpm (\(performance.lactateThrHRConfidence.rawValue))"
                         : "\($0) bpm"
                 })
-                profileRow("Lactate threshold pace", value: performance.lactateThrPaceFormatted.map { "\($0)/km" })
+                profileRow("Lactate threshold pace", value: performance.lactateThrPaceFormatted.map {
+                    performance.lactateThrPaceIsEstimated ? "~\($0)/km (estimated)" : "\($0)/km"
+                })
                 profileRow("VO₂max (run)", value: performance.vo2maxRunning.map { String(format: "%.1f", $0) })
                 profileRow("VO₂max (cycling)", value: performance.vo2maxCycling.map { String(format: "%.1f", $0) })
                 profileRow("Max HR", value: performance.maxHR.map { "\($0) bpm" })
                 profileRow("Weight", value: performance.weightKg.map { String(format: "%.1f kg", $0) })
-                Toggle("Estimate FTP from VO₂max", isOn: $settings.estimateFTPFromVO2max)
-                Toggle("Estimate LTHR from max HR", isOn: $settings.estimateLTHRFromHRMax)
-                if let p = rescoreProgress {
-                    ProgressView(value: Double(p.done), total: Double(max(p.total, 1))) {
-                        Text("Recomputing \(p.done) of \(p.total)…")
-                    }
-                } else {
-                    Button {
-                        Task { await recomputeHistory() }
-                    } label: {
-                        Label("Recompute history", systemImage: "arrow.triangle.2.circlepath")
-                    }
+                NavigationLink {
+                    AutomaticCalculationView(settings: settings)
+                } label: {
+                    Label("Automatic calculation", systemImage: "wand.and.sparkles")
                 }
+                RecomputeHistoryButton()
             } header: {
                 Text("Performance")
             } footer: {
-                Text("Synced automatically from \(settings.metricsSource.displayName). History is kept in the local database.\n\nWatches that don't measure FTP or LTHR (fēnix 6 and older) still report the inputs to estimate them. Each estimate **replaces** the synced value while switched on — enable it only when that value is missing, stale or a placeholder. A value you entered by hand is never replaced. Estimated values are marked \"~\".\n\nFTP needs cycling VO₂max and weight; Apple Health reports VO₂max for running only. LTHR needs your max HR to be set correctly — everything derived from it shifts with it — and reads sustained efforts from your last \(LTHREstimate.historyDays) days. Without a hard 20-minute effort in that window it falls back to a rough fraction of max HR.\n\nA change applies to newly synced activities right away. **Recompute history** rewrites training load and time in zone for everything already stored — worth doing after switching an estimate on or off, and safe to run at any time.")
+                Text("Synced automatically from \(settings.metricsSource.displayName). History is kept in the local database. **Automatic calculation** works out the values your watch does not report, and says what each one rests on.\n\n**Recompute history** rewrites training load and time in zone for everything already stored — worth doing after any threshold change, and safe to run at any time.")
             }
 
             // Privacy & Data — user-facing controls Apple review expects: the
@@ -675,6 +765,23 @@ struct SettingsView: View {
                     Button("Cancel", role: .cancel) {}
                 } message: {
                     Text("Removes the stored performance history (FTP, VO₂max, thresholds, zones, weight). Daily wellness (sleep, resting HR, HRV) and your activities are kept; values re-sync from Garmin on the next sync or backfill.")
+                }
+                Button(role: .destructive) {
+                    showDeleteMaxHRConfirm = true
+                } label: {
+                    Label("Delete max HR history", systemImage: "heart.slash")
+                }
+                .confirmationDialog(
+                    "Delete max HR history?",
+                    isPresented: $showDeleteMaxHRConfirm,
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete", role: .destructive) {
+                        TrainingDataStore.shared.deleteMetricSeries("max_hr")
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Removes every stored max-HR reading. Garmin sends max HR as a current setting with no date of its own, so a wrong value stays on the days it was synced and no resync rewrites it — clearing lets the next sync, or your own entry, stand alone. LTHR and threshold pace both depend on it.")
                 }
             } header: {
                 Text("Developer")
@@ -844,18 +951,6 @@ struct SettingsView: View {
     }
 
     // MARK: - Helpers
-
-    /// A threshold opt-in moves every past date's thresholds, but rewriting the whole
-    /// history is the athlete's call: it takes a while and it restates numbers they may
-    /// have been reading. Activities stored before zone histograms existed keep the
-    /// time in zone they were ingested with until the next re-sync.
-    private func recomputeHistory() async {
-        rescoreProgress = (0, 0)
-        await TrainingDataStore.shared.rescoreAllActivities { done, total in
-            rescoreProgress = (done, total)
-        }
-        rescoreProgress = nil
-    }
 
     private func profileRow(_ label: String, value: String?) -> some View {
         HStack {
@@ -1710,14 +1805,13 @@ struct ReminderTestView: View {
     }
 }
 
-// MARK: - Garmin Backfill Section
+// MARK: - Re-sync Section
 
-/// Pulls a deeper slice of Garmin history into the local database so the PMC
-/// engine's CTL (Fitness, 42-day) has a proper warm-up window. Garmin only —
-/// Apple Health already backfills generously on its first sync.
 /// Per-source "Re-sync" row: forgets the source's watermark and re-pulls its
 /// history, recomputing each activity in place. One instance per enabled read
 /// source (Garmin / Apple Health), so the action reads as belonging to that source.
+/// Garmin re-pulls `DataSyncCoordinator.deepHistoryDays`; Apple Health re-reads
+/// every workout it can see.
 struct ReadSourceSyncSection: View {
     let source: DataSource
 

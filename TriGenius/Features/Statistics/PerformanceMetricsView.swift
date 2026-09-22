@@ -38,6 +38,10 @@ struct PerformanceMetric: Identifiable {
     /// CSS, 1000 for LT pace); nil for plain numeric markers. Lets the coach's
     /// metric tools express deltas of a speed-stored series in pace seconds.
     var paceDistanceM: Double? = nil
+    /// What a derived value for this marker was derived *from*, shown wherever a point
+    /// is flagged estimated — the "~" says a number isn't measured, not where it came
+    /// from. Nil for markers that only ever hold readings.
+    var estimateNote: String? = nil
 
     var id: String { key }
 
@@ -50,13 +54,19 @@ struct PerformanceMetric: Identifiable {
         PerformanceMetric(key: "vo2max_cycling", title: "VO₂max (Bike)", group: .performance, accent: .orange,
                           unit: "ml/kg/min", storageUnit: "ml_kg_min", format: intFormat, parse: doubleParse, higherIsBetter: true),
         PerformanceMetric(key: "cycling_ftp", title: "FTP (Bike)", group: .performance, accent: .blue,
-                          unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true),
+                          unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          estimateNote: "Estimated from cycling VO₂max and weight."),
         PerformanceMetric(key: "running_ftp", title: "FTP (Run)", group: .performance, accent: .indigo,
                           unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true),
         PerformanceMetric(key: "lactate_threshold_hr", title: "LT Heart Rate", group: .performance, accent: .pink,
-                          unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true),
+                          unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          estimateNote: "Estimated from max HR and recent sustained runs."),
+        PerformanceMetric(key: "lactate_threshold_hr_cycling", title: "LT Heart Rate (Bike)", group: .performance, accent: .pink,
+                          unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          estimateNote: "Estimated from the heart rate held in rides near your best 20-minute power."),
         PerformanceMetric(key: "lactate_threshold_speed", title: "LT Pace", group: .performance, accent: .teal,
-                          unit: "/km", storageUnit: "m_per_s", format: paceFromSpeed(1000), parse: speedFromPace(1000), higherIsBetter: true, paceDistanceM: 1000),
+                          unit: "/km", storageUnit: "m_per_s", format: paceFromSpeed(1000), parse: speedFromPace(1000), higherIsBetter: true, paceDistanceM: 1000,
+                          estimateNote: "Reconstructed from heart rate and pace on recent runs."),
         PerformanceMetric(key: "swim_css_speed", title: "CSS (Swim)", group: .performance, accent: .cyan,
                           unit: "/100m", storageUnit: "m_per_s", format: paceFromSpeed(100), parse: speedFromPace(100), higherIsBetter: true, paceDistanceM: 100),
         PerformanceMetric(key: "max_hr", title: "Max Heart Rate", group: .performance, accent: .purple,
@@ -77,6 +87,12 @@ struct PerformanceMetric: Identifiable {
     /// The markers the athlete can hand-enter (physiological capacity + weight);
     /// daily wellness signals are provider-driven and excluded.
     static let editable: [PerformanceMetric] = all.filter { $0.group == .performance }
+
+    /// One point as the athlete reads it: an estimate is prefixed "~" so a derived
+    /// number is never mistaken for a measured one.
+    func display(_ point: MetricPoint) -> String {
+        (point.isEstimated ? "~" : "") + format(point.value)
+    }
 
     /// Catalog lookup by stored key — validates a chat card token's `key`.
     static func metric(for key: String) -> PerformanceMetric? {
@@ -151,11 +167,11 @@ struct PerformanceMetricsSection: View {
                 }
             }
         }
-        .task { load() }
+        .task { await load() }
         // A sync or manual entry appends to the metric time series; reload so the
         // cards reflect new values without leaving and re-entering the screen.
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
-            load()
+            Task { await load() }
         }
         .sheet(isPresented: $showAdd) { ManualMetricEntryView() }
     }
@@ -168,11 +184,11 @@ struct PerformanceMetricsSection: View {
         }
     }
 
-    private func load() {
+    private func load() async {
         let store = TrainingDataStore.shared
         var result: [String: [MetricPoint]] = [:]
         for metric in PerformanceMetric.all {
-            let points = store.metricHistory(metric.key)
+            let points = await store.metricHistory(metric.key)
             if !points.isEmpty { result[metric.key] = points }
         }
         histories = result
@@ -262,7 +278,7 @@ struct MetricCard: View {
                 }
 
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text((scrubbed ?? points.last).map { metric.format($0.value) } ?? "—")
+                    Text((scrubbed ?? points.last).map { metric.display($0) } ?? "—")
                         .font(.title2.bold())
                     Text(metric.unit).font(.caption2).foregroundStyle(.secondary)
                     Spacer()
@@ -349,7 +365,9 @@ struct MetricCard: View {
 /// The enlarged, time-range-adjustable chart shown when a metric card is tapped.
 /// Filters the card's full history to the selected window and plots it with
 /// axes, so the athlete can inspect the progression over a chosen period.
-private struct MetricDetailView: View {
+/// The chart + history for one marker. Reached from the metric grid and from
+/// Settings' automatic-calculation screen, so it is not file-private.
+struct MetricDetailView: View {
     let metric: PerformanceMetric
     let points: [MetricPoint]
 
@@ -390,11 +408,15 @@ private struct MetricDetailView: View {
 
     private var trend: MetricTrend { MetricTrend(metric: metric, points: visiblePoints) }
 
+
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                     header
+                    if visiblePoints.last?.isEstimated == true, let note = metric.estimateNote {
+                        Text(note).font(.caption).foregroundStyle(.secondary)
+                    }
                     rangePicker
                     chart
                     stats
@@ -465,7 +487,7 @@ private struct MetricDetailView: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Circle().fill(metric.accent).frame(width: 9, height: 9)
-            Text(visiblePoints.last.map { metric.format($0.value) } ?? "—")
+            Text(visiblePoints.last.map { metric.display($0) } ?? "—")
                 .font(.largeTitle.bold())
             Text(metric.unit).font(.subheadline).foregroundStyle(.secondary)
             Spacer()
@@ -491,10 +513,24 @@ private struct MetricDetailView: View {
 private var chart: some View {
         if visiblePoints.count >= 2 {
             Chart {
+                // One `LineMark` per stretch, not per point: `lineStyle` applies to a
+                // whole *series*, so a per-point dash makes the last point style the
+                // entire line — which drew a 3-month window fully dashed and a 6-month
+                // one fully solid off the same data.
+                ForEach(MetricPoint.stretches(visiblePoints)) { stretch in
+                    ForEach(stretch.points) { p in
+                        LineMark(x: .value("Date", p.date), y: .value("Value", p.value),
+                                 series: .value("Stretch", stretch.id))
+                            .interpolationMethod(.linear)
+                            .foregroundStyle(metric.accent)
+                            // An estimate carried forward, or resting on a window too
+                            // thin for the aggregate to be robust, is not a reading;
+                            // drawn solid it is indistinguishable from one.
+                            .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round,
+                                                   dash: stretch.isProvisional ? [1, 4] : []))
+                    }
+                }
                 ForEach(visiblePoints) { p in
-                    LineMark(x: .value("Date", p.date), y: .value("Value", p.value))
-                        .interpolationMethod(.linear)
-                        .foregroundStyle(metric.accent)
                     AreaMark(x: .value("Date", p.date), y: .value("Value", p.value))
                         .interpolationMethod(.linear)
                         .foregroundStyle(
@@ -544,7 +580,7 @@ private var chart: some View {
                     ChartTooltip(
                         title: p.date.formatted(.dateTime.day().month(.abbreviated).year()),
                         rows: [.init(color: metric.accent, label: metric.title,
-                                     value: "\(metric.format(p.value)) \(metric.unit)")]
+                                     value: "\(metric.display(p)) \(metric.unit)")]
                     )
                 }
         }

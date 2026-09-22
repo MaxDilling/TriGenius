@@ -219,7 +219,8 @@ enum PlannedTSS {
             guard pace > 0 else { return fallback }
             return clamp(thr / pace)
         case "heart_rate":
-            guard let lthr = thresholds.lactateThrHR.map(Double.init), lthr > 0 else { return fallback }
+            guard let lthr = thresholds.thresholdHR(for: family).map(Double.init), lthr > 0
+            else { return fallback }
             return clamp(mid / lthr)
         default:
             return fallback

@@ -27,7 +27,7 @@ nonisolated enum ZoneMetric: String, CaseIterable, Codable, Sendable {
     func upperBounds(snapshot: PerformanceSnapshot, family: SportFamily) -> [Double]? {
         switch self {
         case .heartRate:
-            guard let lthr = snapshot.lactateThrHR, lthr > 0 else { return nil }
+            guard let lthr = snapshot.thresholdHR(for: family), lthr > 0 else { return nil }
             return TSSConstants.hrZoneUpperFractionsOfLTHR.map { $0 * Double(lthr) }
         case .power:
             guard family == .bike, let ftp = snapshot.cyclingFTP, ftp > 0 else { return nil }

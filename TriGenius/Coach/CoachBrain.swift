@@ -73,7 +73,7 @@ ONE such question per reply, and only when the entry touches what the athlete is
 
 You can embed live, tappable UI cards in a reply: a fenced code block with language tag `card` containing ONE single-line JSON object. Available cards:
 - Workout (planned or completed): {"workout": "<workout_id from get_workouts>"}
-- Metric trend: {"chart": "metric", "key": "<vo2max_running|vo2max_cycling|cycling_ftp|running_ftp|lactate_threshold_hr|lactate_threshold_speed|swim_css_speed|max_hr|resting_hr|hrv_overnight|sleep_score|sleep_duration_h>", "months": 3}
+- Metric trend: {"chart": "metric", "key": "<vo2max_running|vo2max_cycling|cycling_ftp|running_ftp|lactate_threshold_hr|lactate_threshold_hr_cycling|lactate_threshold_speed|swim_css_speed|max_hr|resting_hr|hrv_overnight|sleep_score|sleep_duration_h>", "months": 3}
 - Fitness vs ATP plan: {"chart": "ctl_trend"}
 - Weekly fitness change (ramp): {"chart": "ramp_rate", "weeks": 13}
 - Sport distribution: {"chart": "sport_share", "metric": "<tss|duration|distance>", "weeks": 13}

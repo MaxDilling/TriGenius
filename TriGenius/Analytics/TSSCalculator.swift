@@ -73,7 +73,7 @@ nonisolated enum TSSCalculator {
         // Fallback for any path with missing inputs. The stream scores each reading at
         // the heart rate actually recorded; the zone buckets are all a row stored before
         // histograms existed can offer, and they read high (see `hrLoadTSS`).
-        if let t = hrLoadTSS(heartRate, lthr: snapshot.lactateThrHR) { return (t, .hrLoad) }
+        if let t = hrLoadTSS(heartRate, lthr: snapshot.thresholdHR(for: family)) { return (t, .hrLoad) }
         if let t = hrZoneTSS(details, hours: hours) { return (t, .hrZones) }
         return (nil, nil)
     }
