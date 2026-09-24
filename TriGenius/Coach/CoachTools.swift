@@ -1115,7 +1115,8 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                 lines.append("- \(dateStr) — ✗ rejected (implausible): \(errors.joined(separator: "; "))")
             case .success(let outcome):
                 // The plan exists locally even when the target push failed — card either way.
-                onCard(.workout(id: outcome.planId, caption: "Scheduled"))
+                onCard(.workout(id: outcome.planId, caption: "Scheduled",
+                                undo: .deletePlan(id: outcome.planId)))
                 if outcome.pushed {
                     ok += 1
                     let suffix = outcome.notes.isEmpty ? "" : " (\(outcome.notes.joined(separator: "; ")))"
@@ -1153,7 +1154,9 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
         if let before, let after = DataSyncCoordinator.shared.plannedSnapshot(id: outcome.planId) {
             let changes = WorkoutDiff.changes(before: before.workoutData, after: after.workoutData)
             if !changes.isEmpty {
-                onCard(.workoutDiff(id: outcome.planId, name: after.name, caption: "Updated", changes: changes))
+                onCard(.workoutDiff(id: outcome.planId, name: after.name, caption: "Updated", changes: changes,
+                                    undo: .restorePlan(id: outcome.planId,
+                                                       workoutDataJSON: WorkoutPayloadBuilder.workoutDataJSON(before.workoutData))))
             }
         }
         var msg = outcome.pushed
@@ -1176,7 +1179,8 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
         }
         if let before {
             onCard(.workoutDiff(id: outcome.planId, name: outcome.name, caption: "Moved",
-                                changes: ["Date: \(cardDate(before.date)) → \(cardDate(date))"]))
+                                changes: ["Date: \(cardDate(before.date)) → \(cardDate(date))"],
+                                undo: .movePlan(id: outcome.planId, to: before.date)))
         }
         return outcome.pushed
             ? "✓ Moved '\(outcome.name)' to \(toDate) on \(outcome.targetName). [id: \(outcome.planId)]"
@@ -1198,7 +1202,9 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
         // Delete from every provider the plan reached (not just the active write
         // target), then drop it locally.
         await DataSyncCoordinator.shared.deletePlan(id: workoutId)
-        onCard(.workoutDeleted(name: before.name, sport: before.sport, date: before.date))
+        onCard(.workoutDeleted(name: before.name, sport: before.sport, date: before.date,
+                               undo: .recreatePlan(workoutDataJSON: WorkoutPayloadBuilder.workoutDataJSON(before.workoutData),
+                                                   date: before.date)))
         return "✓ Deleted workout \(workoutId)."
     }
 

@@ -20,6 +20,18 @@ enum WorkoutPayloadBuilder {
         return d
     }
 
+    /// `workout_data` as one JSON string and back — how an undoable chat card
+    /// carries the plan it would restore (`ChatCard.PlanUndo`).
+    static func workoutDataJSON(_ data: [String: Any]) -> String {
+        (try? JSONSerialization.data(withJSONObject: data))
+            .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
+    }
+
+    static func parseWorkoutData(_ json: String) -> [String: Any]? {
+        guard let data = json.data(using: .utf8) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
     /// Decode a record's `stepsJSON` into the compact step dictionaries.
     static func parseSteps(_ json: String) -> [[String: Any]]? {
         guard let data = json.data(using: .utf8),

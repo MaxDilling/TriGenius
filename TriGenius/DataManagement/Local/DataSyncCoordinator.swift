@@ -710,6 +710,30 @@ final class DataSyncCoordinator {
         return (rec.name, rec.sport, rec.date, WorkoutPayloadBuilder.workoutData(from: rec))
     }
 
+    /// Revert a plan change the coach made, from the card that reported it. Each
+    /// case is the inverse write through the same CRUD the change came through,
+    /// so the target push and the store stay in step. Returns false when the
+    /// plan it would act on is gone (deleted since, or never stored).
+    @discardableResult
+    func applyUndo(_ undo: ChatCard.PlanUndo) async -> Bool {
+        switch undo {
+        case .deletePlan(let id):
+            guard store.scheduledWorkout(id: id) != nil else { return false }
+            await deletePlan(id: id)
+            return true
+        case .restorePlan(let id, let json):
+            guard let data = WorkoutPayloadBuilder.parseWorkoutData(json) else { return false }
+            if case .success = await updatePlan(id: id, workoutData: data) { return true }
+            return false
+        case .movePlan(let id, let date):
+            return await movePlan(id: id, to: date) != nil
+        case .recreatePlan(let json, let date):
+            guard let data = WorkoutPayloadBuilder.parseWorkoutData(json) else { return false }
+            if case .success = await addPlan(workoutData: data, date: date) { return true }
+            return false
+        }
+    }
+
     /// Build a local plan DTO from normalized `workout_data`.
     private func makePlan(id: String, workoutData: [String: Any], date: Date) -> IngestedScheduledWorkout {
         let sport = Coerce.token(workoutData["sport"] as? String, default: "other")

@@ -9,13 +9,28 @@ import Foundation
 // (parsed by `MarkdownText` via `parse(tokenJSON:)`).
 
 enum ChatCard: Equatable {
+    /// How to revert the plan change a card reports. Carried only on the cards
+    /// the app emits for a coach-made mutation, and deliberately **not**
+    /// persisted (see `toDict`): Undo is the moment's affordance, and a button
+    /// that reappears next week would act on a plan that has moved on since.
+    enum PlanUndo: Equatable {
+        /// Undo an add.
+        case deletePlan(id: String)
+        /// Undo a modify — the stored `workout_data` as it was, compact JSON.
+        case restorePlan(id: String, workoutDataJSON: String)
+        /// Undo a move.
+        case movePlan(id: String, to: Date)
+        /// Undo a delete: the plan is gone, so its data comes back with the card.
+        case recreatePlan(workoutDataJSON: String, date: Date)
+    }
+
     /// A planned or completed workout, by store id. `caption` labels app-emitted
     /// cards ("Scheduled"); token references carry none.
-    case workout(id: String, caption: String?)
+    case workout(id: String, caption: String?, undo: PlanUndo? = nil)
     /// A modified or moved plan: field-level "old → new" lines from `WorkoutDiff`.
-    case workoutDiff(id: String, name: String, caption: String, changes: [String])
+    case workoutDiff(id: String, name: String, caption: String, changes: [String], undo: PlanUndo? = nil)
     /// A deleted plan — the record is gone, so the card carries its display fields.
-    case workoutDeleted(name: String, sport: String, date: Date)
+    case workoutDeleted(name: String, sport: String, date: Date, undo: PlanUndo? = nil)
     case metric(key: String, months: Int)
     case ctlTrend
     case rampRate(weeks: Int)
@@ -59,13 +74,13 @@ enum ChatCard: Equatable {
 
     func toDict() -> [String: Any] {
         switch self {
-        case .workout(let id, let caption):
+        case .workout(let id, let caption, _):
             var d: [String: Any] = ["type": "workout", "id": id]
             if let caption { d["caption"] = caption }
             return d
-        case .workoutDiff(let id, let name, let caption, let changes):
+        case .workoutDiff(let id, let name, let caption, let changes, _):
             return ["type": "workout_diff", "id": id, "name": name, "caption": caption, "changes": changes]
-        case .workoutDeleted(let name, let sport, let date):
+        case .workoutDeleted(let name, let sport, let date, _):
             return ["type": "workout_deleted", "name": name, "sport": sport, "date": date.timeIntervalSince1970]
         case .metric(let key, let months):
             return ["type": "metric", "key": key, "months": months]

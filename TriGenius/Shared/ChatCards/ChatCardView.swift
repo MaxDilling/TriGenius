@@ -13,12 +13,12 @@ struct ChatCardView: View {
 
     var body: some View {
         switch card {
-        case .workout(let id, let caption):
-            WorkoutChatCard(id: id, caption: caption)
-        case .workoutDiff(let id, let name, let caption, let changes):
-            WorkoutChatCard(id: id, caption: caption, fallbackName: name, changes: changes)
-        case .workoutDeleted(let name, let sport, let date):
-            DeletedWorkoutCard(name: name, sport: sport, date: date)
+        case .workout(let id, let caption, let undo):
+            WorkoutChatCard(id: id, caption: caption, undo: undo)
+        case .workoutDiff(let id, let name, let caption, let changes, let undo):
+            WorkoutChatCard(id: id, caption: caption, fallbackName: name, changes: changes, undo: undo)
+        case .workoutDeleted(let name, let sport, let date, let undo):
+            DeletedWorkoutCard(name: name, sport: sport, date: date, undo: undo)
         case .metric(let key, let months):
             MetricChatCard(key: key, months: months)
         case .ctlTrend:
@@ -43,19 +43,28 @@ private struct WorkoutChatCard: View {
     var caption: String? = nil
     var fallbackName: String? = nil
     var changes: [String] = []
+    var undo: ChatCard.PlanUndo? = nil
 
     @State private var workout: WorkoutRecord?
     @State private var loaded = false
 
+    // Undo sits beside the link, never inside its label: a button nested in a
+    // NavigationLink swallows the link's tap.
     var body: some View {
-        Group {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
             if workout != nil {
                 NavigationLink(value: ChatCardDestination.workout(id: id)) { content }
                     .buttonStyle(.plain)
             } else {
                 content
             }
+            if let undo {
+                UndoPlanChange(undo: undo).padding(.leading, 44 + Theme.Spacing.m)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface()
+        .coachAccent()
         .task { reload() }
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in reload() }
     }
@@ -106,8 +115,6 @@ private struct WorkoutChatCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .cardSurface()
-        .coachAccent()
         .contentShape(.rect)
     }
 
@@ -138,6 +145,7 @@ private struct DeletedWorkoutCard: View {
     let name: String
     let sport: String
     let date: Date
+    var undo: ChatCard.PlanUndo? = nil
 
     var body: some View {
         HStack(spacing: Theme.Spacing.m) {
@@ -154,6 +162,7 @@ private struct DeletedWorkoutCard: View {
                     .font(.subheadline).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
+            if let undo { UndoPlanChange(undo: undo) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
@@ -199,6 +208,44 @@ private struct ExerciseLines: View {
         let loads = Set(sets.map(ExerciseSetsCard.load))
         let load = loads.count == 1 ? loads.first.map { $0 == "BW" ? " · BW" : " @ \($0) kg" } ?? "" : ""
         return "\(first.title) · \(volume)\(load)"
+    }
+}
+
+// MARK: - Undo
+//
+// Every coach-made plan change can be taken back from the card that reports it
+// — the change went in without being asked, so reversing it must be one tap.
+// The affordance lives only in the session that made it (`ChatCard.PlanUndo`
+// isn't persisted), and states plainly when the plan it would act on is gone.
+
+private struct UndoPlanChange: View {
+    let undo: ChatCard.PlanUndo
+
+    @State private var state: State = .offered
+    private enum State { case offered, working, undone, gone }
+
+    var body: some View {
+        switch state {
+        case .offered:
+            Button("Undo") {
+                state = .working
+                Task {
+                    let ok = await DataSyncCoordinator.shared.applyUndo(undo)
+                    state = ok ? .undone : .gone
+                }
+            }
+            .font(.caption.weight(.semibold))
+            .buttonStyle(.plain)
+            .foregroundStyle(Color.accentColor)
+        case .working:
+            ProgressView().controlSize(.mini)
+        case .undone:
+            Label("Undone", systemImage: "arrow.uturn.backward")
+                .font(.caption).foregroundStyle(.secondary)
+        case .gone:
+            Text("That workout has changed since — nothing to undo.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 }
 
