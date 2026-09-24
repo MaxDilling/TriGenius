@@ -1537,6 +1537,14 @@ final class TrainingDataStore {
         setOverrides(["manual_name": name], on: r)
     }
 
+    /// Replace one completed strength session's recorded sets with the athlete's
+    /// corrected list (`StrengthSets.entries`). Outranks the source's sets on
+    /// every re-sync (override layer); nothing goes back to the watch's account.
+    func overrideStrengthSets(activityId: String, exercises: [[String: Any]]) {
+        guard let r = activity(id: activityId) else { return }
+        setOverrides(["strength": ["exercises": exercises]], on: r)
+    }
+
     /// Record the athlete's subjective feedback (feel 1–5, RPE 1–10, free-text
     /// note) on a completed activity. Matches the stored id or a source-prefixed
     /// variant of the raw provider id. Returns false when no matching completed
@@ -1587,6 +1595,36 @@ final class TrainingDataStore {
         for r in stale { context.delete(r) }
         try? context.save()
         markChanged()
+    }
+
+    /// The weight the athlete last prescribed for this exercise, from the most
+    /// recent planned strength session that used it. The athlete's own last
+    /// working weight is the only honest starting point — there is no max test.
+    func lastPlannedWeightKg(exerciseId: String, before: Date = .now) -> Double? {
+        var descriptor = FetchDescriptor<WorkoutRecord>(
+            predicate: #Predicate { $0.isPlanned && $0.date < before },
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
+        )
+        descriptor.fetchLimit = 60
+        for plan in (try? context.fetch(descriptor)) ?? [] {
+            guard SportFamily(sportKey: plan.sport) == .strength,
+                  let steps = WorkoutPayloadBuilder.parseSteps(plan.stepsJSON) else { continue }
+            if let kg = Self.plannedWeight(in: steps, exerciseId: exerciseId) { return kg }
+        }
+        return nil
+    }
+
+    /// Depth-first through circuits: the first set of the named exercise that
+    /// carries a weight (a bodyweight prescription deliberately reports none).
+    private static func plannedWeight(in steps: [[String: Any]], exerciseId: String) -> Double? {
+        for step in steps {
+            if let children = step["repeat_steps"] as? [[String: Any]],
+               let kg = plannedWeight(in: children, exerciseId: exerciseId) { return kg }
+            guard step["exercise_id"] as? String == exerciseId,
+                  let sets = step["sets"] as? [[String: Any]] else { continue }
+            if let kg = sets.compactMap({ Coerce.double($0["weight_kg"]) }).first(where: { $0 > 0 }) { return kg }
+        }
+        return nil
     }
 
     /// Completed activities on/after `since` (or all), newest first.
@@ -2694,6 +2732,8 @@ extension TrainingDataStore {
         r.maxContinuous = p.maxContinuous
         r.equipment = p.equipment
         r.notes = p.notes
+        r.trainingPlace = p.trainingPlace
+        r.excludedAreas = p.excludedAreas
     }
 
     private static func make(from r: SportProgressRecord) -> SportProgress {
@@ -2706,6 +2746,8 @@ extension TrainingDataStore {
         p.maxContinuous = r.maxContinuous
         p.equipment = r.equipment
         p.notes = r.notes
+        p.trainingPlace = r.trainingPlace
+        p.excludedAreas = r.excludedAreas
         return p
     }
 

@@ -87,7 +87,7 @@ enum WeeklyTargets {
     // MARK: Heuristic fallback (no ATP yet)
 
     /// Fraction of the weekly triathlon time budget that goes to each discipline
-    /// (a classic ~20/50/30 swim/bike/run split). Strength is a small fixed add.
+    /// (a classic ~20/50/30 swim/bike/run split).
     private static func split(_ family: SportFamily) -> Double {
         switch family {
         case .swim: return 0.20
@@ -102,8 +102,6 @@ enum WeeklyTargets {
     private static let heuristicVolumeFactor = 0.90
     /// Default weekly hours when the athlete hasn't set a budget yet.
     private static let defaultWeeklyHours = 8.0
-    /// Fixed weekly strength target (minutes) — small, sits outside the ATP TSS budget.
-    private static let strengthMinutes = 45.0
 
     private static func heuristicTarget(for family: SportFamily, weeklyStructure: WeeklyStructure) -> WeeklyTarget {
         let hours = Double(weeklyStructure.maxHours ?? Int(defaultWeeklyHours))
@@ -118,14 +116,12 @@ enum WeeklyTargets {
     /// The week's base per-discipline goal. When the ATP sets a weekly TSS for the
     /// week, divide it across swim/bike/run by the athlete's ratio + floors
     /// (`ATPSportSplit`) and back-estimate each discipline's duration/distance from
-    /// its TSS; otherwise fall back to the hour-budget heuristic. Strength sits
-    /// outside the ATP triathlon TSS budget as a small fixed target.
+    /// its TSS; otherwise fall back to the hour-budget heuristic. Strength carries
+    /// no base goal — it is not part of the TSS budget, and a weekly strength
+    /// volume nothing derives would be a made-up number; scheduling sessions is
+    /// what gives the week its strength target.
     private static func baseTargets(weeklyStructure: WeeklyStructure, atpWeekTSS: Double?) -> [SportFamily: WeeklyTarget] {
-        var out: [SportFamily: WeeklyTarget] = [
-            .strength: WeeklyTarget(durationMinutes: strengthMinutes,
-                                    tss: estimatedTSS(family: .strength, minutes: strengthMinutes)),
-            .other: WeeklyTarget(durationMinutes: 0, tss: 0)
-        ]
+        var out: [SportFamily: WeeklyTarget] = [.other: WeeklyTarget(durationMinutes: 0, tss: 0)]
         if let total = atpWeekTSS, total > 0 {
             let dist = ATPSportSplit.split(weeklyTSS: total, ratio: weeklyStructure.sportRatio, floors: weeklyStructure.sportFloors)
             for family in SportFamily.triathlon {

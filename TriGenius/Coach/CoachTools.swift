@@ -374,20 +374,22 @@ final class ProfileToolHandler: CoachToolHandler {
                         "remove_limitation": ["type": "string", "description": "Id ([xxxx] in the athlete context) of the limitation to remove."],
                         "add_injury": ["type": "string", "description": "Injury affecting the sport. Requires injury_impact."],
                         "injury_impact": ["type": "string", "description": "How the injury constrains training right now."],
-                        "remove_injury": ["type": "string", "description": "Id ([xxxx] in the athlete context) of the injury entry to remove (resolved, or replaced by an updated entry)."]
+                        "remove_injury": ["type": "string", "description": "Id ([xxxx] in the athlete context) of the injury entry to remove (resolved, or replaced by an updated entry)."],
+                        "training_place": ["type": "string", "enum": StrengthProfile.Place.allCases.map(\.rawValue), "description": "Strength only: where the athlete trains — fixes the equipment get_exercises offers."],
+                        "excluded_areas": ["type": "array", "items": ["type": "string", "enum": StrengthProfile.Area.allCases.map(\.rawValue)], "description": "Strength only: every area to work around, replacing the stored list ([] clears it). Removes the exercises loading it — exclusion only, never a diagnosis."]
                     ],
                     "required": ["sport"]
                 ]
             ),
             ToolDefinition(
                 name: "read_knowledge",
-                description: "Read coaching knowledge files on specific topics: cycling, running, swimming, injuries, workouts, or trainingplan. Always call this FIRST when answering sport-specific training questions, read the 'workouts' topic before building structured workouts with add_workouts, and the 'trainingplan' topic before building or adjusting the season plan with set_atp/set_atp_event.",
+                description: "Read coaching knowledge files on specific topics: cycling, running, swimming, injuries, workouts, strength, or trainingplan. Always call this FIRST when answering sport-specific training questions, read the 'workouts' topic before building structured workouts with add_workouts, 'strength' before planning a gym session, and the 'trainingplan' topic before building or adjusting the season plan with set_atp/set_atp_event.",
                 parameters: [
                     "type": "object",
                     "properties": [
                         "topic": [
                             "type": "string",
-                            "enum": ["cycling", "running", "swimming", "injuries", "workouts", "trainingplan"],
+                            "enum": ["cycling", "running", "swimming", "injuries", "workouts", "strength", "trainingplan"],
                             "description": "The topic to read."
                         ]
                     ],
@@ -529,6 +531,23 @@ final class ProfileToolHandler: CoachToolHandler {
                 errors.append("remove_injury: no \(sport) injury with id [\(ref)]")
             }
         }
+        if let raw = arguments["training_place"] as? String {
+            if sport == "strength", let place = StrengthProfile.Place(rawValue: raw) {
+                memory.updateSportProgress(sport: sport) { $0.trainingPlace = place.rawValue }
+                updates.append("trains at: \(place.label.lowercased())")
+            } else {
+                errors.append("training_place: strength only, one of \(StrengthProfile.Place.allCases.map(\.rawValue).joined(separator: ", "))")
+            }
+        }
+        if let raw = arguments["excluded_areas"] as? [String] {
+            let areas = raw.compactMap(StrengthProfile.Area.init(rawValue:))
+            if sport == "strength", areas.count == raw.count {
+                memory.updateSportProgress(sport: sport) { $0.excludedAreas = areas.map(\.rawValue) }
+                updates.append("works around: \(areas.isEmpty ? "nothing" : areas.map(\.label).joined(separator: ", "))")
+            } else {
+                errors.append("excluded_areas: strength only, each one of \(StrengthProfile.Area.allCases.map(\.rawValue).joined(separator: ", "))")
+            }
+        }
         return Self.report(updates: updates.map { "[\(sport)] \($0)" }, errors: errors)
     }
 
@@ -549,6 +568,7 @@ final class ProfileToolHandler: CoachToolHandler {
         "swimming": ("SWIMMING", "md"),
         "injuries": ("INJURIES", "MD"),
         "workouts": ("WORKOUTS", "md"),
+        "strength": ("STRENGTH", "md"),
         "trainingplan": ("TRAININGSPLAN", "md")
     ]
 
@@ -846,7 +866,7 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
             "items": [
                 "type": "object",
                 "properties": [
-                    "type": ["type": "string", "enum": ["warmup", "interval", "main", "recovery", "rest", "cooldown", "repeat"], "description": "Step type."],
+                    "type": ["type": "string", "enum": ["warmup", "interval", "main", "recovery", "rest", "cooldown", "repeat", "exercise"], "description": "Step type. \"exercise\" is strength only and takes exercise_id + sets instead of an extent/target; in a strength session a \"rest\" step with duration_seconds is a pause between two exercises."],
                     "duration_seconds": ["type": "integer", "description": "Step duration in seconds."],
                     "distance_meters": ["type": "number", "description": "Step distance in meters."],
                     "end_condition": ["type": "string", "enum": ["time", "distance", "lap_button", "fixed_rest"], "description": "How the step ends."],
@@ -858,14 +878,32 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                         "items": [
                             "type": "object",
                             "properties": [
-                                "type": ["type": "string", "description": "Child step type."],
+                                "type": ["type": "string", "description": "Child step type (\"exercise\" inside a strength circuit)."],
                                 "distance_meters": ["type": "number", "description": "Child step distance in meters."],
                                 "duration_seconds": ["type": "integer", "description": "Child step duration in seconds."],
-                                "stroke": ["type": "string", "description": "Child step swim stroke."]
+                                "stroke": ["type": "string", "description": "Child step swim stroke."],
+                                "exercise_id": ["type": "string", "description": "Strength circuit: the exercise, from get_exercises."],
+                                "sets": ["type": "array", "description": "Strength circuit: usually one entry — the block's repeat_count is the round count.", "items": ["type": "object"]]
                             ]
                         ]
                     ],
                     "skip_last_rest": ["type": "boolean", "description": "Skip the last rest in a repeat block."],
+                    "exercise_id": ["type": "string", "description": "Strength: the exercise, from get_exercises. Use exercise_name instead only for something the library doesn't have."],
+                    "exercise_name": ["type": "string", "description": "Strength: name of an exercise outside the library (no tissue mapping, no watch guidance)."],
+                    "sets": [
+                        "type": "array",
+                        "description": "Strength: one entry per set, in order. Uniform sets repeat the same entry.",
+                        "items": [
+                            "type": "object",
+                            "properties": [
+                                "reps": ["type": "integer", "description": "Repetitions in this set."],
+                                "duration_seconds": ["type": "integer", "description": "Hold time instead of reps (plank, carry)."],
+                                "weight_kg": ["type": "number", "description": "Load in kg. Omit for bodyweight; never invent one — read the athlete's last working weight from get_workouts."],
+                                "rest_seconds": ["type": "integer", "description": "Rest after this set."]
+                            ]
+                        ]
+                    ],
+                    "rest_between_rounds_seconds": ["type": "integer", "description": "Strength: rest between rounds of a circuit (a repeat block of exercise steps)."],
                     "target_type": ["type": "string", "enum": ["no_target", "heart_rate", "power", "pace", "speed", "cadence"], "description": "Intensity target type (units/bands in read_knowledge('workouts') §3)."],
                     "target_low": ["type": "number", "description": "Single target value; the app auto-expands it into a band."],
                     "target_high": ["type": "number", "description": "Optional explicit upper bound (overrides the auto band)."]
@@ -885,6 +923,18 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
 
     var definitions: [ToolDefinition] {
         [
+            ToolDefinition(
+                name: "get_exercises",
+                description: "The strength exercise library: the `exercise_id`s add_workouts accepts, each with the tissue groups it loads, already limited to the athlete's equipment and without the areas they work around. Filter by `group` (one tissue group) and/or `equipment` to plan around what the athlete has. Returns one line per exercise, `exercise_id — loads + also loads · timed`, under [equipment] headers unless filtered by equipment. Call it before writing a strength session and use the ids exactly as listed.",
+                parameters: [
+                    "type": "object",
+                    "properties": [
+                        "group": ["type": "string", "enum": TissueGroup.allCases.map(\.rawValue), "description": "Only exercises loading this tissue group (primary or secondary)."],
+                        "equipment": ["type": "string", "enum": Exercise.Equipment.allCases.map(\.rawValue), "description": "Only exercises needing this equipment."]
+                    ],
+                    "required": []
+                ]
+            ),
             ToolDefinition(
                 name: "get_workouts",
                 description: "List the athlete's workouts, lean and TSS-focused. `status` selects what comes back: \"completed\" (finished activities, each with its `tss` and how it was derived `tss_basis`), \"planned\" (open, editable sessions — each carries a ready-to-reuse `workout_data`), or \"all\" (both). Every row has a `workout_id` — the id modify_workout / move_workout / delete_workout / log_workout_feedback need. Optional `sport` filter and `start_date`/`end_date` range (defaults: completed → last 14 days, planned → next 28). `detailed: true` adds the per-lap/interval breakdown for completed workouts (capped to 5 rows). (For the athlete's real-world busy/free time, use read_calendar_availability instead.)",
@@ -971,6 +1021,10 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
 
     func execute(name: String, arguments: [String: Any]) async throws -> String {
         switch name {
+        case "get_exercises":
+            return Self.exerciseCatalog(group: arguments["group"] as? String,
+                                        equipment: arguments["equipment"] as? String,
+                                        profile: .stored)
         case "get_workouts":
             return await DataSyncCoordinator.shared.workouts(
                 status: (arguments["status"] as? String) ?? "all",
@@ -994,6 +1048,51 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
         default:
             return "Unknown scheduling tool: \(name)"
         }
+    }
+
+    // MARK: - get_exercises
+
+    /// The library as the model needs it, one line per exercise under a one-line
+    /// legend: the id add_workouts takes, the groups it loads, and whether a set
+    /// is a hold. No names — the id reads as one, and the app shows the real name.
+    /// Grouped under an equipment header unless the call already filtered on it.
+    /// The athlete's `StrengthProfile` always applies — their equipment, minus
+    /// every area they work around — so an excluded exercise never reaches the
+    /// model to be planned. Filters are exact enum values (`TissueGroup`, `Exercise.Equipment`) — an
+    /// unknown one is an error rather than a near miss, so the model never plans
+    /// off a silent substitution.
+    private static func exerciseCatalog(group: String?, equipment: String?, profile: StrengthProfile) -> String {
+        let wanted = group.flatMap(TissueGroup.init(rawValue:))
+        let gear = equipment.flatMap(Exercise.Equipment.init(rawValue:))
+        if group != nil && wanted == nil { return "✗ Error: unknown group \(group!)." }
+        if equipment != nil && gear == nil { return "✗ Error: unknown equipment \(equipment!)." }
+        let matches = ExerciseLibrary.all.filter { exercise in
+            (wanted == nil || exercise.primaryGroups.contains(wanted!) || exercise.secondaryGroups.contains(wanted!))
+                && (gear == nil || exercise.equipment == gear)
+                && profile.allows(exercise)
+        }
+        let scope = profile.summary.map { " and the athlete's strength profile (\($0))" } ?? ""
+        guard !matches.isEmpty else { return "No exercises match these filters\(scope)." }
+        func line(_ exercise: Exercise) -> String {
+            var text = "\(exercise.id) — " + exercise.primaryGroups.map(\.rawValue).joined(separator: ", ")
+            if !exercise.secondaryGroups.isEmpty {
+                text += " + " + exercise.secondaryGroups.map(\.rawValue).joined(separator: ", ")
+            }
+            return exercise.isTimeBased ? text + " · timed" : text
+        }
+        var lines = ["exercise_id — loads + also loads · timed (a hold: its sets take duration_seconds, not reps)"]
+        if let summary = profile.summary { lines.append("Only what the athlete's strength profile allows (\(summary)).") }
+        if gear != nil {
+            lines += matches.map(line)
+        } else {
+            for equipment in Exercise.Equipment.allCases {
+                let members = matches.filter { $0.equipment == equipment }
+                guard !members.isEmpty else { continue }
+                lines.append("[\(equipment.rawValue)]")
+                lines += members.map(line)
+            }
+        }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - add_workouts

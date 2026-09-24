@@ -88,6 +88,9 @@ final class SportProgressRecord {
     var maxContinuous: String?
     var equipment: [String] = []
     var notes: String?
+    /// Strength only (`StrengthProfile`): the `Place` and `Area` raw values.
+    var trainingPlace: String?
+    var excludedAreas: [String] = []
 
     init(sport: String) { self.sport = sport }
 }

@@ -416,6 +416,54 @@ nonisolated enum GarminTransform {
         }
     }
 
+    /// Group `/exerciseSets` rows into the same per-exercise shape a planned
+    /// strength workout carries (`exercise_name` + a `sets` array), so one reader
+    /// serves plan and result. Consecutive active sets of the same exercise form
+    /// one entry; a rest row becomes the preceding set's measured `rest_seconds`.
+    /// The classifier's name is kept as Garmin reports it (`exercise_category`
+    /// beside it) — this is what the watch recorded, not what was planned.
+    ///
+    /// Garmin reports a set's `weight` in grams; the app stores kilograms, the
+    /// unit the athlete prescribes in and the one a planned set carries.
+    static let strengthWeightPerKg = 1000.0
+
+    static func strengthExercises(_ payload: [String: Any]) -> [[String: Any]]? {
+        guard let rows = payload["exerciseSets"] as? [[String: Any]] else { return nil }
+        var out: [[String: Any]] = []
+        for row in rows {
+            let seconds = Coerce.double(row["duration"]).map { ($0 * 10).rounded() / 10 }
+            guard (row["setType"] as? String) == "ACTIVE" else {
+                // A rest row belongs to the set before it; a leading one has no owner.
+                if let seconds, var last = out.popLast() {
+                    var sets = last["sets"] as? [[String: Any]] ?? []
+                    if var final = sets.popLast() { final["rest_seconds"] = seconds; sets.append(final) }
+                    last["sets"] = sets
+                    out.append(last)
+                }
+                continue
+            }
+            let best = (row["exercises"] as? [[String: Any]])?
+                .max { Coerce.double($0["probability"]) ?? 0 < Coerce.double($1["probability"]) ?? 0 }
+            let name = best?["name"] as? String
+            var set: [String: Any] = [:]
+            if let reps = Coerce.int(row["repetitionCount"]) { set["reps"] = reps }
+            if let seconds { set["duration_seconds"] = seconds }
+            if let grams = Coerce.double(row["weight"]), grams > 0 {
+                set["weight_kg"] = (grams / strengthWeightPerKg * 100).rounded() / 100
+            }
+            if var last = out.last, last["exercise_name"] as? String == name {
+                last["sets"] = (last["sets"] as? [[String: Any]] ?? []) + [set]
+                out[out.count - 1] = last
+            } else {
+                var entry: [String: Any] = ["sets": [set]]
+                if let name { entry["exercise_name"] = name }
+                if let category = best?["category"] as? String { entry["exercise_category"] = category }
+                out.append(entry)
+            }
+        }
+        return out
+    }
+
     /// Build normalized swim interval data from Garmin lap DTOs. Each active lap's
     /// length count/distance comes from `SwimLengthCleaner` (missed wall-turns
     /// recovered by splitting, phantom fragments merged away), not Garmin's raw

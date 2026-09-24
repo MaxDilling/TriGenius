@@ -31,6 +31,112 @@ is ever written into the metric series.
 - **`WeeklyTarget`** — fed by the ATP: the current ATP week's TL is split across swim/bike/run by `ATPSportSplit` (the athlete's `sport_ratio`/`sport_floors` from `WeeklyStructure`), back-estimating each discipline's duration/distance. With no ATP yet it falls back to a flat hour-budget heuristic. Scheduled workouts only *raise* the goal.
 - **`PlannedTL`** — estimates a planned workout's TL/duration/distance from its steps against a `PerformanceSnapshot`. Untargeted steps run on **one** assumption: done at `assumedIF × threshold speed` (CSS / threshold run pace; population typicals when unmeasured), which both converts time↔distance *and* is the step's IF — so a workout's estimated duration, distance and TL can never contradict each other.
 
+**`StrengthSets`** — the one set model (`SetRow`) behind the strength table, for a plan and a recorded session alike. `blocks(planned:)` keeps the plan as written — a circuit is one block with its rounds and round rest, a rest step its own item. `rows(performed:)`/`entries(_:)` convert to and from the stored `strength.exercises` (the athlete's edits round-trip through them). `comparison(planned:performed:)` pairs each recorded set with the prescribed set it matches, on Garmin's own exercise key (never on name similarity; each exercise's sets consume its prescribed sets in order, so interleaved circuit rounds line up), adds every prescribed set nothing was recorded for after the last line of its exercise, and flags only a paired set whose prescribed rep count came back missing or different. Improvising is not a discrepancy. Pinned by `TriGeniusTests/Analytics/StrengthSetsTests.swift`.
+
+### `Analytics/Tissue/` — the second load axis
+
+A completed strength session keeps whatever HR-derived TL it scored, like any session,
+but its *structural* cost is a second axis: a heavy 5×5 barely lifts heart rate while
+placing the week's largest structural demand, and a kettlebell circuit does the reverse.
+
+So every session — swim, bike, run **and** strength — maps onto tissue groups, and
+each group carries a forecast of **when it is clear for hard work again**. That forecast
+is the primary value in every surface; the load levels behind it are the evidence.
+
+- **`TissueModels`** — thirteen groups (`TissueGroup`), an ordinal `LoadLevel` 0–4 that is
+  never shown as a percentage, and `TissueDayState`: one group's morning, with muscle
+  and an optional tendon.
+- **`TissueLoadModel`** — real sessions → forecasts, conflicts, the planned week, drivers
+  and the 6-week history (below). `TissueSession` carries each session's dose per group.
+- **`TissueLogic`** — `clearDay` / `clearLabel` / `cardRows` / `freeGroups` /
+  `chronicStatus` / `chronicRows`. Pure and pinned by `TriGeniusTests/Analytics/Tissue/`.
+- **`TissueLeadLine`** — the card's headline, a decision tree over fixed templates.
+- **`CoachTissueContext`** — what the coach is handed when the athlete asks about a
+  group: snake_case keys, calendar days, coarse confidence. The coach explains and
+  offers options; it never re-derives any of these numbers.
+
+Four things are load-bearing:
+
+1. **Today is `todayIndex`, never `days[0]`.** A forecast carries 3 past days before today and
+   the 7 days from today on (`TissueMetrics.pastDays` / `aheadDays`); the card, the grid
+   and the group detail draw all of them. Everything that means "this morning" or "from
+   now on" reads `TissueForecast.today` / `.ahead` — `clearDay`, `cardRows`, the lead
+   line, the coach context — never an index of its own.
+2. **Ties go to the tendon.** A tendon at or above Moderate governs even when the muscle
+   matches it, because it clears more slowly and it is the one that decides whether a
+   hard session can happen. A tendon below Moderate never governs.
+3. **Unknown load is not modelled (for now).** A strength session without exercises
+   (Apple Health reports only its duration) carries no dose, and there is no hatch or
+   repair prompt — deferred in `TODO_KRAFTTRAINING.md`. With no model uncertainty either,
+   a clear forecast is a single day ("Tue", "Now", "Later"); ranges return with Phase 5's
+   confidence. A group with no data at all is absent.
+4. **The card's rows are stable.** `cardRows` takes `previouslyListed` and keeps a group
+   that was shown yesterday until it clears, so the dashboard does not reshuffle between
+   two groups that tie. Ties otherwise fall back to the anatomical order of `allCases`.
+
+### The model (`TissueLoadModel`)
+
+Computed on the fly at dashboard load (`TissueCardModel.Input.live`, the one place the
+Tissue Load surfaces read the store) over ~9 weeks of completed sessions and the next 9
+days of plan; nothing is persisted. Every constant lives in **`TissueConstants`**
+(`Analytics/Tissue/TissueConstants.swift`), provisional until Phase 5 calibrates it — the
+sport weights for Shins and the arm groups are general-knowledge placeholders.
+
+1. **Dose.** An endurance session doses each group with its TL × a per-sport weight,
+   muscle and tendon apart (`TissueConstants.enduranceWeights` — running loads the lower
+   leg's tendons hardest, swimming the shoulders and arms). Multisport rows dose per leg
+   (`sportContributions`). A strength session doses in **hard sets**: 1 per set on a primary
+   group, ½ on a secondary, times `tlPerHardSet` to share a scale with TL, plus tendon dose
+   on a primary group with a modelled tendon when the library marks the exercise
+   `loadsTendon`. Its HR-derived TL never enters this axis. A plan doses from its planned
+   TL or prescribed sets. A set's groups resolve in one place (`TissueSession.groups`);
+   `TissueSession.targets` reads the same groups as primary/secondary for the muscle map
+   (`Shared/Charts/MuscleMap`) at the top of the strength card, plan and session alike.
+2. **Decay.** A morning state is every earlier dose decayed exponentially — muscle τ 1 day,
+   tendon τ 3 days.
+3. **Levels, relative to the athlete.** A morning state is divided by that group's own
+   average morning state over the last 28 days (floored at `baselineFloor`): < ½ Fresh,
+   < 1 Light — clear for hard work — < 1½ Moderate, < 2 Loaded, else Heavy.
+4. **Conflict = a load spike** (replaces handoff D4's key/hard rule). A planned session
+   conflicts when it would push a group it loads (≥ 25 % of its largest group dose) above
+   that group's highest post-session state of the last 30 days × 1.1 — tendon first —
+   whether or not the group was clear that morning. Earlier sessions the same day stack.
+   No conflicts until 4 weeks of history exist. The lead line reads "Tue run: Achilles
+   load spike."
+5. **Key session** = the window's heaviest planned session (total dose) — the ring on the
+   card's day header and the taper rows. Plans carry no key flag.
+6. **Chronic** — each of the last 6 full weeks' muscle dose per group against its own
+   6-week average; nil until six weeks of history exist.
+
+Previews run the same model over synthetic weeks (`TissuePreviewFixture`, DEBUG only).
+
+**Muscle groups come from Garmin's catalog** (`GarminMuscles`, bundled as
+`Assets/Exercises/garmin-muscles.json` from `ref/garmin_api/exercises/Exercises.json`):
+~1500 exercises keyed by category + name, every one of Garmin's 17 muscles folded onto a
+group — abs/obliques → Low back (the group that replaces "Core / low back"), chest →
+Shoulders, abductors → Glutes, lats/traps → Upper back, biceps/triceps/forearm to their
+own groups. Garmin names no shin muscle, so Shins takes no strength load. The library resolves
+its groups through it, so a recorded set of an exercise outside the library gets groups
+too; the library still carries `loads_tendon`, and its own groups for the 6 exercises
+Garmin lacks.
+
+**`ExerciseLibrary`** (`Analytics/Tissue/ExerciseLibrary.swift`) — ~60 curated strength
+exercises loaded once from bundled `Assets/Exercises/exercise-library.json`, each mapped
+onto the `TissueGroup`s it primarily/secondarily loads and whether it stresses a tendon
+(handoff decision D8). Picker data for the workout editor (`Features/WorkoutEditor/`),
+not coaching prose — that's why it lives as JSON rather than in `Assets/Knowledge/`. A
+step can reference none of these (a free-typed custom exercise); it then contributes no
+tissue-group evidence.
+
+**`StrengthProfile`** (`Analytics/Tissue/StrengthProfile.swift`) — the athlete's strength
+setup (handoff flow 7): a training `Place` that fixes the allowed `Exercise.Equipment`, and
+the `Area`s to work around, each excluding every exercise that loads its `TissueGroup` as a
+primary *or* secondary mover (D10: exclusion only). `allows(_:)` is the one filter the
+exercise picker, the editor's default exercise and `get_exercises` all apply, so an excluded
+exercise never reaches the athlete's library or the model. Experience is the `strength`
+sport profile's level. Stored on that profile's `SportProgressRecord` (`trainingPlace`,
+`excludedAreas`; `CoachMemory`, `docs/coach.md`). Pinned by `StrengthProfileTests`.
+
 ### Per-sport aggregation goes through `sportContributions`
 
 `WorkoutSegment.swift` carries the two accessors every per-sport reader uses instead of `SportFamily(sportKey: record.sport)`:

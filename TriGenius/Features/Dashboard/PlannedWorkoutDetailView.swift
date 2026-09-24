@@ -15,6 +15,9 @@ struct PlannedWorkoutDetailView: View {
     @State private var live: WorkoutRecord?
     @State private var editor: WorkoutEditorContext?
     @State private var confirmDelete = false
+    /// Holds the display awake while the athlete works through a strength plan
+    /// on Apple Watch (the phone is the only place the sets are listed).
+    @State private var keepAwake = false
     @Environment(\.dismiss) private var dismiss
 
     init(workout: WorkoutRecord) {
@@ -27,6 +30,11 @@ struct PlannedWorkoutDetailView: View {
     private var isEstimatedTSS: Bool { workout.isEstimatedTSS }
     private var targetTSS: Double { workout.resolvedTargetTSS }
     private var structure: PlannedWorkoutStructure? { workout.structure }
+    /// A strength plan's exercise list — never through `structure`, which is
+    /// endurance-shaped and nil for an exercise list (see `docs/store.md`).
+    private var exerciseBlocks: [StrengthSets.Block] {
+        StrengthSets.blocks(planned: WorkoutPayloadBuilder.parseSteps(workout.stepsJSON) ?? [])
+    }
     /// Planned distance, shown only for distance disciplines (run / swim). Prefixed
     /// with "~" unless the distance is exact (summed from distance-prescribed steps).
     private var distanceText: String? {
@@ -49,8 +57,15 @@ struct PlannedWorkoutDetailView: View {
                 tssBasisNote
                 if let structure, !structure.steps.isEmpty {
                     PlannedStructureCard(structure: structure, accent: family.color)
+                } else if !exerciseBlocks.isEmpty {
+                    ExerciseSetsCard(blocks: exerciseBlocks) { editor = .edit(workout) }
                 }
-                detailRows
+                if family == .strength, AppSettings.storedWriteTarget() == .appleWatch {
+                    appleWatchCard
+                }
+                if !detailRowList.isEmpty {
+                    detailRows
+                }
                 if !workout.notes.isEmpty {
                     notesCard
                 }
@@ -82,6 +97,10 @@ struct PlannedWorkoutDetailView: View {
                 }
             }
         }
+        #if os(iOS)
+        .onChange(of: keepAwake) { UIApplication.shared.isIdleTimerDisabled = keepAwake }
+        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+        #endif
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
             // Keep the last known record if the workout was deleted out from under us.
             if let fresh = TrainingDataStore.shared.scheduledWorkout(id: initialWorkout.id) {
@@ -136,6 +155,12 @@ struct PlannedWorkoutDetailView: View {
 
     private var heroMetrics: [HeroMetric] {
         var metrics: [HeroMetric] = []
+        // The exercise count is a real, computed number — the hero row of a
+        // strength plan, whose steps carry no extent to estimate from.
+        let exercises = workout.plannedExerciseCount
+        if exercises > 0 {
+            metrics.append(HeroMetric(value: "\(exercises)", label: exercises == 1 ? "Exercise" : "Exercises"))
+        }
         // `plannedDurationMinutes` prefers the structure estimate, so mixed
         // time+distance sessions count the distance steps too. "~" only when the
         // session carries no explicit duration target (distance-prescribed).
@@ -206,14 +231,13 @@ struct PlannedWorkoutDetailView: View {
         let icon: String
     }
 
+    // Sport and date are already in the header (icon + title) and aren't
+    // repeated here.
     private var detailRowList: [DetailRow] {
-        var rows: [DetailRow] = [
-            .init(label: "Sport", value: family.displayName, icon: family.icon),
-        ]
+        var rows: [DetailRow] = []
         if family == .swim, let pool = workout.poolLengthMeters, pool > 0 {
             rows.append(.init(label: "Pool", value: PlannedWorkoutFormat.distance(pool), icon: "ruler"))
         }
-        rows.append(.init(label: "Date", value: workout.date.formatted(.dateTime.weekday(.wide).month().day()), icon: "calendar"))
         if let startTimeText {
             rows.append(.init(label: "Start time", value: startTimeText, icon: "clock"))
         } else if let segment = workout.startMinute.flatMap({ TimeOfDaySegment.containing(minute: $0) }) {
@@ -259,6 +283,24 @@ struct PlannedWorkoutDetailView: View {
                 .padding(.vertical, Theme.Spacing.s)
             }
         }
+        .cardSurface()
+    }
+
+    // MARK: Apple Watch (strength)
+    //
+    // WorkoutKit carries no sets, reps or weights, so the watch only records the
+    // session and the athlete reads the plan here. "Keep plan on screen" holds
+    // the display awake for exactly that; it logs nothing.
+
+    private var appleWatchCard: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+            Label("Apple Watch", systemImage: "applewatch").font(.headline)
+            Text("Start a Strength workout on the watch. It can't show sets or weights, so read the plan from here.")
+                .font(.subheadline).foregroundStyle(.secondary)
+            Toggle("Keep plan on screen", isOn: $keepAwake)
+                .font(.subheadline)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
     }
 

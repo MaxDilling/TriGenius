@@ -6,10 +6,11 @@ import WorkoutKit
 // MARK: - Apple Watch (WorkoutKit) builder
 //
 // Translates the canonical normalized `workout_data` (the same shape Garmin
-// consumes) into a WorkoutKit `CustomWorkout`: warmup/cooldown `WorkoutStep`s,
-// `IntervalBlock`s (repeats) of `IntervalStep`s, time/distance goals, and
-// HR/power/pace/speed/cadence range alerts. Swim/bike/run are structured;
-// strength/yoga/other return nil and the target reports a clear message.
+// consumes) into a WorkoutKit workout: swim/bike/run become a `CustomWorkout`
+// (warmup/cooldown `WorkoutStep`s, `IntervalBlock`s of `IntervalStep`s,
+// time/distance goals, HR/power/pace/speed/cadence range alerts); strength
+// becomes a `SingleGoalWorkout`, since WorkoutKit can express no sets, reps or
+// weights. Yoga/other return nil and the target reports a clear message.
 // `CustomWorkout` traps for anything its initializer rejects, so membership is
 // gated on `CustomWorkout.supportsActivity` and each alert on
 // `CustomWorkout.supportsAlert` — an alert the activity can't carry (e.g. a pace
@@ -17,9 +18,25 @@ import WorkoutKit
 
 enum AppleWatchWorkoutBuilder {
 
-    /// Build a `CustomWorkout` from normalized `workout_data`, or nil if the sport
-    /// can't be expressed as a structured WorkoutKit workout.
-    static func customWorkout(from workoutData: [String: Any]) -> CustomWorkout? {
+    /// Build the schedulable workout from normalized `workout_data`, or nil if
+    /// the sport can't be expressed on the watch at all.
+    static func workout(from workoutData: [String: Any]) -> WorkoutPlan.Workout? {
+        if SportFamily(sportKey: (workoutData["sport"] as? String) ?? "other") == .strength {
+            // The exercises stay in the app — the watch gets the session's
+            // planned length so it can be started and recorded.
+            let activity = HKWorkoutActivityType.traditionalStrengthTraining
+            let goal = durationGoal(workoutData)
+            guard SingleGoalWorkout.supportsGoal(goal, activity: activity, location: .indoor) else { return nil }
+            return .goal(SingleGoalWorkout(activity: activity, location: .indoor, goal: goal))
+        }
+        return customWorkout(from: workoutData).map { .custom($0) }
+    }
+
+    private static func durationGoal(_ workoutData: [String: Any]) -> WorkoutGoal {
+        (workoutData["duration_minutes"] as? NSNumber).map { .time($0.doubleValue * 60, .seconds) } ?? .open
+    }
+
+    private static func customWorkout(from workoutData: [String: Any]) -> CustomWorkout? {
         let sportKey = (workoutData["sport"] as? String) ?? "other"
         guard let (activity, location) = activityType(for: sportKey),
               CustomWorkout.supportsActivity(activity) else { return nil }
@@ -33,10 +50,7 @@ enum AppleWatchWorkoutBuilder {
 
         if steps.isEmpty {
             // No structure — a single open/duration block.
-            let goal: WorkoutGoal = (workoutData["duration_minutes"] as? NSNumber).map {
-                .time($0.doubleValue * 60, .seconds)
-            } ?? .open
-            blocks = [IntervalBlock(steps: [IntervalStep(.work, goal: goal)], iterations: 1)]
+            blocks = [IntervalBlock(steps: [IntervalStep(.work, goal: durationGoal(workoutData))], iterations: 1)]
         } else {
             for step in steps {
                 let type = (step["type"] as? String) ?? "main"

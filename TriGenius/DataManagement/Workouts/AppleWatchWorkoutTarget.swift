@@ -33,7 +33,7 @@ struct AppleWatchWorkoutTarget: WorkoutSyncTarget {
     }
 
     func schedule(_ workout: PlannedWorkout) async -> WorkoutWriteResult {
-        guard let custom = AppleWatchWorkoutBuilder.customWorkout(from: workout.workoutData) else {
+        guard let built = AppleWatchWorkoutBuilder.workout(from: workout.workoutData) else {
             return .failure("\(workout.sport.capitalized) workouts can't be sent to the Apple Watch as a structured workout.")
         }
         guard await ensureAuthorized() else {
@@ -41,14 +41,13 @@ struct AppleWatchWorkoutTarget: WorkoutSyncTarget {
         }
         guard let components = Self.dateComponents(from: workout.date) else { return .failure("Invalid date.") }
         let id = UUID()
-        let plan = WorkoutPlan(.custom(custom), id: id)
-        await WorkoutScheduler.shared.schedule(plan, at: components)
+        await WorkoutScheduler.shared.schedule(WorkoutPlan(built, id: id), at: components)
         return WorkoutWriteResult(success: true, externalId: id.uuidString,
-                                  message: "Scheduled '\(custom.displayName ?? workout.name)' to the Apple Watch.")
+                                  message: "Scheduled '\(workout.name)' to the Apple Watch.")
     }
 
     func update(externalId: String, _ workout: PlannedWorkout) async -> WorkoutWriteResult {
-        guard let custom = AppleWatchWorkoutBuilder.customWorkout(from: workout.workoutData) else {
+        guard let built = AppleWatchWorkoutBuilder.workout(from: workout.workoutData) else {
             return .failure("This sport can't be sent to the Apple Watch as a structured workout.")
         }
         guard let id = UUID(uuidString: externalId), let components = Self.dateComponents(from: workout.date) else {
@@ -56,8 +55,7 @@ struct AppleWatchWorkoutTarget: WorkoutSyncTarget {
         }
         guard await ensureAuthorized() else { return .failure("Apple Watch scheduling isn't authorized.") }
         await removeScheduled(id: id)
-        let plan = WorkoutPlan(.custom(custom), id: id)
-        await WorkoutScheduler.shared.schedule(plan, at: components)
+        await WorkoutScheduler.shared.schedule(WorkoutPlan(built, id: id), at: components)
         return WorkoutWriteResult(success: true, externalId: externalId, message: "Updated the Apple Watch workout.")
     }
 

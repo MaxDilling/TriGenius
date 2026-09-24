@@ -1,0 +1,699 @@
+[
+  {
+    "id": "back_squat",
+    "name": "Back squat",
+    "category": "compound",
+    "equipment": "barbell",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "SQUAT",
+    "garmin_name": "BARBELL_BACK_SQUAT"
+  },
+  {
+    "id": "front_squat",
+    "name": "Front squat",
+    "category": "compound",
+    "equipment": "barbell",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "SQUAT",
+    "garmin_name": "BARBELL_FRONT_SQUAT"
+  },
+  {
+    "id": "goblet_squat",
+    "name": "Goblet squat",
+    "category": "compound",
+    "equipment": "dumbbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "SQUAT",
+    "garmin_name": "GOBLET_SQUAT"
+  },
+  {
+    "id": "bulgarian_split_squat",
+    "name": "Bulgarian split squat",
+    "category": "compound",
+    "equipment": "dumbbell",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "LUNGE",
+    "garmin_name": "DUMBBELL_BULGARIAN_SPLIT_SQUAT"
+  },
+  {
+    "id": "leg_press",
+    "name": "Leg press",
+    "category": "compound",
+    "equipment": "machine",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "SQUAT",
+    "garmin_name": "LEG_PRESS"
+  },
+  {
+    "id": "hack_squat",
+    "name": "Hack squat",
+    "category": "compound",
+    "equipment": "machine",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "SQUAT",
+    "garmin_name": "BARBELL_HACK_SQUAT"
+  },
+  {
+    "id": "walking_lunge",
+    "name": "Walking lunge",
+    "category": "compound",
+    "equipment": "dumbbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "LUNGE",
+    "garmin_name": "WALKING_DUMBBELL_LUNGE"
+  },
+  {
+    "id": "step_up",
+    "name": "Step-up",
+    "category": "compound",
+    "equipment": "dumbbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "SQUAT",
+    "garmin_name": "DUMBBELL_STEP_UP"
+  },
+  {
+    "id": "leg_extension",
+    "name": "Leg extension",
+    "category": "isolation",
+    "equipment": "machine",
+    "is_time_based": false,
+    "primary_groups": [
+      "quads"
+    ],
+    "secondary_groups": [],
+    "loads_tendon": true
+  },
+  {
+    "id": "wall_sit",
+    "name": "Wall sit",
+    "category": "isometric",
+    "equipment": "bodyweight",
+    "is_time_based": true,
+    "loads_tendon": false,
+    "garmin_category": "SQUAT",
+    "garmin_name": "BODY_WEIGHT_WALL_SQUAT"
+  },
+  {
+    "id": "conventional_deadlift",
+    "name": "Conventional deadlift",
+    "category": "compound",
+    "equipment": "barbell",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "DEADLIFT",
+    "garmin_name": "BARBELL_DEADLIFT"
+  },
+  {
+    "id": "romanian_deadlift",
+    "name": "Romanian deadlift",
+    "category": "compound",
+    "equipment": "barbell",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "DEADLIFT",
+    "garmin_name": "ROMANIAN_DEADLIFT"
+  },
+  {
+    "id": "sumo_deadlift",
+    "name": "Sumo deadlift",
+    "category": "compound",
+    "equipment": "barbell",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "DEADLIFT",
+    "garmin_name": "SUMO_DEADLIFT"
+  },
+  {
+    "id": "trap_bar_deadlift",
+    "name": "Trap bar deadlift",
+    "category": "compound",
+    "equipment": "barbell",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "DEADLIFT",
+    "garmin_name": "TRAP_BAR_DEADLIFT"
+  },
+  {
+    "id": "single_leg_rdl",
+    "name": "Single-leg RDL",
+    "category": "compound",
+    "equipment": "dumbbell",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "DEADLIFT",
+    "garmin_name": "SINGLE_LEG_ROMANIAN_DEADLIFT_WITH_DUMBBELL"
+  },
+  {
+    "id": "good_morning",
+    "name": "Good morning",
+    "category": "compound",
+    "equipment": "barbell",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "LEG_CURL",
+    "garmin_name": "GOOD_MORNING"
+  },
+  {
+    "id": "hip_thrust",
+    "name": "Hip thrust",
+    "category": "compound",
+    "equipment": "barbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "HIP_RAISE",
+    "garmin_name": "BARBELL_HIP_THRUST_WITH_BENCH"
+  },
+  {
+    "id": "glute_bridge",
+    "name": "Glute bridge",
+    "category": "isolation",
+    "equipment": "bodyweight",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "HIP_RAISE",
+    "garmin_name": "HIP_RAISE"
+  },
+  {
+    "id": "kettlebell_swing",
+    "name": "Kettlebell swing",
+    "category": "compound",
+    "equipment": "kettlebell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "HIP_RAISE",
+    "garmin_name": "KETTLEBELL_SWING"
+  },
+  {
+    "id": "nordic_hamstring_curl",
+    "name": "Nordic hamstring curl",
+    "category": "isolation",
+    "equipment": "bodyweight",
+    "is_time_based": false,
+    "primary_groups": [
+      "hamstrings"
+    ],
+    "secondary_groups": [],
+    "loads_tendon": true
+  },
+  {
+    "id": "lying_leg_curl",
+    "name": "Lying leg curl",
+    "category": "isolation",
+    "equipment": "machine",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "LEG_CURL",
+    "garmin_name": "LEG_CURL"
+  },
+  {
+    "id": "seated_leg_curl",
+    "name": "Seated leg curl",
+    "category": "isolation",
+    "equipment": "machine",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "LEG_CURL",
+    "garmin_name": "LEG_CURL"
+  },
+  {
+    "id": "back_extension",
+    "name": "Back extension",
+    "category": "isolation",
+    "equipment": "machine",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "HYPEREXTENSION",
+    "garmin_name": "HYPEREXTENSION"
+  },
+  {
+    "id": "standing_calf_raise",
+    "name": "Standing calf raise",
+    "category": "isolation",
+    "equipment": "machine",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "CALF_RAISE",
+    "garmin_name": "STANDING_CALF_RAISE"
+  },
+  {
+    "id": "seated_calf_raise",
+    "name": "Seated calf raise",
+    "category": "isolation",
+    "equipment": "machine",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "CALF_RAISE",
+    "garmin_name": "SEATED_CALF_RAISE"
+  },
+  {
+    "id": "single_leg_calf_raise",
+    "name": "Single-leg calf raise",
+    "category": "isolation",
+    "equipment": "bodyweight",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "CALF_RAISE",
+    "garmin_name": "SINGLE_LEG_STANDING_CALF_RAISE"
+  },
+  {
+    "id": "box_jump",
+    "name": "Box jump",
+    "category": "plyometric",
+    "equipment": "bodyweight",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "PLYO",
+    "garmin_name": "BOX_JUMP"
+  },
+  {
+    "id": "cable_hip_adduction",
+    "name": "Cable hip adduction",
+    "category": "isolation",
+    "equipment": "cable",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "HIP_STABILITY",
+    "garmin_name": "STANDING_ADDUCTION"
+  },
+  {
+    "id": "copenhagen_plank",
+    "name": "Copenhagen plank",
+    "category": "isometric",
+    "equipment": "bodyweight",
+    "is_time_based": true,
+    "primary_groups": [
+      "adductors"
+    ],
+    "secondary_groups": [
+      "lowBack"
+    ],
+    "loads_tendon": true
+  },
+  {
+    "id": "lateral_lunge",
+    "name": "Lateral lunge",
+    "category": "compound",
+    "equipment": "dumbbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "LUNGE",
+    "garmin_name": "DUMBBELL_SIDE_LUNGE"
+  },
+  {
+    "id": "hanging_leg_raise",
+    "name": "Hanging leg raise",
+    "category": "core",
+    "equipment": "bodyweight",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "LEG_RAISE",
+    "garmin_name": "HANGING_LEG_RAISE"
+  },
+  {
+    "id": "cable_hip_flexion",
+    "name": "Cable hip flexion",
+    "category": "isolation",
+    "equipment": "cable",
+    "is_time_based": false,
+    "primary_groups": [
+      "hipFlexors"
+    ],
+    "secondary_groups": [],
+    "loads_tendon": false
+  },
+  {
+    "id": "hip_abduction_machine",
+    "name": "Hip abduction machine",
+    "category": "isolation",
+    "equipment": "machine",
+    "is_time_based": false,
+    "primary_groups": [
+      "glutes"
+    ],
+    "secondary_groups": [
+      "adductors"
+    ],
+    "loads_tendon": false
+  },
+  {
+    "id": "monster_walk_band",
+    "name": "Monster walk (band)",
+    "category": "isolation",
+    "equipment": "band",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "HIP_STABILITY",
+    "garmin_name": "LATERAL_WALKS_WITH_BAND_AT_ANKLES"
+  },
+  {
+    "id": "pull_up",
+    "name": "Pull-up",
+    "category": "compound",
+    "equipment": "bodyweight",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "PULL_UP",
+    "garmin_name": "PULL_UP"
+  },
+  {
+    "id": "chin_up",
+    "name": "Chin-up",
+    "category": "compound",
+    "equipment": "bodyweight",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "PULL_UP",
+    "garmin_name": "CHIN_UP"
+  },
+  {
+    "id": "lat_pulldown",
+    "name": "Lat pulldown",
+    "category": "compound",
+    "equipment": "cable",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "PULL_UP",
+    "garmin_name": "LAT_PULLDOWN"
+  },
+  {
+    "id": "barbell_row",
+    "name": "Barbell row",
+    "category": "compound",
+    "equipment": "barbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "ROW",
+    "garmin_name": "BARBELL_ROW"
+  },
+  {
+    "id": "seated_cable_row",
+    "name": "Seated cable row",
+    "category": "compound",
+    "equipment": "cable",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "ROW",
+    "garmin_name": "SEATED_CABLE_ROW"
+  },
+  {
+    "id": "single_arm_dumbbell_row",
+    "name": "Single-arm dumbbell row",
+    "category": "compound",
+    "equipment": "dumbbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "ROW",
+    "garmin_name": "DUMBBELL_ROW"
+  },
+  {
+    "id": "face_pull",
+    "name": "Face pull",
+    "category": "isolation",
+    "equipment": "cable",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "ROW",
+    "garmin_name": "FACE_PULL"
+  },
+  {
+    "id": "rear_delt_fly",
+    "name": "Rear delt fly",
+    "category": "isolation",
+    "equipment": "dumbbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "LATERAL_RAISE",
+    "garmin_name": "OVERHAND_GRIP_REAR_LATERAL_RAISE"
+  },
+  {
+    "id": "shrug",
+    "name": "Shrug",
+    "category": "isolation",
+    "equipment": "barbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "SHRUG",
+    "garmin_name": "BARBELL_SHRUG"
+  },
+  {
+    "id": "inverted_row",
+    "name": "Inverted row",
+    "category": "compound",
+    "equipment": "bodyweight",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "ROW",
+    "garmin_name": "INVERTED_ROW"
+  },
+  {
+    "id": "overhead_press",
+    "name": "Overhead press",
+    "category": "compound",
+    "equipment": "barbell",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "SHOULDER_PRESS",
+    "garmin_name": "OVERHEAD_BARBELL_PRESS"
+  },
+  {
+    "id": "dumbbell_shoulder_press",
+    "name": "Dumbbell shoulder press",
+    "category": "compound",
+    "equipment": "dumbbell",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "SHOULDER_PRESS",
+    "garmin_name": "DUMBBELL_SHOULDER_PRESS"
+  },
+  {
+    "id": "push_press",
+    "name": "Push press",
+    "category": "compound",
+    "equipment": "barbell",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "SHOULDER_PRESS",
+    "garmin_name": "BARBELL_PUSH_PRESS"
+  },
+  {
+    "id": "lateral_raise",
+    "name": "Lateral raise",
+    "category": "isolation",
+    "equipment": "dumbbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "LATERAL_RAISE",
+    "garmin_name": "DUMBBELL_LATERAL_RAISE"
+  },
+  {
+    "id": "front_raise",
+    "name": "Front raise",
+    "category": "isolation",
+    "equipment": "dumbbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "LATERAL_RAISE",
+    "garmin_name": "FRONT_RAISE"
+  },
+  {
+    "id": "bench_press",
+    "name": "Bench press",
+    "category": "compound",
+    "equipment": "barbell",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "BENCH_PRESS",
+    "garmin_name": "BARBELL_BENCH_PRESS"
+  },
+  {
+    "id": "incline_bench_press",
+    "name": "Incline bench press",
+    "category": "compound",
+    "equipment": "barbell",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "BENCH_PRESS",
+    "garmin_name": "INCLINE_BARBELL_BENCH_PRESS"
+  },
+  {
+    "id": "dumbbell_bench_press",
+    "name": "Dumbbell bench press",
+    "category": "compound",
+    "equipment": "dumbbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "BENCH_PRESS",
+    "garmin_name": "DUMBBELL_BENCH_PRESS"
+  },
+  {
+    "id": "push_up",
+    "name": "Push-up",
+    "category": "compound",
+    "equipment": "bodyweight",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "PUSH_UP",
+    "garmin_name": "PUSH_UP"
+  },
+  {
+    "id": "dip",
+    "name": "Dip",
+    "category": "compound",
+    "equipment": "bodyweight",
+    "is_time_based": false,
+    "loads_tendon": true,
+    "garmin_category": "TRICEPS_EXTENSION",
+    "garmin_name": "BODY_WEIGHT_DIP"
+  },
+  {
+    "id": "landmine_press",
+    "name": "Landmine press",
+    "category": "compound",
+    "equipment": "barbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "SHOULDER_PRESS",
+    "garmin_name": "STANDING_LANDMINE_PRESS"
+  },
+  {
+    "id": "plank",
+    "name": "Plank",
+    "category": "isometric",
+    "equipment": "bodyweight",
+    "is_time_based": true,
+    "loads_tendon": false,
+    "garmin_category": "PLANK",
+    "garmin_name": "PLANK"
+  },
+  {
+    "id": "side_plank",
+    "name": "Side plank",
+    "category": "isometric",
+    "equipment": "bodyweight",
+    "is_time_based": true,
+    "loads_tendon": false,
+    "garmin_category": "PLANK",
+    "garmin_name": "SIDE_PLANK"
+  },
+  {
+    "id": "pallof_press",
+    "name": "Pallof press",
+    "category": "core",
+    "equipment": "cable",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "CORE",
+    "garmin_name": "CABLE_CORE_PRESS"
+  },
+  {
+    "id": "cable_woodchopper",
+    "name": "Cable woodchopper",
+    "category": "core",
+    "equipment": "cable",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "CHOP",
+    "garmin_name": "CABLE_WOODCHOP"
+  },
+  {
+    "id": "dead_bug",
+    "name": "Dead bug",
+    "category": "core",
+    "equipment": "bodyweight",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "HIP_STABILITY",
+    "garmin_name": "DEAD_BUG"
+  },
+  {
+    "id": "russian_twist",
+    "name": "Russian twist",
+    "category": "core",
+    "equipment": "bodyweight",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "CORE",
+    "garmin_name": "RUSSIAN_TWIST"
+  },
+  {
+    "id": "hollow_body_hold",
+    "name": "Hollow body hold",
+    "category": "isometric",
+    "equipment": "bodyweight",
+    "is_time_based": true,
+    "primary_groups": [
+      "lowBack",
+      "hipFlexors"
+    ],
+    "secondary_groups": [],
+    "loads_tendon": false
+  },
+  {
+    "id": "farmers_carry",
+    "name": "Farmer's carry",
+    "category": "carry",
+    "equipment": "dumbbell",
+    "is_time_based": true,
+    "loads_tendon": false,
+    "garmin_category": "CARRY",
+    "garmin_name": "FARMERS_CARRY"
+  },
+  {
+    "id": "suitcase_carry",
+    "name": "Suitcase carry",
+    "category": "carry",
+    "equipment": "dumbbell",
+    "is_time_based": true,
+    "loads_tendon": false,
+    "garmin_category": "CARRY",
+    "garmin_name": "CARRY"
+  },
+  {
+    "id": "bicep_curl",
+    "name": "Bicep curl",
+    "category": "isolation",
+    "equipment": "dumbbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "CURL",
+    "garmin_name": "DUMBBELL_BICEPS_CURL"
+  },
+  {
+    "id": "hammer_curl",
+    "name": "Hammer curl",
+    "category": "isolation",
+    "equipment": "dumbbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "CURL",
+    "garmin_name": "DUMBBELL_HAMMER_CURL"
+  },
+  {
+    "id": "triceps_pushdown",
+    "name": "Triceps pushdown",
+    "category": "isolation",
+    "equipment": "cable",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "TRICEPS_EXTENSION",
+    "garmin_name": "TRICEPS_PRESSDOWN"
+  },
+  {
+    "id": "overhead_triceps_extension",
+    "name": "Overhead triceps extension",
+    "category": "isolation",
+    "equipment": "dumbbell",
+    "is_time_based": false,
+    "loads_tendon": false,
+    "garmin_category": "TRICEPS_EXTENSION",
+    "garmin_name": "OVERHEAD_DUMBBELL_TRICEPS_EXTENSION"
+  }
+]

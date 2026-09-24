@@ -98,9 +98,10 @@ enum SwimStroke: String, CaseIterable, Identifiable {
 
 // MARK: - Step draft
 
-/// One editable step: a leaf, or a repeat block over child steps. Prefill keeps
-/// whatever nesting a stored plan carries; the editor only *offers* repeats at the
-/// top level (matching the display layer and the Garmin builder).
+/// One editable step: a leaf, a repeat block over child steps, or an exercise
+/// (strength only). Prefill keeps whatever nesting a stored plan carries; the
+/// editor only *offers* repeats at the top level (matching the display layer
+/// and the Garmin builder).
 struct StepDraft: Identifiable {
     let id = UUID()
     var isRepeat = false
@@ -119,6 +120,29 @@ struct StepDraft: Identifiable {
     var repeatCount = 4
     var skipLastRest = true
     var children: [StepDraft] = []
+    /// Rest between rounds of a strength circuit. Endurance repeat blocks
+    /// instead carry rest as an explicit "rest"/"recovery" child step with its
+    /// own duration; a circuit's children are all exercises, so this is the
+    /// only place that duration can live.
+    var restBetweenRoundsSeconds = 60
+    // Exercise fields (strength only). The UI is uniform-per-exercise (one
+    // reps/weight/rest applied to every set); the stored schema is per-set
+    // (`sets: [...]`) so a coach- or Garmin-authored pyramid round-trips
+    // without a schema change, even though this editor always writes N
+    // identical entries.
+    var isExercise = false
+    /// Nil for a free-typed custom exercise (not in `ExerciseLibrary`).
+    var exerciseId: String?
+    var exerciseName = ""
+    /// True for holds (plank, wall sit, carries): the editor asks for a
+    /// duration per set instead of a rep count.
+    var exerciseIsTimeBased = false
+    var exerciseSets = 3
+    var exerciseReps = 10
+    var exerciseSetSeconds = 30
+    /// Nil = bodyweight.
+    var exerciseWeightKg: Double?
+    var exerciseRestSeconds = 90
 
     init(isRepeat: Bool = false, kind: StepKind = .interval) {
         self.isRepeat = isRepeat
@@ -128,13 +152,65 @@ struct StepDraft: Identifiable {
         }
     }
 
+    /// A fresh exercise step, defaulted to the first library entry the athlete's
+    /// `StrengthProfile` allows — or "Custom exercise" when none is available.
+    static func exercise() -> StepDraft {
+        var step = StepDraft()
+        step.isExercise = true
+        let profile = StrengthProfile.stored
+        if let first = ExerciseLibrary.all.first(where: profile.allows) {
+            step.exerciseId = first.id
+            step.exerciseName = first.name
+            step.exerciseIsTimeBased = first.isTimeBased
+        } else {
+            step.exerciseName = "Custom exercise"
+        }
+        return step
+    }
+
+    /// A fresh circuit/superset: a repeat block whose children are exercises
+    /// rather than the endurance interval/recovery pair `StepDraft(isRepeat:
+    /// true)` defaults to.
+    static func exerciseCircuit() -> StepDraft {
+        var step = StepDraft(isRepeat: true)
+        step.children = [StepDraft.exercise(), StepDraft.exercise()]
+        return step
+    }
+
+    /// A pause between exercises: a plain time-ended rest leaf, the same step an
+    /// endurance plan uses.
+    static func exerciseRest() -> StepDraft {
+        var step = StepDraft(kind: .rest)
+        step.durationSeconds = 120
+        return step
+    }
+
     /// Parse a compact step dict. An out-of-schema `type` token (e.g. Garmin's
     /// "other") shows as Interval in the editor — visible before anything is saved.
     init(dict: [String: Any]) {
+        if (dict["type"] as? String) == "exercise" {
+            isExercise = true
+            exerciseId = dict["exercise_id"] as? String
+            exerciseName = (dict["exercise_name"] as? String) ?? "Exercise"
+            exerciseIsTimeBased = dict["is_time_based"] as? Bool ?? false
+            let sets = dict["sets"] as? [[String: Any]] ?? []
+            exerciseSets = max(1, sets.count)
+            // Non-uniform (per-set) prescriptions collapse to the first set's
+            // values — this editor only offers a uniform UI; the stepped
+            // per-set schema exists for authors that vary sets (not this one).
+            if let firstSet = sets.first {
+                exerciseReps = Coerce.int(firstSet["reps"]) ?? exerciseReps
+                exerciseSetSeconds = Coerce.int(firstSet["duration_seconds"]) ?? exerciseSetSeconds
+                exerciseWeightKg = Coerce.double(firstSet["weight_kg"])
+                exerciseRestSeconds = Coerce.int(firstSet["rest_seconds"]) ?? exerciseRestSeconds
+            }
+            return
+        }
         if let childDicts = dict["repeat_steps"] as? [[String: Any]] {
             isRepeat = true
             repeatCount = Coerce.int(dict["repeat_count"]) ?? 4
             skipLastRest = dict["skip_last_rest"] as? Bool ?? true
+            restBetweenRoundsSeconds = Coerce.int(dict["rest_between_rounds_seconds"]) ?? restBetweenRoundsSeconds
             children = childDicts.map { StepDraft(dict: $0) }
             return
         }
@@ -153,13 +229,33 @@ struct StepDraft: Identifiable {
 
     /// Serialize back to the compact schema. Raw units, no conversion.
     func dict(swim: Bool) -> [String: Any] {
+        if isExercise {
+            var setDict: [String: Any] = ["rest_seconds": exerciseRestSeconds]
+            if exerciseIsTimeBased { setDict["duration_seconds"] = exerciseSetSeconds } else { setDict["reps"] = exerciseReps }
+            if let exerciseWeightKg { setDict["weight_kg"] = exerciseWeightKg }
+            var d: [String: Any] = [
+                "type": "exercise",
+                "exercise_name": exerciseName,
+                "is_time_based": exerciseIsTimeBased,
+                "sets": Array(repeating: setDict, count: max(1, exerciseSets)),
+            ]
+            if let exerciseId { d["exercise_id"] = exerciseId }
+            return d
+        }
         if isRepeat {
-            return [
+            var d: [String: Any] = [
                 "type": "repeat",
                 "repeat_count": repeatCount,
                 "skip_last_rest": skipLastRest,
                 "repeat_steps": children.map { $0.dict(swim: swim) },
             ]
+            // Exercise children have no rest-kind sibling step the way
+            // endurance repeat blocks do, so a circuit's between-round rest
+            // has nowhere else to live.
+            if children.contains(where: { $0.isExercise }) {
+                d["rest_between_rounds_seconds"] = restBetweenRoundsSeconds
+            }
+            return d
         }
         var d: [String: Any] = ["type": kind.rawValue, "end_condition": end.rawValue]
         switch end {

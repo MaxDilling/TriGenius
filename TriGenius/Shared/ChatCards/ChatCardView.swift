@@ -98,6 +98,12 @@ private struct WorkoutChatCard: View {
                 }
                 .padding(.leading, 44 + Theme.Spacing.m)
             }
+            if let workout, !workout.isCompleted {
+                let blocks = StrengthSets.blocks(planned: WorkoutPayloadBuilder.parseSteps(workout.stepsJSON) ?? [])
+                if !blocks.isEmpty {
+                    ExerciseLines(blocks: blocks).padding(.leading, 44 + Theme.Spacing.m)
+                }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
@@ -152,6 +158,47 @@ private struct DeletedWorkoutCard: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
         .coachAccent()
+    }
+}
+
+// MARK: - Strength exercises
+//
+// What the coach put into a strength plan, one line per exercise ("Back squat ·
+// 3 × 5 @ 60 kg"), so the athlete reads the session without opening it. The
+// full set table is one tap away on the detail.
+
+private struct ExerciseLines: View {
+    let blocks: [StrengthSets.Block]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                if block.rounds > 1 {
+                    Label("\(block.rounds)× circuit", systemImage: "repeat").font(.caption.weight(.semibold))
+                }
+                ForEach(Array(block.items.enumerated()), id: \.offset) { _, item in
+                    Text(Self.line(item))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.leading, block.rounds > 1 ? Theme.Spacing.m : 0)
+                }
+            }
+        }
+    }
+
+    /// "3 × 10 @ 20 kg" for uniform sets, "10 / 8 / 8" when the reps vary; the
+    /// weight only when every set carries the same one.
+    private static func line(_ item: StrengthSets.Item) -> String {
+        guard case .exercise(let lines) = item, let first = lines.first else {
+            if case .rest(let seconds) = item { return "Rest \(ExerciseSetsCard.time(seconds))" }
+            return ""
+        }
+        let sets = lines.compactMap(\.set)
+        let extents = sets.map { $0.reps.map(String.init) ?? ExerciseSetsCard.time($0.seconds) }
+        let volume = Set(extents).count == 1 ? "\(sets.count) × \(extents[0])" : extents.joined(separator: " / ")
+        let loads = Set(sets.map(ExerciseSetsCard.load))
+        let load = loads.count == 1 ? loads.first.map { $0 == "BW" ? " · BW" : " @ \($0) kg" } ?? "" : ""
+        return "\(first.title) · \(volume)\(load)"
     }
 }
 

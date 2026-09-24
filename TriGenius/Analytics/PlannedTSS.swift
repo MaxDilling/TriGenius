@@ -93,7 +93,7 @@ enum PlannedTSS {
     /// conversion uses — so a fully RPE-prescribed session still gets a
     /// structure-shaped estimate instead of the flat duration heuristic.
     static func estimate(compactSteps: [[String: Any]], family: SportFamily, thresholds: PerformanceSnapshot) -> Double? {
-        estimate(rawSteps: flatten(compactSteps), family: family, thresholds: thresholds)
+        estimate(rawSteps: leaves(compactSteps), family: family, thresholds: thresholds)
     }
 
     static func estimate(rawSteps: [RawStep], family: SportFamily, thresholds: PerformanceSnapshot) -> Double? {
@@ -120,7 +120,7 @@ enum PlannedTSS {
     /// `.estimatedFromDuration` (at least one time step fell back to the assumed
     /// speed). Nil when there are no measurable steps.
     static func totalDistance(compactSteps: [[String: Any]], family: SportFamily, thresholds: PerformanceSnapshot) -> (meters: Double, source: DistanceSource)? {
-        let raw = flatten(compactSteps)
+        let raw = leaves(compactSteps)
         guard !raw.isEmpty else { return nil }
         var meters = 0.0
         var hasTimeStep = false
@@ -152,7 +152,7 @@ enum PlannedTSS {
     /// a "~45 min" duration for distance-prescribed sessions that carry no explicit
     /// duration target.
     static func totalDurationSeconds(compactSteps: [[String: Any]], family: SportFamily, thresholds: PerformanceSnapshot) -> Double? {
-        let raw = flatten(compactSteps)
+        let raw = leaves(compactSteps)
         guard !raw.isEmpty else { return nil }
         var seconds = 0.0
         for step in raw {
@@ -243,6 +243,16 @@ enum PlannedTSS {
     }
 
     // MARK: Compact dict → RawStep (handles repeat blocks)
+
+    /// A strength plan's steps are its exercise list: its rest steps are pauses
+    /// between exercises, not an endurance extent to time, range or score.
+    static func isExerciseList(_ steps: [[String: Any]]) -> Bool {
+        steps.contains { ($0["type"] as? String) == "exercise" || isExerciseList($0["repeat_steps"] as? [[String: Any]] ?? []) }
+    }
+
+    private static func leaves(_ steps: [[String: Any]]) -> [RawStep] {
+        isExerciseList(steps) ? [] : flatten(steps)
+    }
 
     /// Flatten compact step dicts into leaf `RawStep`s, expanding repeat blocks
     /// (`repeat_count` × `repeat_steps`). Both the Garmin adapter and the coach's

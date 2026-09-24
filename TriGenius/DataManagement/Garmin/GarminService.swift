@@ -249,6 +249,10 @@ nonisolated final class GarminService: Sendable {
             data["swimming"] = swimming
             // Effective distance + sTSS are resolved by the store at ingest
             // (`TrainingDataStore.ingest` → `TSSScoring.score`).
+        } else if family == .strength, let activityId,
+                  let sets = try? await client.getActivityExerciseSets(id: activityId),
+                  let exercises = GarminTransform.strengthExercises(sets), !exercises.isEmpty {
+            data["strength"] = ["exercises": exercises]
         }
 
         // Downsampled metric streams for the detail charts. Cadence key is per

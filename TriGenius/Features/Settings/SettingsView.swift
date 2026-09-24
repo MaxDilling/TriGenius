@@ -59,6 +59,7 @@ enum DashboardSection: String, CaseIterable, Identifiable {
     case planBanner = "plan_banner"
     case upNext = "up_next"
     case performance = "performance"
+    case tissueLoad = "tissue_load"
     case weeklyTarget = "weekly_target"
     case aiInsight = "ai_insight"
 
@@ -68,6 +69,7 @@ enum DashboardSection: String, CaseIterable, Identifiable {
         case .planBanner: return "Plan Banner"
         case .upNext: return "Up Next"
         case .performance: return "Fitness & Form"
+        case .tissueLoad: return "Tissue Load"
         case .weeklyTarget: return "Weekly Target"
         case .aiInsight: return "AI Summary"
         }
@@ -77,6 +79,7 @@ enum DashboardSection: String, CaseIterable, Identifiable {
         case .planBanner: return "flag.checkered"
         case .upNext: return "calendar.day.timeline.left"
         case .performance: return "chart.xyaxis.line"
+        case .tissueLoad: return "figure.strengthtraining.traditional"
         case .weeklyTarget: return "target"
         case .aiInsight: return "sparkles"
         }
@@ -582,6 +585,13 @@ struct SettingsView: View {
                             .font(.body)
                     }
                     .padding(.vertical, 2)
+                }
+
+                NavigationLink {
+                    StrengthProfileView(memory: memory)
+                } label: {
+                    LabeledContent("Strength profile",
+                                   value: memory.sportProgress.progress(for: "strength").strengthProfile.place?.label ?? "Set up")
                 }
 
                 Button(role: .destructive) {

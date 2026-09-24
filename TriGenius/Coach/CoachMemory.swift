@@ -226,6 +226,10 @@ final class CoachMemory: ObservableObject {
                 limits.append("[\(i.refId)] \(sport) injury: \(i.injury) — \(i.impact)")
             }
         }
+        let strength = sportProgress.progress(for: "strength").strengthProfile
+        for area in StrengthProfile.Area.allCases where strength.excludedAreas.contains(area) {
+            limits.append("strength: works around the \(area.label.lowercased()) — no exercise loading the \(area.group.label.lowercased()) (get_exercises already leaves them out)")
+        }
         if !limits.isEmpty {
             parts.append("\nHARD LIMITS (binding — never prescribe against these):")
             limits.forEach { parts.append("- \($0)") }
@@ -246,6 +250,7 @@ final class CoachMemory: ObservableObject {
             if !sp.abilities.isEmpty { bits.append("can do: \(sp.abilities.joined(separator: ", "))") }
             if let focus = sp.currentFocus { bits.append("focus: \(focus)") }
             if !sp.equipment.isEmpty { bits.append("equipment: \(sp.equipment.joined(separator: ", "))") }
+            if let place = sp.strengthProfile.place { bits.append("trains at: \(place.label.lowercased())") }
             if !bits.isEmpty { sportLines.append("- \(sport): \(bits.joined(separator: "; "))") }
         }
         if !sportLines.isEmpty {
@@ -444,8 +449,16 @@ struct SportProgress {
     var maxContinuous: String?
     var equipment: [String] = []
     var notes: String?
+    /// Strength only — read through `strengthProfile`.
+    var trainingPlace: String?
+    var excludedAreas: [String] = []
 
     init() {}
+
+    var strengthProfile: StrengthProfile {
+        StrengthProfile(place: trainingPlace.flatMap(StrengthProfile.Place.init(rawValue:)),
+                        excludedAreas: Set(excludedAreas.compactMap(StrengthProfile.Area.init(rawValue:))))
+    }
 
     init(from d: [String: Any]) {
         currentLevel = d["current_level"] as? String
@@ -456,6 +469,8 @@ struct SportProgress {
         maxContinuous = d["max_continuous"] as? String
         equipment = d["equipment"] as? [String] ?? []
         notes = d["notes"] as? String
+        trainingPlace = d["training_place"] as? String
+        excludedAreas = d["excluded_areas"] as? [String] ?? []
     }
 
     func toDict() -> [String: Any] {
@@ -469,7 +484,16 @@ struct SportProgress {
         if let v = currentFocus { d["current_focus"] = v }
         if let v = maxContinuous { d["max_continuous"] = v }
         if let v = notes { d["notes"] = v }
+        if let v = trainingPlace { d["training_place"] = v }
+        if !excludedAreas.isEmpty { d["excluded_areas"] = excludedAreas }
         return d
+    }
+}
+
+extension StrengthProfile {
+    /// The athlete's stored profile — what the picker and `get_exercises` filter by.
+    @MainActor static var stored: StrengthProfile {
+        TrainingDataStore.shared.coachSportProgress().progress(for: "strength").strengthProfile
     }
 }
 

@@ -89,7 +89,8 @@ nonisolated enum GarminMappings {
         "lap_button": ["conditionTypeId": 1, "conditionTypeKey": "lap.button", "displayOrder": 1, "displayable": true],
         "lap.button": ["conditionTypeId": 1, "conditionTypeKey": "lap.button", "displayOrder": 1, "displayable": true],
         "fixed_rest": ["conditionTypeId": 8, "conditionTypeKey": "fixed.rest", "displayOrder": 8, "displayable": true],
-        "fixed.rest": ["conditionTypeId": 8, "conditionTypeKey": "fixed.rest", "displayOrder": 8, "displayable": true]
+        "fixed.rest": ["conditionTypeId": 8, "conditionTypeKey": "fixed.rest", "displayOrder": 8, "displayable": true],
+        "reps": ["conditionTypeId": 10, "conditionTypeKey": "reps", "displayOrder": 10, "displayable": true]
     ]
 
     nonisolated(unsafe) static let workoutStrokes: [String: [String: Any]] = [

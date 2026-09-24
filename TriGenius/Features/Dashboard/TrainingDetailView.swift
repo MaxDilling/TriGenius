@@ -62,6 +62,7 @@ struct TrainingDetailView: View {
     @State private var showTSSBasis = false
     @State private var showUnlinkConfirm = false
     @State private var showIgnoreConfirm = false
+    @State private var editingSets: [StrengthSets.SetRow]?
     @Environment(\.dismiss) private var dismiss
 
     private var family: SportFamily { SportFamily(sportKey: record.sport) }
@@ -137,11 +138,13 @@ struct TrainingDetailView: View {
                     } label: {
                         Label("Rename", systemImage: "pencil.line")
                     }
-                    Button {
-                        distanceInput = String(format: "%.2f", record.distanceKm)
-                        showDistanceEdit = true
-                    } label: {
-                        Label("Edit distance", systemImage: "pencil")
+                    if family != .strength {
+                        Button {
+                            distanceInput = String(format: "%.2f", record.distanceKm)
+                            showDistanceEdit = true
+                        } label: {
+                            Label("Edit distance", systemImage: "pencil")
+                        }
                     }
                     if debugModeEnabled {
                         Button(action: exportDebugJSON) {
@@ -209,6 +212,9 @@ struct TrainingDetailView: View {
             Text("Removes this workout and stops it from re-syncing — for a duplicate recorded on another device. Restore it anytime from Settings → Ignored workouts.")
         }
         .sheet(item: $exportFile) { file in ShareSheet(items: [file.url]) }
+        .sheet(isPresented: Binding(get: { editingSets != nil }, set: { if !$0 { editingSets = nil } })) {
+            StrengthSetsEditorSheet(activityId: record.id, rows: editingSets ?? [])
+        }
         .alert("Action failed", isPresented: Binding(
             get: { actionError != nil },
             set: { if !$0 { actionError = nil } }
@@ -260,6 +266,7 @@ struct TrainingDetailView: View {
             comparisonCard
             plannedStructureCard
             if legs.isEmpty {
+                strengthCard(details)
                 activityCard(details)
                 zonesCard(details)
                 feelCard
@@ -324,6 +331,7 @@ struct TrainingDetailView: View {
             chartGrid(models, siblings: models, columns: models.count > 2 ? 2 : 1, height: 168)
             swimSection(leg.segment.details)
         } else if legs.isEmpty {
+            strengthCard(details)
             let models = WorkoutStreamModel.models(from: record.streamsData, details: details, family: family)
             if let primary = models.first {
                 WorkoutStreamCard(title: primary.kind.label, model: primary, siblings: models, height: 180)
@@ -990,6 +998,27 @@ struct TrainingDetailView: View {
         let models = WorkoutStreamModel.models(from: data, details: details, family: family)
         ForEach(models) { model in
             WorkoutStreamCard(title: model.kind.label, model: model, siblings: models)
+        }
+    }
+
+    // MARK: Strength
+    //
+    // What the watch actually counted, set by set (`strength.exercises`, written
+    // at ingest). Garmin's classifier names the exercise itself, so a set the
+    // athlete improvised still shows up — this is the record, beside the plan it
+    // was linked to. Once the athlete has saved their own corrections, the
+    // review is done and no set is flagged any more.
+
+    @ViewBuilder
+    private func strengthCard(_ details: [String: Any]) -> some View {
+        let rows = StrengthSets.rows(performed: (details["strength"] as? [String: Any])?["exercises"] as? [[String: Any]] ?? [])
+        if !rows.isEmpty {
+            let corrected = record.overridesJSON.data(using: .utf8)
+                .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["strength"] != nil
+            let lines = StrengthSets.comparison(planned: WorkoutPayloadBuilder.parseSteps(record.stepsJSON) ?? [],
+                                                performed: rows)
+                .map { corrected ? StrengthSets.Line(set: $0.set, plan: $0.plan) : $0 }
+            ExerciseSetsCard(blocks: [StrengthSets.Block(items: [.exercise(lines)])]) { editingSets = rows }
         }
     }
 

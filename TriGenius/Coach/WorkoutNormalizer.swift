@@ -88,6 +88,13 @@ nonisolated enum WorkoutNormalizer {
             default:    return 15 ... 220
             }
         }
+
+        // Exercise (strength) sets.
+        static let exerciseSets = 1.0 ... 20.0
+        static let exerciseReps = 1.0 ... 100.0
+        static let exerciseSetSeconds = 1.0 ... 3600.0
+        static let exerciseWeightKg = 0.0 ... 500.0
+        static let exerciseRestSeconds = 0.0 ... 1800.0
     }
 
     /// Normalize a raw `workout_data` dict from the model. Returns the cleaned dict
@@ -132,8 +139,12 @@ nonisolated enum WorkoutNormalizer {
             let (steps, synthNotes) = synthesizeSteps(
                 durationMinutes: Coerce.int(data["duration_minutes"]),
                 distanceMeters: Coerce.double(data["distance_meters"]),
-                includeWarmup: data["include_warmup"] as? Bool ?? true,
-                includeCooldown: data["include_cooldown"] as? Bool ?? true,
+                // A strength session without exercises is one open block of work:
+                // splitting it into warm-up / main / cool-down would put an
+                // endurance shape (and its timings) on a gym session nobody
+                // prescribed that way.
+                includeWarmup: family != .strength && data["include_warmup"] as? Bool ?? true,
+                includeCooldown: family != .strength && data["include_cooldown"] as? Bool ?? true,
                 isSwim: isSwim
             )
             data["steps"] = steps
@@ -198,6 +209,14 @@ nonisolated enum WorkoutNormalizer {
         let type = token(raw["type"]) ?? "interval"
         if raw["type"] == nil { step["type"] = "interval" }
 
+        // Exercise steps (strength) carry sets/reps/weight, not an
+        // endurance extent or intensity target — none of the machinery below
+        // (end-condition inference, target-band expansion) applies to them.
+        if type == "exercise" {
+            validateExercise(raw, label: label, errors: &errors)
+            return step
+        }
+
         if type == "repeat" {
             if let count = Coerce.int(raw["repeat_count"]), !Bounds.repeatCount.contains(count) {
                 errors.append("\(label) (repeat): repeat_count \(count) is outside the plausible range (\(Bounds.repeatCount.lowerBound)–\(Bounds.repeatCount.upperBound)).")
@@ -258,6 +277,30 @@ nonisolated enum WorkoutNormalizer {
         }
         for v in values where !range.contains(v) {
             errors.append("\(label): \(targetType) target \(shortNumber(v)) \(unit) is outside the plausible range (\(shortNumber(range.lowerBound))–\(shortNumber(range.upperBound)) \(unit)) for \(family.displayName).")
+        }
+    }
+
+    /// Plausibility check for an exercise step's per-set values — same "reject
+    /// only clearly broken input" philosophy as `validateExtent`/`validateTarget`.
+    private static func validateExercise(_ step: [String: Any], label: String, errors: inout [String]) {
+        let sets = step["sets"] as? [[String: Any]] ?? []
+        if !Bounds.exerciseSets.contains(Double(sets.count)) {
+            errors.append("\(label) (exercise): \(sets.count) sets is outside the plausible range (\(Int(Bounds.exerciseSets.lowerBound))–\(Int(Bounds.exerciseSets.upperBound))).")
+        }
+        for (i, set) in sets.enumerated() {
+            let setLabel = "\(label), set \(i + 1)"
+            if let reps = Coerce.double(set["reps"]), !Bounds.exerciseReps.contains(reps) {
+                errors.append("\(setLabel): reps \(shortNumber(reps)) is outside the plausible range (\(shortNumber(Bounds.exerciseReps.lowerBound))–\(shortNumber(Bounds.exerciseReps.upperBound))).")
+            }
+            if let secs = Coerce.double(set["duration_seconds"]), !Bounds.exerciseSetSeconds.contains(secs) {
+                errors.append("\(setLabel): duration_seconds \(shortNumber(secs)) is outside the plausible range (\(shortNumber(Bounds.exerciseSetSeconds.lowerBound))–\(shortNumber(Bounds.exerciseSetSeconds.upperBound)) s).")
+            }
+            if let kg = Coerce.double(set["weight_kg"]), !Bounds.exerciseWeightKg.contains(kg) {
+                errors.append("\(setLabel): weight_kg \(shortNumber(kg)) is outside the plausible range (\(shortNumber(Bounds.exerciseWeightKg.lowerBound))–\(shortNumber(Bounds.exerciseWeightKg.upperBound)) kg).")
+            }
+            if let rest = Coerce.double(set["rest_seconds"]), !Bounds.exerciseRestSeconds.contains(rest) {
+                errors.append("\(setLabel): rest_seconds \(shortNumber(rest)) is outside the plausible range (\(shortNumber(Bounds.exerciseRestSeconds.lowerBound))–\(shortNumber(Bounds.exerciseRestSeconds.upperBound)) s).")
+            }
         }
     }
 

@@ -38,6 +38,10 @@ struct DashboardView: View {
     @Environment(CoachRouter.self) private var router
     @State private var viewModel = DashboardViewModel()
     @State private var volumeMetric: VolumeMetric = .tss
+    @State private var tissueMode: TissueCardMode = .sevenDays
+    @State private var showsTissueGrid = false
+    /// The group a tapped conflict warning opens.
+    @State private var conflictGroup: TissueGroup?
 
     private var wide = WideLayout()
 
@@ -112,6 +116,7 @@ struct DashboardView: View {
         case .planBanner: planBanner
         case .upNext: upNext
         case .performance: fitnessAndForm
+        case .tissueLoad: tissueLoad
         case .weeklyTarget: weeklyTarget
         case .aiInsight: aiInsightCard
         }
@@ -238,6 +243,59 @@ struct DashboardView: View {
         // Wide: match the PMC tile column beside it — the chart takes the extra
         // height rather than leaving a gap under the card.
         .frame(maxHeight: wide.rowHeight)
+    }
+
+    // MARK: Tissue Load
+
+    // Opaque card among glass neighbours on purpose: 6 pt bars and 7 pt diamonds lose
+    // contrast over refracting glass (DESIGN.md, content layer). A conflict warning opens
+    // the group it names — its detail explains the spike and links the session.
+    @ViewBuilder private var tissueLoad: some View {
+        if let model = viewModel.tissueCard {
+            VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+                SectionHeading("Tissue Load") {
+                    if viewModel.tissueChronic != nil {
+                        Picker("Window", selection: $tissueMode) {
+                            ForEach(TissueCardMode.allCases) { Text($0.label).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+                }
+                // Wide layouts have the room for the whole grid, so they skip the
+                // card's edit down to three rows.
+                if wide.isWide, let grid = viewModel.tissueGrid, tissueMode == .sevenDays {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+                        TissueLeadRow(lead: model.lead, onResolveConflict: openConflict)
+                        TissueGrid(days: grid.days, rows: grid.rows, isWide: true,
+                                   onSelect: { _ in showsTissueGrid = true })
+                        TissueLegend()
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .cardSurface(cornerRadius: Theme.Radius.l)
+                } else {
+                    TissueLoadCard(mode: tissueMode, model: model, chronic: viewModel.tissueChronic,
+                                   onResolveConflict: openConflict,
+                                   onSelect: { _ in showsTissueGrid = true },
+                                   onAskCoach: { router.openChat(prefill: $0) })
+                }
+            }
+            .navigationDestination(isPresented: $showsTissueGrid) {
+                if let input = viewModel.tissueInput {
+                    TissueLoadScreen(input: input, onAskCoach: { router.openChat(prefill: $0) })
+                }
+            }
+            .navigationDestination(item: $conflictGroup) { group in
+                if let input = viewModel.tissueInput, let detail = TissueGroupDetailModel.make(group: group, input: input) {
+                    TissueGroupDetail(model: detail, onAskCoach: { router.openChat(prefill: $0) })
+                }
+            }
+        }
+    }
+
+    private func openConflict() {
+        conflictGroup = viewModel.tissueInput?.conflicts.first?.group
     }
 
     // MARK: Weekly Target (Volume)

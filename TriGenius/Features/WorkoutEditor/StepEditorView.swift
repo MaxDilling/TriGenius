@@ -14,21 +14,102 @@ struct StepEditorView: View {
     /// False inside a repeat block: child steps can't be repeats themselves.
     let allowRepeat: Bool
 
+    @State private var showingExercisePicker = false
+
     var body: some View {
         Form {
-            if step.isRepeat {
+            if step.isExercise {
+                exerciseSection
+                prescriptionSection
+            } else if step.isRepeat {
                 repeatSection
                 childrenSection
+            } else if sport == .strength {
+                // A strength plan's only leaf is a rest between exercises.
+                Section("Rest") {
+                    mmssField("Duration", seconds: $step.durationSeconds)
+                }
             } else {
                 stepSection
                 targetSection
             }
         }
         .formStyle(.grouped)
-        .navigationTitle(step.isRepeat ? "Repeat" : "Step")
+        .navigationTitle(step.isExercise ? "Exercise" : step.isRepeat ? "Repeat" : sport == .strength ? "Rest" : "Step")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .exercisePicker(
+            isPresented: $showingExercisePicker,
+            onSelectLibrary: { exercise in
+                step.exerciseId = exercise.id
+                step.exerciseName = exercise.name
+                step.exerciseIsTimeBased = exercise.isTimeBased
+                // Start from the weight this athlete last prescribed for it; nil
+                // stays bodyweight rather than inventing a load.
+                step.exerciseWeightKg = TrainingDataStore.shared.lastPlannedWeightKg(exerciseId: exercise.id)
+            },
+            onSelectCustom: { name in
+                step.exerciseId = nil
+                step.exerciseName = name
+                step.exerciseIsTimeBased = false
+            }
+        )
+    }
+
+    /// What the athlete prescribed for this exercise last time — shown beside the
+    /// weight field so a working weight is a memory, never a guess or a max test.
+    private var lastPlannedWeightKg: Double? {
+        step.exerciseId.flatMap { TrainingDataStore.shared.lastPlannedWeightKg(exerciseId: $0) }
+    }
+
+    // MARK: Exercise (strength only)
+
+    private var exerciseSection: some View {
+        Section("Exercise") {
+            Button {
+                showingExercisePicker = true
+            } label: {
+                HStack {
+                    Text("Exercise").foregroundStyle(.primary)
+                    Spacer()
+                    Text(step.exerciseName.isEmpty ? "Select" : step.exerciseName)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var prescriptionSection: some View {
+        Section {
+            Stepper("Sets: \(step.exerciseSets)", value: $step.exerciseSets, in: 1...20)
+            if step.exerciseIsTimeBased {
+                mmssField("Duration per set", seconds: $step.exerciseSetSeconds)
+            } else {
+                Stepper("Reps: \(step.exerciseReps)", value: $step.exerciseReps, in: 1...100)
+            }
+            Toggle("Bodyweight", isOn: bodyweight)
+            if step.exerciseWeightKg != nil {
+                numberField("Weight (kg)", value: $step.exerciseWeightKg, format: .number)
+            }
+            if let last = lastPlannedWeightKg {
+                Text("Last planned: \(last.formatted(.number.precision(.fractionLength(0...1)))) kg")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            mmssField("Rest between sets", seconds: $step.exerciseRestSeconds)
+        } header: {
+            Text("Prescription")
+        } footer: {
+            Text("Applies to every set.")
+        }
+    }
+
+    /// Nil `exerciseWeightKg` is bodyweight; toggling on picks a starting
+    /// weight the athlete then edits.
+    private var bodyweight: Binding<Bool> {
+        Binding(get: { step.exerciseWeightKg == nil },
+                set: { step.exerciseWeightKg = $0 ? nil : (step.exerciseWeightKg ?? 20) })
     }
 
     // MARK: Leaf
@@ -68,8 +149,8 @@ struct StepEditorView: View {
                 EmptyView()
             case .pace:
                 let unit = sport == .swimming ? "/100m" : "/km"
-                paceField("Fast (m:ss \(unit))", value: $step.targetLow)
-                paceField("Slow (m:ss \(unit))", value: $step.targetHigh)
+                mmssField("Fast (m:ss \(unit))", seconds: $step.targetLow)
+                mmssField("Slow (m:ss \(unit))", seconds: $step.targetHigh)
             case .heartRate:
                 numberField("Low (bpm)", value: $step.targetLow, format: .number)
                 numberField("High (bpm)", value: $step.targetHigh, format: .number)
@@ -105,7 +186,14 @@ struct StepEditorView: View {
     private var repeatSection: some View {
         Section("Repeat") {
             Stepper("Repetitions: \(step.repeatCount)", value: $step.repeatCount, in: 2...50)
-            Toggle("Skip last rest", isOn: $step.skipLastRest)
+            if sport == .strength {
+                // A circuit's children are exercises, not the interval/rest
+                // step pairs an endurance repeat block uses — there's no rest
+                // *step* to skip, so rest between rounds is its own field.
+                mmssField("Rest between rounds", seconds: $step.restBetweenRoundsSeconds)
+            } else {
+                Toggle("Skip last rest", isOn: $step.skipLastRest)
+            }
         }
     }
 
@@ -117,50 +205,27 @@ struct StepEditorView: View {
                 } label: {
                     Text(child.summary(sport: sport)).lineLimit(2)
                 }
+                // macOS has no swipe-to-delete or drag-to-reorder; a right-click
+                // here edits without ever touching navigation/dismiss state —
+                // unlike a delete button inside the pushed detail view, which
+                // crashed AppKit's window layout on open (see git history).
+                .contextMenu {
+                    reorderButtons($step.children, id: child.id)
+                    Button("Delete", role: .destructive) {
+                        step.children.removeAll { $0.id == child.id }
+                    }
+                }
             }
             .onDelete { step.children.remove(atOffsets: $0) }
             .onMove { step.children.move(fromOffsets: $0, toOffset: $1) }
-            Button("Add step") { step.children.append(StepDraft(kind: .interval)) }
+            if sport == .strength {
+                Menu("Add") {
+                    Button("Exercise") { step.children.append(StepDraft.exercise()) }
+                    Button("Rest") { step.children.append(StepDraft.exerciseRest()) }
+                }
+            } else {
+                Button("Add step") { step.children.append(StepDraft(kind: .interval)) }
+            }
         }
-    }
-
-    // MARK: m:ss fields (display-only conversion; stored value stays raw seconds)
-
-    private func mmssField(_ label: String, seconds: Binding<Int>) -> some View {
-        mmssTextField(label, text: Binding(
-            get: { Self.mmss(seconds.wrappedValue) },
-            set: { if let s = Self.seconds(from: $0) { seconds.wrappedValue = s } }
-        ))
-    }
-
-    private func paceField(_ label: String, value: Binding<Double?>) -> some View {
-        mmssTextField(label, text: Binding(
-            get: { value.wrappedValue.map { Self.mmss(Int($0.rounded())) } ?? "" },
-            set: { value.wrappedValue = Self.seconds(from: $0).map(Double.init) }
-        ))
-    }
-
-    private func mmssTextField(_ label: String, text: Binding<String>) -> some View {
-        TextField(label, text: text, prompt: Text("m:ss"))
-            .multilineTextAlignment(.trailing)
-            .monospacedDigit()
-            #if os(iOS)
-            .keyboardType(.numbersAndPunctuation)
-            #endif
-    }
-
-    private static func mmss(_ seconds: Int) -> String {
-        String(format: "%d:%02d", seconds / 60, seconds % 60)
-    }
-
-    /// "m:ss" → seconds; a bare number reads as whole minutes. Nil (keep the
-    /// previous value / clear the target) for anything unparseable.
-    private static func seconds(from text: String) -> Int? {
-        let parts = text.split(separator: ":")
-        if parts.count == 2, let m = Int(parts[0]), let s = Int(parts[1]), s < 60, m >= 0, s >= 0 {
-            return m * 60 + s
-        }
-        if parts.count == 1, let m = Int(parts[0]), m >= 0 { return m * 60 }
-        return nil
     }
 }

@@ -6,8 +6,10 @@
 // same way regardless of where the workout came from.
 //
 // `summary` is the default `get_workouts` payload — the whitelist below drops
-// per-lap swim arrays, calorie/EPOC noise and computation-only keys, and injects
-// `tss` + `tss_basis` (which live on `WorkoutRecord`, not in `detailsJSON`).
+// per-lap swim arrays, calorie/EPOC noise and computation-only keys, injects
+// `tss` + `tss_basis` (which live on `WorkoutRecord`, not in `detailsJSON`), and
+// condenses recorded strength sets to one line per exercise — what the coach
+// progresses the next session's weights from.
 // `detail` adds the per-lap breakdown for a single requested workout.
 
 import Foundation
@@ -45,6 +47,11 @@ nonisolated enum CoachActivityProjection {
             var leanSub: [String: Any] = [:]
             pick(keys, from: sub, into: &leanSub)
             if !leanSub.isEmpty { out[sport] = leanSub }
+        }
+        // A strength session has no distance; its stored 0 is not a measurement.
+        if SportFamily(sportKey: details["sport"] as? String ?? "") == .strength { out["distance_km"] = nil }
+        if let exercises = (details["strength"] as? [String: Any])?["exercises"] as? [[String: Any]], !exercises.isEmpty {
+            out["strength"] = ["exercises": StrengthSets.coachLines(performed: exercises)]
         }
         return out
     }

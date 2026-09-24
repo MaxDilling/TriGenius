@@ -429,19 +429,10 @@ struct CoachChatView: View {
                 onStop: { viewModel.stop() }
             )
         }
-        // Workout cards push their detail view onto the chat's own stack; the
-        // record is resolved at tap time — completed first, so a finished
-        // (folded) plan's card opens the actual session.
+        // Workout cards push their detail view onto the chat's own stack.
         .navigationDestination(for: ChatCardDestination.self) { destination in
             switch destination {
-            case .workout(let id):
-                if let record = TrainingDataStore.shared.activity(id: id) {
-                    TrainingDetailView(record: record)
-                } else if let plan = TrainingDataStore.shared.scheduledWorkout(id: id) {
-                    PlannedWorkoutDetailView(workout: plan)
-                } else {
-                    ContentUnavailableView("Workout no longer available", systemImage: "calendar.badge.minus")
-                }
+            case .workout(let id): WorkoutDetailDestination(id: id)
             }
         }
         .onAppear {

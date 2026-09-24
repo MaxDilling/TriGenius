@@ -58,4 +58,28 @@ extension Color {
             blue: Double(value & 0xFF) / 255
         )
     }
+
+    /// Adaptive color from the two sRGB hex values of one token (0xRRGGBB). For design
+    /// tokens whose light and dark variants are chosen for contrast rather than derived
+    /// from each other — `Theme.Palette.Tissue` is the caller.
+    static func appAdaptive(light: UInt32, dark: UInt32,
+                            lightAlpha: CGFloat = 1, darkAlpha: CGFloat = 1) -> Color {
+        func components(_ hex: UInt32) -> (CGFloat, CGFloat, CGFloat) {
+            (CGFloat((hex >> 16) & 0xFF) / 255, CGFloat((hex >> 8) & 0xFF) / 255, CGFloat(hex & 0xFF) / 255)
+        }
+        let (lr, lg, lb) = components(light), (dr, dg, db) = components(dark)
+        #if os(macOS)
+        return Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                ? NSColor(srgbRed: dr, green: dg, blue: db, alpha: darkAlpha)
+                : NSColor(srgbRed: lr, green: lg, blue: lb, alpha: lightAlpha)
+        })
+        #else
+        return Color(uiColor: UIColor { traits in
+            traits.userInterfaceStyle == .dark
+                ? UIColor(red: dr, green: dg, blue: db, alpha: darkAlpha)
+                : UIColor(red: lr, green: lg, blue: lb, alpha: lightAlpha)
+        })
+        #endif
+    }
 }

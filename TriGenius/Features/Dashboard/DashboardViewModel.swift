@@ -43,6 +43,11 @@ final class DashboardViewModel {
     /// only ones that get a weekly ring.
     var visibleFamilies: [SportFamily] = SportFamily.triathlon
     var agendaDays: [AgendaDay] = []
+    /// Tissue Load, from `TissueLoadModel` over the store (`TissueCardModel.Input.live`).
+    var tissueCard: TissueCardModel?
+    var tissueInput: TissueCardModel.Input?
+    var tissueGrid: TissueGridModel?
+    var tissueChronic: TissueChronicModel?
     var insight: String?
     var isLoading = false
     var errorMessage: String?
@@ -114,6 +119,12 @@ final class DashboardViewModel {
                                          families: visibleFamilies, weekStart: weekStart)
 
         agendaDays = Self.buildAgenda(records: records, store: store)
+
+        let tissue = TissueCardModel.Input.live(atpPlan: atpPlan)
+        tissueInput = tissue.input
+        tissueCard = TissueCardModel.make(tissue.input)
+        tissueGrid = TissueGridModel.make(tissue.input)
+        tissueChronic = tissue.chronic.flatMap { TissueChronicModel.make(history: $0) }
 
         hasLoaded = true
         isLoading = false

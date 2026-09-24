@@ -78,7 +78,7 @@ struct PlannedWorkoutStructure {
     static func make(stepsJSON: String, family: SportFamily, thresholds: PerformanceSnapshot) -> PlannedWorkoutStructure? {
         guard let data = stepsJSON.data(using: .utf8),
               let compact = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-              !compact.isEmpty else { return nil }
+              !compact.isEmpty, !PlannedTSS.isExerciseList(compact) else { return nil }
         let steps = parse(compact)
         guard !steps.isEmpty else { return nil }
         let distance = PlannedTSS.totalDistance(compactSteps: compact, family: family, thresholds: thresholds)
@@ -406,6 +406,19 @@ extension WorkoutRecord {
         return meters > 0 ? PlannedDistance(meters: meters, source: .estimatedFromDuration) : nil
     }
 
+    /// Exercises a strength plan prescribes, circuits counted once per exercise
+    /// rather than per round. 0 for an unstructured session (and for every
+    /// endurance plan, whose structure is described by `structure` instead).
+    @MainActor var plannedExerciseCount: Int {
+        func count(_ steps: [[String: Any]]) -> Int {
+            steps.reduce(0) { total, step in
+                if let children = step["repeat_steps"] as? [[String: Any]] { return total + count(children) }
+                return total + ((step["type"] as? String) == "exercise" ? 1 : 0)
+            }
+        }
+        return count(WorkoutPayloadBuilder.parseSteps(stepsJSON) ?? [])
+    }
+
     /// Session character, derived from the planned TSS + duration.
     @MainActor var intensity: IntensityCategory? {
         IntensityCategory.from(tss: resolvedTargetTSS, durationMinutes: plannedDurationMinutes)
@@ -429,6 +442,10 @@ extension WorkoutRecord {
             parts.append("\(isEstimatedTSS ? "~" : "")\(Int(tss.rounded())) \(tssSuffix)")
         }
         if let hint = structure?.compactHint { parts.append(hint) }
+        // A strength plan's structure is its exercise list, which `structure`
+        // (endurance-shaped) never sees — so name it here or the row reads empty.
+        let exercises = plannedExerciseCount
+        if exercises > 0 { parts.append("\(exercises) exercise\(exercises == 1 ? "" : "s")") }
         return parts.isEmpty ? "Target not set" : parts.joined(separator: "  •  ")
     }
 }

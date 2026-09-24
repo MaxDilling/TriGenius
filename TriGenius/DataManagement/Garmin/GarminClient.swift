@@ -131,6 +131,12 @@ nonisolated final class GarminClient: Sendable {
         try await connectapi("/activity-service/activity/\(id)") as? [String: Any] ?? [:]
     }
 
+    /// Per-set strength data: one row per set (active and rest), each with its
+    /// rep count, duration and the exercise Garmin's on-watch classifier assigned.
+    func getActivityExerciseSets(id: String) async throws -> [String: Any] {
+        try await connectapi("/activity-service/activity/\(id)/exerciseSets") as? [String: Any] ?? [:]
+    }
+
     func getActivitySplits(id: String) async throws -> [String: Any] {
         let result = try await connectapi("/activity-service/activity/\(id)/splits")
         return result as? [String: Any] ?? [:]
