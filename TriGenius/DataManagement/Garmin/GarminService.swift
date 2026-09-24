@@ -789,7 +789,10 @@ nonisolated final class GarminService: Sendable {
             ]
             let endKey = (step["endCondition"] as? [String: Any])?["conditionTypeKey"] as? String ?? "time"
             let endValue = Coerce.double(step["endConditionValue"]) ?? 0
-            if endKey.contains("distance") {
+            // A lap-button step carries a leftover `endConditionValue` that is no extent.
+            if endKey == "lap.button" {
+                compact["end_condition"] = "lap_button"
+            } else if endKey.contains("distance") {
                 compact["distance_meters"] = endValue
             } else {
                 compact["duration_seconds"] = endValue

@@ -16,11 +16,16 @@ import SwiftUI
 /// One leaf (non-repeat) step of a planned workout, ready to display.
 struct PlannedStepLeaf: Identifiable {
     let id = UUID()
+    enum Extent {
+        case duration(seconds: Double)
+        case distance(meters: Double)
+        /// Open-ended: the athlete ends it on the watch.
+        case lapButton
+    }
+
     /// Step type key, lowercased ("warmup", "interval", "recovery", "cooldown", …).
     let typeKey: String
-    /// True when the step ends on distance — `endValue` is meters, else seconds.
-    let isDistance: Bool
-    let endValue: Double
+    let extent: Extent
     /// "power" | "pace" | "speed" | "heart_rate" | "cadence", or nil for an untargeted step.
     let targetType: String?
     /// power: W · pace: sec (sec/km run/bike, sec/100 m swim) · speed: km/h · hr: bpm · cadence: rpm/spm.
@@ -116,19 +121,20 @@ struct PlannedWorkoutStructure {
     private static func leaf(from step: [String: Any]) -> PlannedStepLeaf? {
         guard step["repeat_steps"] == nil else { return nil }   // nested repeats are rare; skip
         let typeKey = (step["type"] as? String)?.lowercased() ?? "interval"
-        let isDistance: Bool
-        let endValue: Double
-        if let m = Coerce.double(step["distance_meters"]), m > 0 {
-            isDistance = true; endValue = m
+        let extent: PlannedStepLeaf.Extent
+        if Coerce.token(step["end_condition"] as? String) == "lap_button" {
+            extent = .lapButton
+        } else if let m = Coerce.double(step["distance_meters"]), m > 0 {
+            extent = .distance(meters: m)
         } else if let s = Coerce.double(step["duration_seconds"]), s > 0 {
-            isDistance = false; endValue = s
+            extent = .duration(seconds: s)
         } else {
             return nil
         }
         var target = step["target_type"] as? String
         if target == "no_target" { target = nil }
         return PlannedStepLeaf(
-            typeKey: typeKey, isDistance: isDistance, endValue: endValue,
+            typeKey: typeKey, extent: extent,
             targetType: target,
             targetLow: Coerce.double(step["target_low"]),
             targetHigh: Coerce.double(step["target_high"])
@@ -242,25 +248,32 @@ enum IntensityCategory: String, CaseIterable {
 
 enum PlannedWorkoutFormat {
 
-    /// Full extent text: "12 min", "1:30", "45 s", "400 m", "5 km".
+    /// Full extent text: "12 min", "1:30", "45 s", "400 m", "5 km", "Lap button".
     static func extent(_ leaf: PlannedStepLeaf) -> String {
-        leaf.isDistance ? distance(leaf.endValue) : duration(leaf.endValue)
+        switch leaf.extent {
+        case .distance(let meters): return distance(meters)
+        case .duration(let seconds): return duration(seconds)
+        case .lapButton: return "Lap button"
+        }
     }
 
-    /// Abbreviated extent for summaries: "12'", "30\"", "1:30", "400m", "5k".
+    /// Abbreviated extent for summaries: "12'", "30\"", "1:30", "400m", "5k", "lap".
     static func abbrev(_ leaf: PlannedStepLeaf) -> String {
-        if leaf.isDistance {
-            let m = leaf.endValue
+        switch leaf.extent {
+        case .distance(let m):
             if m >= 1000 {
                 let km = m / 1000
                 return km.truncatingRemainder(dividingBy: 1) == 0 ? "\(Int(km))k" : String(format: "%.1fk", km)
             }
             return "\(Int(m.rounded()))m"
+        case .duration(let seconds):
+            let s = Int(seconds.rounded())
+            if s % 60 == 0 { return "\(s / 60)'" }
+            if s < 60 { return "\(s)\"" }
+            return String(format: "%d:%02d", s / 60, s % 60)
+        case .lapButton:
+            return "lap"
         }
-        let s = Int(leaf.endValue.rounded())
-        if s % 60 == 0 { return "\(s / 60)'" }
-        if s < 60 { return "\(s)\"" }
-        return String(format: "%d:%02d", s / 60, s % 60)
     }
 
     static func duration(_ seconds: Double) -> String {
