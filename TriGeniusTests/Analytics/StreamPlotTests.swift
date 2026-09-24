@@ -49,24 +49,35 @@ struct StreamPlotBucketingTests {
         #expect(v.start == 0 && v.end == 40)
     }
 
-    /// A gap splits the run in two, and the bins either side never share a
-    /// bucket. Width 20 keeps the bucket at one bin, so this pins the split
-    /// alone rather than the bucketing.
-    @Test func aGapBreaksTheTrace() {
+    /// A bin without a reading is not a pause while it stays inside
+    /// `holdSeconds`: the last value is held across it, so the trace stays one
+    /// run. Width 20 keeps the bucket at one bin, so each bin is its own vertex.
+    @Test func aShortGapIsHeldAcross() {
         let segments = StreamPlot.segments(values: [100, 100, nil, 200, 200], binSeconds: 1,
                                            metric: power, visibleSpan: 5, plotWidth: 20)
+        #expect(segments.map(\.vertices.count) == [5])
+        #expect(segments[0].vertices[2].mean == 100)   // the held reading
+    }
+
+    /// Past `holdSeconds` the silence is a real pause — 4 × 10 s = 40 s — so the
+    /// run splits and the bins either side never share a bucket.
+    @Test func aGapPastTheHoldBreaksTheTrace() {
+        let values: [Double?] = [100, 100, nil, nil, nil, nil, 200, 200]
+        let segments = StreamPlot.segments(values: values, binSeconds: 10, metric: power,
+                                           visibleSpan: 80, plotWidth: 320)
         #expect(segments.map(\.vertices.count) == [2, 2])
     }
 
-    /// Elevation holds through a pause, so its gap is drawn straight through:
-    /// one run, and the bins either side average together.
+    /// Elevation holds across a pause however long it runs: one run, the held
+    /// bin averaging in with the rest — (100 + 100 + 100 + 200 + 200) / 5.
     @Test func aBridgingMetricKeepsOneRunAcrossAGap() {
         let elevation = StreamPlot.Metric(axis: .linear(1), framing: .tight,
                                           zones: nil, bridgesGaps: true)
-        let segments = StreamPlot.segments(values: [100, 100, nil, 200, 200], binSeconds: 1,
-                                           metric: elevation, visibleSpan: 5, plotWidth: 1)
+        let values: [Double?] = [100, 100, nil, 200, 200]
+        let segments = StreamPlot.segments(values: values, binSeconds: 60, metric: elevation,
+                                           visibleSpan: 300, plotWidth: 1)
         #expect(segments.count == 1)
-        #expect(segments[0].vertices[0].mean == 150)
+        #expect(segments[0].vertices[0].mean == 140)
     }
 
     /// A pace bucket inverts: the slowest speed (2 m/s → 500 s/km) is the
@@ -130,13 +141,14 @@ struct StreamPlotZoneRunTests {
     }
 
     /// A recording gap ends the stretch even when the zone carries across it, so
-    /// the ribbon never paints over a pause.
+    /// the ribbon never paints over a pause — 40 s of silence, past the hold.
     @Test func aStretchNeverSpansAGap() {
-        let segments = StreamPlot.segments(values: [100, nil, 100], binSeconds: 1,
-                                           metric: zoned, visibleSpan: 3, plotWidth: 12)
+        let values: [Double?] = [100, nil, nil, nil, nil, 100]
+        let segments = StreamPlot.segments(values: values, binSeconds: 10, metric: zoned,
+                                           visibleSpan: 60, plotWidth: 240)
         let runs = StreamPlot.zoneRuns(of: segments)
         #expect(runs.map(\.zone) == [0, 0])
-        #expect(runs[0].end == 1 && runs[1].start == 2)
+        #expect(runs[0].end == 10 && runs[1].start == 50)
     }
 
     /// Without a zone model there is nothing to colour: one stretch, no zone.

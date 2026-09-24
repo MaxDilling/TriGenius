@@ -47,7 +47,8 @@ nonisolated enum StreamPlot {
         /// z1–z4 upper bounds in natural units; nil where the metric has no zone
         /// model or the threshold behind it is unknown.
         let zones: [Double]?
-        /// Whether a recording gap breaks the trace or is drawn straight through.
+        /// Whether an unrecorded stretch is held across without limit, rather
+        /// than breaking the trace once it outlasts `holdSeconds`.
         let bridgesGaps: Bool
     }
 
@@ -141,8 +142,16 @@ nonisolated enum StreamPlot {
     /// 8-hour ride stops being pixel noise.
     static let bucketPoints: Double = 4
 
-    /// Contiguous non-gap runs — so a pause breaks the trace — each averaged down
-    /// to ~one vertex per `bucketPoints` of plot width.
+    /// How long one reading stands for the bins after it. Sources record
+    /// irregularly — Garmin's smart recording leaves 1-8 s between samples, so
+    /// most bins hold no sample of their own — and an empty bin means "no new
+    /// reading", not a pause: the last value is held across it. Only a longer
+    /// silence is a real gap. The cap matches `ZoneBucketing.durationSamples`,
+    /// so the trace, the ribbon and time-in-zone agree on what was recorded.
+    static let holdSeconds: Double = 30
+
+    /// Contiguous recorded runs — so a pause breaks the trace — each averaged
+    /// down to ~one vertex per `bucketPoints` of plot width.
     ///
     /// The bucket width *is* the smoothing window, and deriving it from the span
     /// on screen per pixel settles every scale with one rule: an 8-hour ride on a
@@ -156,6 +165,7 @@ nonisolated enum StreamPlot {
 
         var segments: [Segment] = []
         var run: [(offset: Double, value: Double)] = []
+        var held = 0   // bins without a reading since the last sample
         func close() {
             guard !run.isEmpty else { return }
             segments.append(Segment(id: segments.count,
@@ -163,12 +173,23 @@ nonisolated enum StreamPlot {
                                                        metric: metric)))
             run = []
         }
+        func sample(_ index: Int, _ value: Double) {
+            run.append(((Double(index) + 0.5) * bin, value))
+        }
         for (i, value) in values.enumerated() {
-            if let value, metric.axis.isMoving(value) {
-                run.append(((Double(i) + 0.5) * bin, value))
-            } else if !metric.bridgesGaps {
-                close()
+            guard let value else { held += 1; continue }
+            // A reading below the floor is the athlete standing still — a real
+            // break, unlike a bin that simply carries no reading.
+            guard metric.axis.isMoving(value) else { close(); held = 0; continue }
+            if let last = run.last?.value, held > 0 {
+                if metric.bridgesGaps || Double(held) * bin <= holdSeconds {
+                    for j in (i - held)..<i { sample(j, last) }
+                } else {
+                    close()
+                }
             }
+            held = 0
+            sample(i, value)
         }
         close()
         return segments
