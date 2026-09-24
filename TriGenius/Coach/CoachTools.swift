@@ -899,10 +899,13 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                                 "reps": ["type": "integer", "description": "Repetitions in this set."],
                                 "duration_seconds": ["type": "integer", "description": "Hold time instead of reps (plank, carry)."],
                                 "weight_kg": ["type": "number", "description": "Load in kg. Omit for bodyweight; never invent one — read the athlete's last working weight from get_workouts."],
-                                "rest_seconds": ["type": "integer", "description": "Rest after this set."]
+                                "rest_seconds": ["type": "integer", "description": "Rest after this set."],
+                                "rest_until_lap": ["type": "boolean", "description": "Rest after this set until the athlete presses lap, instead of rest_seconds."]
                             ]
                         ]
                     ],
+                    "rest_after": ["type": "string", "enum": ["lap_button", "timed", "none"], "description": "Strength: the pause after this exercise. Omit for the default lap_button (rest until the athlete presses lap). timed needs rest_after_seconds; none only for a superset."],
+                    "rest_after_seconds": ["type": "integer", "description": "Strength: length of a timed rest_after."],
                     "rest_between_rounds_seconds": ["type": "integer", "description": "Strength: rest between rounds of a circuit (a repeat block of exercise steps)."],
                     "target_type": ["type": "string", "enum": ["no_target", "heart_rate", "power", "pace", "speed", "cadence"], "description": "Intensity target type (units/bands in read_knowledge('workouts') §3)."],
                     "target_low": ["type": "number", "description": "Single target value; the app auto-expands it into a band."],

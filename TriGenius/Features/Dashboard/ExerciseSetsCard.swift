@@ -17,7 +17,7 @@ struct ExerciseSetsCard: View {
     private struct DisplayRow: Identifiable {
         enum Kind {
             case circuit(rounds: Int, restSeconds: Double?)
-            case rest(seconds: Double)
+            case rest(StrengthSets.Rest)
             case title(String)
             case set(number: Int, line: StrengthSets.Line)
         }
@@ -38,8 +38,8 @@ struct ExerciseSetsCard: View {
             var counts: [String: Int] = [:]
             for item in block.items {
                 switch item {
-                case .rest(let seconds):
-                    add(.rest(seconds: seconds), indented: circuit, divider: !circuit)
+                case .rest(let rest):
+                    add(.rest(rest), indented: circuit, divider: !circuit)
                 case .exercise(let lines):
                     for (index, line) in lines.enumerated() {
                         if index == 0 || lines[index - 1].title != line.title {
@@ -63,7 +63,7 @@ struct ExerciseSetsCard: View {
         let showReps = (sets + plans).contains { $0.reps != nil }
         let showTime = (sets + plans).contains { $0.seconds != nil }
         let showPlanTime = plans.contains { $0.seconds != nil }
-        let showRest = sets.contains { $0.restSeconds != nil }
+        let showRest = sets.contains { $0.rest != nil }
         let targets = TissueSession.targets(sets)
         VStack(alignment: .leading, spacing: Theme.Spacing.s) {
             HStack {
@@ -98,8 +98,8 @@ struct ExerciseSetsCard: View {
                         fullWidth(Label(rest.map { "\(rounds)× circuit · \(Self.time($0)) rest between rounds" } ?? "\(rounds)× circuit",
                                         systemImage: "repeat")
                             .font(.subheadline.weight(.semibold)), row)
-                    case .rest(let seconds):
-                        fullWidth(Label("Rest \(Self.time(seconds))", systemImage: "pause.circle")
+                    case .rest(let rest):
+                        fullWidth(Label(Self.restLabel(rest), systemImage: "pause.circle")
                             .font(.subheadline).foregroundStyle(.secondary), row)
                     case .title(let title):
                         fullWidth(Text(title).font(.subheadline.weight(.semibold)), row)
@@ -113,7 +113,7 @@ struct ExerciseSetsCard: View {
                             if showTime {
                                 cell(Self.time(line.set?.seconds), plan: line.plan?.seconds.map(Self.time), showPlan: showPlanTime)
                             }
-                            if showRest { Text(Self.time(line.set?.restSeconds)) }
+                            if showRest { Text(line.set?.rest == .lapButton ? "Lap" : Self.time(line.set?.restSeconds)) }
                         }
                         .font(.subheadline.monospacedDigit())
                     }
@@ -158,6 +158,14 @@ struct ExerciseSetsCard: View {
     /// Kilograms without the unit (the column says it), or bodyweight.
     static func load(_ set: StrengthSets.SetRow) -> String {
         set.weightKg.map { $0.formatted(.number.precision(.fractionLength(0...1))) } ?? "BW"
+    }
+
+    /// "Rest 1:30", or "Rest until lap".
+    static func restLabel(_ rest: StrengthSets.Rest) -> String {
+        switch rest {
+        case .timed(let seconds): return "Rest \(time(seconds))"
+        case .lapButton: return "Rest until lap"
+        }
     }
 
     static func time(_ seconds: Double?) -> String {

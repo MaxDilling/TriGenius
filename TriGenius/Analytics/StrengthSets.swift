@@ -13,8 +13,19 @@ import Foundation
 // `garminName`), which both sides carry verbatim — never on a name similarity.
 // An exercise the plan didn't contain is not a discrepancy: improvising is
 // allowed, and only a set that was *prescribed* can miss its prescription.
+//
+// Rests are where the watch asks for the reps it counted, so a top-level
+// exercise always ends on one before the next step (`restAfter`) — until the lap
+// button unless the plan says otherwise. Circuit members follow each other
+// directly; their round ends on the circuit's round rest.
 
 nonisolated enum StrengthSets {
+
+    nonisolated enum Rest: Hashable, Sendable {
+        case timed(seconds: Double)
+        /// Until the athlete presses lap.
+        case lapButton
+    }
 
     nonisolated struct SetRow: Hashable, Sendable {
         /// `ExerciseLibrary` id — a plan's, or an athlete-edited recorded set's.
@@ -31,7 +42,13 @@ nonisolated enum StrengthSets {
         /// Nil = bodyweight.
         var weightKg: Double?
         /// Rest after this set; nil where none follows.
-        var restSeconds: Double?
+        var rest: Rest?
+
+        /// A timed rest, the only kind a recorded set carries.
+        var restSeconds: Double? {
+            get { if case .timed(let seconds) = rest { seconds } else { nil } }
+            set { rest = newValue.map { .timed(seconds: $0) } }
+        }
 
         /// The key plan and record pair on: Garmin's name for the exercise, else
         /// the stored name (an exercise Garmin's catalog lacks, or a custom one).
@@ -70,7 +87,7 @@ nonisolated enum StrengthSets {
 
     nonisolated enum Item: Hashable, Sendable {
         case exercise([Line])
-        case rest(seconds: Double)
+        case rest(Rest)
 
         var lines: [Line] {
             if case .exercise(let lines) = self { return lines }
@@ -86,12 +103,14 @@ nonisolated enum StrengthSets {
     }
 
     /// The plan as written: circuits stay one block, a rest step stays its own
-    /// item. An exercise rests between its own sets only — the push encoding
-    /// (`GarminWorkoutBuilder`) drops the last set's rest.
+    /// item. An exercise rests between its own sets — the push encoding
+    /// (`GarminWorkoutBuilder`) drops the last set's rest — and then for its
+    /// `restAfter`.
     static func blocks(planned steps: [[String: Any]]) -> [Block] {
-        steps.compactMap { step in
+        steps.indices.compactMap { index in
+            let step = steps[index]
             guard let children = step["repeat_steps"] as? [[String: Any]] else {
-                return item(step).map { Block(items: [$0]) }
+                return item(step).map { Block(items: [$0] + [restAfter(steps, at: index).map(Item.rest)].compactMap { $0 }) }
             }
             let items = children.compactMap(item)
             guard !items.isEmpty else { return nil }
@@ -104,7 +123,8 @@ nonisolated enum StrengthSets {
     private static func item(_ step: [String: Any]) -> Item? {
         switch step["type"] as? String {
         case "rest":
-            return Coerce.double(step["duration_seconds"]).map { .rest(seconds: $0) }
+            if Coerce.token(step["end_condition"] as? String) == "lap_button" { return .rest(.lapButton) }
+            return Coerce.double(step["duration_seconds"]).map { .rest(.timed(seconds: $0)) }
         case "exercise":
             let sets = step["sets"] as? [[String: Any]] ?? []
             guard !sets.isEmpty else { return nil }
@@ -114,10 +134,30 @@ nonisolated enum StrengthSets {
                                  reps: Coerce.int(set["reps"]),
                                  seconds: Coerce.double(set["duration_seconds"]),
                                  weightKg: Coerce.double(set["weight_kg"]),
-                                 restSeconds: index < sets.count - 1 ? Coerce.double(set["rest_seconds"]) : nil))
+                                 rest: index < sets.count - 1 ? rest(ofSet: set) : nil))
             })
         default:
             return nil
+        }
+    }
+
+    /// A planned set's rest: until lap (`rest_until_lap`) or `rest_seconds`.
+    static func rest(ofSet set: [String: Any]) -> Rest? {
+        set["rest_until_lap"] as? Bool == true ? .lapButton : Coerce.double(set["rest_seconds"]).map { .timed(seconds: $0) }
+    }
+
+    /// The rest after the exercise at `index` of a plan's top-level steps:
+    /// `rest_after` is `lap_button` (also when absent), `timed`
+    /// (`rest_after_seconds`) or `none`. Nil for anything but an exercise, and
+    /// when the next step is a rest of its own.
+    static func restAfter(_ steps: [[String: Any]], at index: Int) -> Rest? {
+        let step = steps[index]
+        guard step["type"] as? String == "exercise",
+              !(steps.indices.contains(index + 1) && steps[index + 1]["type"] as? String == "rest") else { return nil }
+        switch step["rest_after"] as? String ?? "lap_button" {
+        case "lap_button": return .lapButton
+        case "timed": return Coerce.double(step["rest_after_seconds"]).map { .timed(seconds: $0) }
+        default: return nil
         }
     }
 
@@ -131,7 +171,7 @@ nonisolated enum StrengthSets {
                        reps: Coerce.int(set["reps"]),
                        seconds: Coerce.double(set["duration_seconds"]),
                        weightKg: Coerce.double(set["weight_kg"]),
-                       restSeconds: Coerce.double(set["rest_seconds"]))
+                       rest: Coerce.double(set["rest_seconds"]).map { .timed(seconds: $0) })
             }
         }
     }

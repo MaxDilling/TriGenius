@@ -21,6 +21,8 @@ struct StepEditorView: View {
             if step.isExercise {
                 exerciseSection
                 prescriptionSection
+                // Circuit members follow each other directly (`StrengthSets.restAfter`).
+                if allowRepeat { restAfterSection }
             } else if step.isRepeat {
                 repeatSection
                 childrenSection
@@ -97,11 +99,29 @@ struct StepEditorView: View {
                 Text("Last planned: \(last.formatted(.number.precision(.fractionLength(0...1)))) kg")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            mmssField("Rest between sets", seconds: $step.exerciseRestSeconds)
+            Toggle("Rest until lap", isOn: $step.exerciseRestUntilLap)
+            if !step.exerciseRestUntilLap {
+                mmssField("Rest between sets", seconds: $step.exerciseRestSeconds)
+            }
         } header: {
             Text("Prescription")
         } footer: {
             Text("Applies to every set.")
+        }
+    }
+
+    private var restAfterSection: some View {
+        Section {
+            Picker("Rest", selection: $step.restAfter) {
+                ForEach(RestAfter.allCases) { Text($0.label).tag($0) }
+            }
+            if step.restAfter == .timed {
+                mmssField("Duration", seconds: $step.restAfterSeconds)
+            }
+        } header: {
+            Text("After exercise")
+        } footer: {
+            Text("The watch asks for the counted reps at every rest. Skipped when a rest step follows.")
         }
     }
 

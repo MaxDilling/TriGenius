@@ -199,7 +199,7 @@ private struct ExerciseLines: View {
     /// weight only when every set carries the same one.
     private static func line(_ item: StrengthSets.Item) -> String {
         guard case .exercise(let lines) = item, let first = lines.first else {
-            if case .rest(let seconds) = item { return "Rest \(ExerciseSetsCard.time(seconds))" }
+            if case .rest(let rest) = item { return ExerciseSetsCard.restLabel(rest) }
             return ""
         }
         let sets = lines.compactMap(\.set)

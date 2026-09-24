@@ -35,12 +35,35 @@ private func compare(_ planned: [[String: Any]], _ performed: [[String: Any]]) -
     #expect(blocks[0].items.count == 2)
 }
 
-@Test func aRestStepBetweenExercisesIsItsOwnItem() {
+@Test func aRestStepBetweenExercisesIsItsOwnItemAndReplacesTheRestAfter() {
     let rest: [String: Any] = ["type": "rest", "end_condition": "time", "duration_seconds": 120]
     let blocks = StrengthSets.blocks(planned: [plannedExercise("back_squat", reps: [10]), rest,
                                               plannedExercise("push_up", reps: [10])])
-    #expect(blocks.map { $0.items.count } == [1, 1, 1])
-    #expect(blocks[1].items[0] == .rest(seconds: 120))
+    #expect(blocks.map { $0.items.count } == [1, 1, 2])
+    #expect(blocks[1].items[0] == .rest(.timed(seconds: 120)))
+}
+
+@Test func anExerciseRestsUntilLapAfterItsLastSetUnlessToldOtherwise() {
+    var timed = plannedExercise("push_up", reps: [10])
+    timed["rest_after"] = "timed"
+    timed["rest_after_seconds"] = 90
+    var superset = plannedExercise("russian_twist", reps: [20])
+    superset["rest_after"] = "none"
+    let steps = [plannedExercise("back_squat", reps: [5]), timed, superset]
+    #expect(steps.indices.map { StrengthSets.restAfter(steps, at: $0) } == [.lapButton, .timed(seconds: 90), nil])
+}
+
+@Test func circuitMembersFollowEachOtherDirectly() {
+    let circuit: [String: Any] = ["type": "repeat", "repeat_count": 3,
+                                  "repeat_steps": [plannedExercise("push_up", reps: [12]),
+                                                   plannedExercise("russian_twist", reps: [20])]]
+    #expect(StrengthSets.blocks(planned: [circuit])[0].items.allSatisfy { $0.lines.count == 1 })
+}
+
+@Test func aSetCanRestUntilLap() {
+    let step: [String: Any] = ["type": "exercise", "exercise_id": "back_squat",
+                               "sets": [["reps": 5, "rest_until_lap": true], ["reps": 5]]]
+    #expect(StrengthSets.blocks(planned: [step])[0].items[0].lines.map { $0.set?.rest } == [.lapButton, nil])
 }
 
 @Test func recordedSetsRoundTripThroughTheirStoredEntries() {

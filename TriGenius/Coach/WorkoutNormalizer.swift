@@ -284,6 +284,14 @@ nonisolated enum WorkoutNormalizer {
     /// only clearly broken input" philosophy as `validateExtent`/`validateTarget`.
     private static func validateExercise(_ step: [String: Any], label: String, errors: inout [String]) {
         let sets = step["sets"] as? [[String: Any]] ?? []
+        switch step["rest_after"] as? String ?? "lap_button" {
+        case "lap_button", "none": break
+        case "timed":
+            if let rest = Coerce.double(step["rest_after_seconds"]), Bounds.exerciseRestSeconds.contains(rest) { break }
+            errors.append("\(label) (exercise): rest_after timed needs rest_after_seconds within \(shortNumber(Bounds.exerciseRestSeconds.lowerBound))–\(shortNumber(Bounds.exerciseRestSeconds.upperBound)) s.")
+        case let other:
+            errors.append("\(label) (exercise): rest_after \(other) is not one of lap_button, timed, none.")
+        }
         if !Bounds.exerciseSets.contains(Double(sets.count)) {
             errors.append("\(label) (exercise): \(sets.count) sets is outside the plausible range (\(Int(Bounds.exerciseSets.lowerBound))–\(Int(Bounds.exerciseSets.upperBound))).")
         }

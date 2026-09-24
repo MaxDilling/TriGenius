@@ -58,12 +58,15 @@ nonisolated enum GarminWorkoutBuilder {
         var workoutSteps: [[String: Any]] = []
         var stepOrder = 1
 
-        for step in steps {
+        for (index, step) in steps.enumerated() {
             let stepTypeStr = Coerce.token(step["type"] as? String, default: "interval")
             let stepType = GarminMappings.workoutStepTypes[stepTypeStr] ?? GarminMappings.workoutStepTypes["interval"]!
 
             if stepTypeStr == "exercise" {
-                let exercise = exerciseSteps(step, startOrder: stepOrder, sport: sport)
+                var exercise = exerciseSteps(step, startOrder: stepOrder, sport: sport)
+                if let rest = StrengthSets.restAfter(steps, at: index) {
+                    exercise.append(restStep(rest, order: stepOrder + exercise.count, sport: sport))
+                }
                 workoutSteps.append(contentsOf: exercise)
                 stepOrder += exercise.count
                 continue
@@ -139,7 +142,8 @@ nonisolated enum GarminWorkoutBuilder {
 
     /// Garmin models a strength exercise as one step per set: a reps- (or, for a
     /// hold, time-) ended `interval` naming the exercise from Garmin's own
-    /// catalog, with a `rest` step between sets. `exercise_id` resolves through
+    /// catalog, with a `rest` step between sets — the watch asks for the counted
+    /// reps at each rest. `exercise_id` resolves through
     /// `ExerciseLibrary` to that catalog's `category`/`exerciseName`; an exercise
     /// Garmin has no entry for (and a free-typed custom one) goes over unnamed
     /// with the athlete's own name in the step description — naming a
@@ -149,7 +153,6 @@ nonisolated enum GarminWorkoutBuilder {
         let exercise = (step["exercise_id"] as? String).flatMap { ExerciseLibrary.find(id: $0) }
         let name = (step["exercise_name"] as? String) ?? exercise?.name ?? "Exercise"
         let interval = GarminMappings.workoutStepTypes["interval"]!
-        let rest = GarminMappings.workoutStepTypes["rest"]!
 
         var out: [[String: Any]] = []
         for (index, set) in sets.enumerated() {
@@ -165,12 +168,21 @@ nonisolated enum GarminWorkoutBuilder {
                 work["weightUnit"] = kilogramUnit
             }
             out.append(work)
-            if index < sets.count - 1, let seconds = Coerce.double(set["rest_seconds"]), seconds > 0 {
-                out.append(createStep(order: startOrder + out.count, stepTypeKey: rest.key, stepTypeId: rest.id,
-                                      sport: sport, endCondition: "time", endValue: seconds))
+            if index < sets.count - 1, let rest = StrengthSets.rest(ofSet: set), rest != .timed(seconds: 0) {
+                out.append(restStep(rest, order: startOrder + out.count, sport: sport))
             }
         }
         return out
+    }
+
+    private static func restStep(_ rest: StrengthSets.Rest, order: Int, sport: String) -> [String: Any] {
+        let type = GarminMappings.workoutStepTypes["rest"]!
+        return switch rest {
+        case .timed(let seconds):
+            createStep(order: order, stepTypeKey: type.key, stepTypeId: type.id, sport: sport, endValue: seconds)
+        case .lapButton:
+            createStep(order: order, stepTypeKey: type.key, stepTypeId: type.id, sport: sport, endCondition: "lap_button")
+        }
     }
 
     /// The unit object Garmin pairs with a weighted strength step; `weightValue`

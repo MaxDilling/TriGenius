@@ -49,6 +49,20 @@ enum StepKind: String, CaseIterable, Identifiable {
     }
 }
 
+/// A top-level exercise's `rest_after` (`StrengthSets.restAfter`).
+enum RestAfter: String, CaseIterable, Identifiable {
+    case lapButton = "lap_button", timed, none
+
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .lapButton: return "Until lap"
+        case .timed: return "Timed"
+        case .none: return "None"
+        }
+    }
+}
+
 enum StepEnd: String, CaseIterable, Identifiable {
     case time, distance, lapButton = "lap_button", fixedRest = "fixed_rest"
 
@@ -143,6 +157,9 @@ struct StepDraft: Identifiable {
     /// Nil = bodyweight.
     var exerciseWeightKg: Double?
     var exerciseRestSeconds = 90
+    var exerciseRestUntilLap = false
+    var restAfter: RestAfter = .lapButton
+    var restAfterSeconds = 120
 
     init(isRepeat: Bool = false, kind: StepKind = .interval) {
         self.isRepeat = isRepeat
@@ -203,7 +220,10 @@ struct StepDraft: Identifiable {
                 exerciseSetSeconds = Coerce.int(firstSet["duration_seconds"]) ?? exerciseSetSeconds
                 exerciseWeightKg = Coerce.double(firstSet["weight_kg"])
                 exerciseRestSeconds = Coerce.int(firstSet["rest_seconds"]) ?? exerciseRestSeconds
+                exerciseRestUntilLap = firstSet["rest_until_lap"] as? Bool ?? false
             }
+            restAfter = (dict["rest_after"] as? String).flatMap(RestAfter.init) ?? .lapButton
+            restAfterSeconds = Coerce.int(dict["rest_after_seconds"]) ?? restAfterSeconds
             return
         }
         if let childDicts = dict["repeat_steps"] as? [[String: Any]] {
@@ -230,7 +250,7 @@ struct StepDraft: Identifiable {
     /// Serialize back to the compact schema. Raw units, no conversion.
     func dict(swim: Bool) -> [String: Any] {
         if isExercise {
-            var setDict: [String: Any] = ["rest_seconds": exerciseRestSeconds]
+            var setDict: [String: Any] = exerciseRestUntilLap ? ["rest_until_lap": true] : ["rest_seconds": exerciseRestSeconds]
             if exerciseIsTimeBased { setDict["duration_seconds"] = exerciseSetSeconds } else { setDict["reps"] = exerciseReps }
             if let exerciseWeightKg { setDict["weight_kg"] = exerciseWeightKg }
             var d: [String: Any] = [
@@ -240,6 +260,8 @@ struct StepDraft: Identifiable {
                 "sets": Array(repeating: setDict, count: max(1, exerciseSets)),
             ]
             if let exerciseId { d["exercise_id"] = exerciseId }
+            if restAfter != .lapButton { d["rest_after"] = restAfter.rawValue }
+            if restAfter == .timed { d["rest_after_seconds"] = restAfterSeconds }
             return d
         }
         if isRepeat {

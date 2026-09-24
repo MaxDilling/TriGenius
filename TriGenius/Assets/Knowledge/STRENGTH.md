@@ -61,9 +61,14 @@ Rules that hold in every phase:
   responds to load over months, not weeks.
 - **Circuits** (a `repeat` block of exercise steps) are for base-phase general
   strength and time-pressed weeks, never for the heavy work.
-- Rest between the sets of one exercise goes in each set's `rest_seconds`. A
-  longer pause between two exercises is its own `rest` step with
-  `duration_seconds` (e.g. 120 before the next compound lift).
+- Rest between the sets of one exercise goes in each set's `rest_seconds`
+  (or `rest_until_lap: true` when the athlete wants to start each set when ready).
+- After every exercise the app adds a rest until the athlete presses lap: they
+  walk to the next station, and the watch asks for the counted reps. Leave
+  `rest_after` out for this. Use `rest_after: "timed"` with `rest_after_seconds`
+  only for a fixed pause, and `"none"` only for a superset. Do not add `rest`
+  steps between exercises. Inside a circuit the exercises follow each other
+  directly; the round ends on `rest_between_rounds_seconds`.
 - Give **2–5 exercises** per session. More than 6 is a bodybuilding split, not a
   triathlete's session.
 - Always lead with the compound lift when the session has one.
