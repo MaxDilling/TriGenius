@@ -95,13 +95,14 @@ struct PlannedWorkoutDetailView: View {
             }
         }
         .sheet(item: $editor) { WorkoutEditorSheet(context: $0) }
-        .confirmationDialog("Delete this planned workout?", isPresented: $confirmDelete, titleVisibility: .visible) {
+        .alert("Delete this planned workout?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) {
                 Task {
                     await DataSyncCoordinator.shared.deletePlan(id: workout.id)
                     dismiss()
                 }
             }
+            Button("Cancel", role: .cancel) {}
         }
         #if os(iOS)
         .onChange(of: keepAwake) {

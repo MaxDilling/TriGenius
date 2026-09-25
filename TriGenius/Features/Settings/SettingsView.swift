@@ -623,11 +623,7 @@ struct SettingsView: View {
                 } label: {
                     Label("Reset profile", systemImage: "trash")
                 }
-                .confirmationDialog(
-                    "Delete athlete profile?",
-                    isPresented: $showClearConfirm,
-                    titleVisibility: .visible
-                ) {
+                .alert("Delete athlete profile?", isPresented: $showClearConfirm) {
                     Button("Delete", role: .destructive) {
                         resetMemory()
                     }
@@ -686,11 +682,7 @@ struct SettingsView: View {
                 } label: {
                     Label("Delete all my data", systemImage: "trash")
                 }
-                .confirmationDialog(
-                    "Delete all my data?",
-                    isPresented: $showClearDataConfirm,
-                    titleVisibility: .visible
-                ) {
+                .alert("Delete all my data?", isPresented: $showClearDataConfirm) {
                     Button("Delete everything", role: .destructive) {
                         Task { await deleteAllData() }
                     }
@@ -770,11 +762,7 @@ struct SettingsView: View {
                 } label: {
                     Label("Clear local database", systemImage: "externaldrive.badge.xmark")
                 }
-                .confirmationDialog(
-                    "Clear local database?",
-                    isPresented: $showClearDBConfirm,
-                    titleVisibility: .visible
-                ) {
+                .alert("Clear local database?", isPresented: $showClearDBConfirm) {
                     Button("Clear", role: .destructive) {
                         TrainingDataStore.shared.deleteAllData()
                         DataSyncCoordinator.shared.resetSyncState()
@@ -788,11 +776,7 @@ struct SettingsView: View {
                 } label: {
                     Label("Delete historical performance data", systemImage: "chart.line.downtrend.xyaxis")
                 }
-                .confirmationDialog(
-                    "Delete historical performance data?",
-                    isPresented: $showDeletePerfConfirm,
-                    titleVisibility: .visible
-                ) {
+                .alert("Delete historical performance data?", isPresented: $showDeletePerfConfirm) {
                     Button("Delete", role: .destructive) {
                         TrainingDataStore.shared.deletePerformanceMetrics()
                     }
@@ -805,11 +789,7 @@ struct SettingsView: View {
                 } label: {
                     Label("Delete max HR history", systemImage: "heart.slash")
                 }
-                .confirmationDialog(
-                    "Delete max HR history?",
-                    isPresented: $showDeleteMaxHRConfirm,
-                    titleVisibility: .visible
-                ) {
+                .alert("Delete max HR history?", isPresented: $showDeleteMaxHRConfirm) {
                     Button("Delete", role: .destructive) {
                         TrainingDataStore.shared.deleteMetricSeries("max_hr")
                     }
@@ -1319,11 +1299,7 @@ struct ReportsDebugView: View {
             }
             .disabled(store.isEmpty)
         }
-        .confirmationDialog(
-            "Delete all reports?",
-            isPresented: $showResetConfirm,
-            titleVisibility: .visible
-        ) {
+        .alert("Delete all reports?", isPresented: $showResetConfirm) {
             Button("Delete", role: .destructive) { store.clear() }
             Button("Cancel", role: .cancel) {}
         } message: {
