@@ -15,6 +15,10 @@ import Security
 nonisolated enum KeychainStore {
     /// Service namespace for every TriGenius keychain item.
     private static let service = "net.Narica.TriGenius"
+    /// Never the default (when-unlocked): the background refresh syncs Garmin while
+    /// the phone is locked, where every read would come back empty and every token
+    /// write would silently fail.
+    private static var accessibility: CFString { kSecAttrAccessibleAfterFirstUnlock }
 
     /// Account key for the OpenRouter API key.
     static let openRouterAPIKey = "openrouter_api_key"
@@ -38,15 +42,25 @@ nonisolated enum KeychainStore {
     /// Upsert `value` for `account`; an empty string clears it.
     static func set(_ value: String, for account: String) {
         guard !value.isEmpty else { remove(account); return }
-        let data = Data(value.utf8)
         let query = baseQuery(account)
-        let status = SecItemUpdate(query as CFDictionary,
-                                   [kSecValueData as String: data] as CFDictionary)
-        if status == errSecItemNotFound {
-            var insert = query
-            insert[kSecValueData as String] = data
-            SecItemAdd(insert as CFDictionary, nil)
+        let attributes: [String: Any] = [
+            kSecValueData as String: Data(value.utf8),
+            kSecAttrAccessible as String: accessibility,
+        ]
+        if SecItemUpdate(query as CFDictionary, attributes as CFDictionary) == errSecItemNotFound {
+            SecItemAdd(query.merging(attributes) { $1 } as CFDictionary, nil)
         }
+    }
+
+    /// Moves items stored with the system default (readable only while unlocked)
+    /// onto `accessibility`. Fails while the device is locked; the next launch retries.
+    static func migrateAccessibility() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrSynchronizable as String: kCFBooleanTrue as Any,
+        ]
+        SecItemUpdate(query as CFDictionary, [kSecAttrAccessible as String: accessibility] as CFDictionary)
     }
 
     static func remove(_ account: String) {

@@ -25,6 +25,7 @@ struct TriGeniusApp: App {
         // Register the background-refresh handler before launch completes, as
         // BGTaskScheduler requires. No-op on macOS.
         BackgroundCoordinator.shared.register()
+        KeychainStore.migrateAccessibility()
         try? Tips.configure()
     }
 
