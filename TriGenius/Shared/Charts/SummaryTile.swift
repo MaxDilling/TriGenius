@@ -209,8 +209,8 @@ func tightDomain(_ points: [MetricPoint], topPad: Double = 0.18, bottomPad: Doub
 
 // MARK: - PMC tiles
 
-/// The CTL / ATL / TSB tiles. The dashboard and Statistics show the same three
-/// numbers, so their names, colours, rounding and status wording live here. The
+/// The CTL / ATL / TSB + ramp-rate tiles. The dashboard and Statistics show the same
+/// four numbers, so their names, colours, rounding and status wording live here. The
 /// tiles flatten into the caller's grid; `range` is the sparkline window and the
 /// one the Fitness & Form detail opens at.
 struct PMCStatTiles: View {
@@ -222,7 +222,26 @@ struct PMCStatTiles: View {
             tile("Fitness (CTL)", Theme.Palette.fitness, s.ctl, fitnessStatus(delta: result.delta(daysAgo: 7) { $0.ctl })) { $0.ctl }
             tile("Fatigue (ATL)", Theme.Palette.fatigue, s.atl, s.atl > s.ctl ? "High load" : "Moderate load") { $0.atl }
             tile("Form (TSB)", Theme.Palette.form, s.tsb, formStatus(tsb: s.tsb), zeroLine: true) { $0.tsb }
+            let ramp = RampRate.weeklySeries(points: result.points, weeks: range.weeks(first: result.points.first?.date))
+            if let week = ramp.last {
+                rampTile(week, series: ramp)
+            }
         }
+    }
+
+    private func rampTile(_ week: RampWeek, series: [RampWeek]) -> some View {
+        let band = RampRate.safeBand
+        let format: (Double) -> String = { $0.formatted(.number.precision(.fractionLength(1)).sign(strategy: .always())) }
+        return NavigationLink { PMCDetailView(result: result, range: range) } label: {
+            SummaryTile(title: "Ramp rate", color: Theme.Palette.info,
+                        value: format(week.delta),
+                        unit: "CTL/wk",
+                        status: band.contains(week.delta) ? "Sustainable build"
+                            : week.delta > band.upperBound ? "Above the safe ramp" : "Below build range",
+                        series: series.map { MetricPoint(date: $0.weekStart, value: $0.delta) },
+                        zeroLine: true) { format($0.value) }
+        }
+        .buttonStyle(.plain)
     }
 
     private func tile(_ title: String, _ color: Color, _ value: Double, _ status: String,

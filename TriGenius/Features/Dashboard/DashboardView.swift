@@ -9,7 +9,7 @@ import Combine
 // athlete's configured order/visibility (`AppSettings.dashboardLayout`):
 //   • Up Next: today's completed + upcoming planned workouts, one row per
 //     workout → its detail screen.
-//   • Pinned: CTL / ATL / TSB summary tiles → Fitness & Form detail; fitness vs
+//   • Pinned: CTL / ATL / TSB + ramp-rate summary tiles → Fitness & Form detail; fitness vs
 //     the ATP plan and this week's per-discipline rings → Plan tab; the heading's
 //     "All Stats" → StatisticsView.
 //   • Tissue Load: the structural load card → its grid / group detail.
@@ -174,7 +174,7 @@ struct DashboardView: View {
                 .buttonStyle(.plain)
             }
             if let result = viewModel.pmc, result.snapshot != nil {
-                LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide, fill: 3), spacing: Theme.Spacing.m) {
+                LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide, fill: 4), spacing: Theme.Spacing.m) {
                     PMCStatTiles(result: result, range: .oneMonth)
                 }
                 if !viewModel.ctlTrend.actual.isEmpty {

@@ -25,9 +25,6 @@ struct StatisticsView: View {
                     section("Fitness & Form") {
                         LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide, fill: 4), spacing: Theme.Spacing.m) {
                             PMCStatTiles(result: pmc, range: viewModel.range)
-                            if let week = viewModel.ramp.last {
-                                rampTile(week, pmc: pmc)
-                            }
                         }
                     }
                 }
@@ -71,23 +68,6 @@ struct StatisticsView: View {
             SectionHeading(title)
             content()
         }
-    }
-
-    // MARK: Fitness ramp rate
-
-    private func rampTile(_ week: RampWeek, pmc: PMCResult) -> some View {
-        let band = RampRate.safeBand
-        let format: (Double) -> String = { $0.formatted(.number.precision(.fractionLength(1)).sign(strategy: .always())) }
-        return NavigationLink { PMCDetailView(result: pmc, range: viewModel.range) } label: {
-            SummaryTile(title: "Ramp rate", color: Theme.Palette.info,
-                        value: format(week.delta),
-                        unit: "CTL/wk",
-                        status: band.contains(week.delta) ? "Sustainable build"
-                            : week.delta > band.upperBound ? "Above the safe ramp" : "Below build range",
-                        series: viewModel.ramp.map { MetricPoint(date: $0.weekStart, value: $0.delta) },
-                        zeroLine: true) { format($0.value) }
-        }
-        .buttonStyle(.plain)
     }
 
     // MARK: Sport share

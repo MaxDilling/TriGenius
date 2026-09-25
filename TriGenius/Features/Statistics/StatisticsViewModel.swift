@@ -24,7 +24,6 @@ final class StatisticsViewModel {
     /// Today's bounds, not each workout's own — the range can span a threshold
     /// change, so the card labels them as current (`ZoneDistributionStack`).
     private(set) var zoneBounds: [ZoneMetric: [Double]] = [:]
-    private(set) var ramp: [RampWeek] = []
     private(set) var powerCurve: [PowerCurve.Point] = []
 
     private var records: [WorkoutRecord] = []
@@ -48,7 +47,6 @@ final class StatisticsViewModel {
         guard let windowStart = TrainingVolume.recentWeekStarts(weeks: weeks, today: now).first
         else { return }
         records = TrainingDataStore.shared.activities(from: windowStart, to: now)
-        ramp = RampRate.weeklySeries(points: result.points, weeks: weeks, today: now)
 
         rebuildShare()
         rebuildZones()
