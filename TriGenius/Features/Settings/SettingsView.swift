@@ -469,7 +469,7 @@ final class AppSettings: ObservableObject {
                 reasoningEffort: reasoningEffort
             )
         case .appleIntelligence:
-            return FoundationModelBackendFactory.make(useCloud: useAppleCloudCompute)
+            return AppleFoundationModelBackend(useCloud: useAppleCloudCompute)
         case .lmStudio:
             return OpenAICompatibleBackend(
                 displayName: BackendType.lmStudio.rawValue,
@@ -909,26 +909,19 @@ struct SettingsView: View {
 
     private var appleIntelligenceSection: some View {
         Group {
-            if #available(iOS 27.0, macOS 27.0, *) {
-                modelStatusRow("On-device", status: AppleModelAvailability.onDeviceStatus())
+            modelStatusRow("On-device", status: AppleModelAvailability.onDeviceStatus())
 
-                // TODO: Force Private Cloud Compute to unavailable until Apple unlocks it
-                // for this developer account; restore `AppleModelAvailability.cloudStatus()` then.
-                let cloud = AppleModelAvailability.Status(isAvailable: false, detail: "Not yet enabled for this account")
-                modelStatusRow("Private Cloud Compute", status: cloud)
+            // TODO: Force Private Cloud Compute to unavailable until Apple unlocks it
+            // for this developer account; restore `AppleModelAvailability.cloudStatus()` then.
+            let cloud = AppleModelAvailability.Status(isAvailable: false, detail: "Not yet enabled for this account")
+            modelStatusRow("Private Cloud Compute", status: cloud)
 
-                Toggle("Use Private Cloud Compute", isOn: $settings.useAppleCloudCompute)
-                    .disabled(!cloud.isAvailable)
-                    .onChange(of: settings.useAppleCloudCompute) { onBackendChanged() }
-            } else {
-                Label("Requires iOS 27 / macOS 27", systemImage: "xmark.circle.fill")
-                    .foregroundStyle(Theme.Palette.danger)
-                    .font(.caption)
-            }
+            Toggle("Use Private Cloud Compute", isOn: $settings.useAppleCloudCompute)
+                .disabled(!cloud.isAvailable)
+                .onChange(of: settings.useAppleCloudCompute) { onBackendChanged() }
         }
     }
 
-    @available(iOS 27.0, macOS 27.0, *)
     private func modelStatusRow(_ name: String, status: AppleModelAvailability.Status) -> some View {
         Label {
             Text("\(name)\(status.detail.map { " — \($0)" } ?? "")")

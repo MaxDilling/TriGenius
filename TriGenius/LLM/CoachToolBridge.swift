@@ -9,7 +9,6 @@ import FoundationModels
 // instead wants a `GenerationSchema`. This builder converts one to the other at
 // runtime so we don't have to hand-write a `@Generable` struct per tool.
 
-@available(iOS 27.0, macOS 27.0, *)
 nonisolated enum JSONSchemaToGenerationSchema {
 
     /// Build a `GenerationSchema` from a tool's JSON-Schema `parameters` object.
@@ -80,7 +79,6 @@ nonisolated enum JSONSchemaToGenerationSchema {
 // CoachBrain-driven path) to the executor closure, which runs the real handler
 // on the MainActor.
 
-@available(iOS 27.0, macOS 27.0, *)
 nonisolated final class CoachToolBridge: Tool {
     typealias Arguments = GeneratedContent
     typealias Output = String

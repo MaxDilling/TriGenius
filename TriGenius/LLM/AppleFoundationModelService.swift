@@ -8,7 +8,6 @@ import FoundationModels
 // alive across turns (faster follow-ups, real multi-turn context) and lets the
 // framework run the tool-call loop internally via `CoachToolBridge` tools.
 
-@available(iOS 27.0, macOS 27.0, *)
 @MainActor
 final class AppleFoundationModelBackend: LLMBackend {
     let displayName = "Apple Intelligence"
@@ -183,32 +182,12 @@ final class AppleFoundationModelBackend: LLMBackend {
     }
 }
 
-// MARK: - Unavailability Stub
-//
-// Returned only if the API surface is somehow unavailable (older OS than the
-// deployment target). Kept as a safety net.
-
-final class UnavailableFoundationModelBackend: LLMBackend {
-    let displayName = "Apple Intelligence (unavailable)"
-    let supportsTools = false
-    let isAvailable = false
-
-    func complete(
-        systemPrompt: String,
-        turns: [ConversationTurn],
-        tools: [ToolDefinition]
-    ) async throws -> LLMCompletion {
-        throw FoundationModelError.notAvailable
-    }
-}
-
 // MARK: - Availability
 //
 // One place to ask "can Apple's model answer right now?", for both the
 // on-device `SystemLanguageModel` and the Private Cloud Compute server model.
 // Feeds the backend's readiness checks and the Settings status readout.
 
-@available(iOS 27.0, macOS 27.0, *)
 enum AppleModelAvailability {
     /// A UI-ready line about one model: available + (for cloud) its quota state.
     struct Status {
@@ -285,28 +264,13 @@ enum AppleModelAvailability {
     }
 }
 
-// MARK: - Factory
-
-enum FoundationModelBackendFactory {
-    static func make(useCloud: Bool = false) -> LLMBackend {
-        if #available(iOS 27.0, macOS 27.0, *) {
-            return AppleFoundationModelBackend(useCloud: useCloud)
-        } else {
-            return UnavailableFoundationModelBackend()
-        }
-    }
-}
-
 // MARK: - Errors
 
 enum FoundationModelError: LocalizedError {
-    case notAvailable
     case unavailable(message: String)
 
     var errorDescription: String? {
         switch self {
-        case .notAvailable:
-            return "Apple Intelligence is not available on this device."
         case .unavailable(let message):
             return message
         }

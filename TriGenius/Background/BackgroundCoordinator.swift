@@ -52,12 +52,14 @@ final class BackgroundCoordinator {
         #if os(iOS)
         let request = BGAppRefreshTaskRequest(identifier: Self.refreshTaskID)
         request.earliestBeginDate = Date(timeIntervalSinceNow: minInterval)
-        do {
-            try BGTaskScheduler.shared.submit(request)
-        } catch {
-            // Typically BGTaskSchedulerErrorDomain — not permitted, simulator, or
-            // already-pending. Non-fatal; the feature simply stays dormant.
-            print("⏱️ [TriGenius] background refresh not scheduled: \(error.localizedDescription)")
+        Task {
+            do {
+                try await BGTaskScheduler.shared.submitTaskRequest(request)
+            } catch {
+                // Typically BGTaskSchedulerErrorDomain — not permitted, simulator, or
+                // already-pending. Non-fatal; the feature simply stays dormant.
+                print("⏱️ [TriGenius] background refresh not scheduled: \(error.localizedDescription)")
+            }
         }
         #endif
     }
