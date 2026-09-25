@@ -155,6 +155,15 @@ struct ExerciseSetsCard: View {
         }
     }
 
+    /// "3 × 10 @ 20 kg" for uniform sets, "10 / 8 / 8" when the reps vary; the
+    /// weight only when every set carries the same one.
+    static func volume(_ sets: [StrengthSets.SetRow]) -> String {
+        let extents = sets.map { $0.reps.map(String.init) ?? time($0.seconds) }
+        let volume = Set(extents).count == 1 ? "\(sets.count) × \(extents[0])" : extents.joined(separator: " / ")
+        let loads = Set(sets.map(load))
+        return volume + (loads.count == 1 ? loads.first.map { $0 == "BW" ? " · BW" : " @ \($0) kg" } ?? "" : "")
+    }
+
     /// Kilograms without the unit (the column says it), or bodyweight.
     static func load(_ set: StrengthSets.SetRow) -> String {
         set.weightKg.map { $0.formatted(.number.precision(.fractionLength(0...1))) } ?? "BW"

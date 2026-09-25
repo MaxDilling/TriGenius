@@ -701,6 +701,32 @@ final class DataSyncCoordinator {
         store.deleteScheduledWorkout(id: id)
     }
 
+    /// Record a finished live strength session as the completed half of its plan:
+    /// an `app:` activity linked to the plan before it is ingested, so the ingest
+    /// folds it in like any linked activity and scores it the same way (no heart
+    /// rate, so no TL).
+    func saveLiveStrength(_ session: StrengthSession) {
+        let id = "app:\(UUID().uuidString)"
+        let start = session.startedAt
+        let clock = Calendar.current.dateComponents([.hour, .minute], from: start)
+        let minutes = (session.elapsed(at: session.endedAt ?? .now) / 6).rounded() / 10
+        var details: [String: Any] = [
+            "id": id, "name": session.planName, "sport": session.sport,
+            "date": DateFormatter.ymd.string(from: start),
+            "time": String(format: "%02d:%02d", clock.hour ?? 0, clock.minute ?? 0),
+            "duration_minutes": minutes,
+            "strength": ["exercises": StrengthSets.entries(session.performed)],
+        ]
+        if let rpe = session.rpe { details["rpe"] = rpe }
+        store.setExternalRef(id: session.planId, target: TrainingDataStore.completedRefKey, externalId: id)
+        store.ingest([IngestedActivity(
+            id: id, source: "app", date: Calendar.current.startOfDay(for: start),
+            sport: session.sport, name: session.planName, durationMinutes: minutes, distanceKm: 0,
+            detailsJSON: String(compactJSON: details), powerCurveJSON: "", streamsData: Data(),
+            segmentsJSON: "", zoneSamples: [:], legZoneSamples: [:]
+        )])
+    }
+
     /// Display snapshot of a plan for the chat's mutation cards (modify
     /// before/after, move-from, delete): the fields the card shows plus the
     /// canonical `workout_data` the diff compares — always the *stored* state,

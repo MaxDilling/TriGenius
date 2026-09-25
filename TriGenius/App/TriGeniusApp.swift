@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import TipKit
 
 // MARK: - App Root
 
@@ -24,6 +25,7 @@ struct TriGeniusApp: App {
         // Register the background-refresh handler before launch completes, as
         // BGTaskScheduler requires. No-op on macOS.
         BackgroundCoordinator.shared.register()
+        try? Tips.configure()
     }
 
     var body: some Scene {
@@ -155,6 +157,7 @@ struct RootTabView: View {
 
     /// First-launch medical disclaimer gate (Guideline 1.4.1).
     @AppStorage("medical_disclaimer_accepted") private var disclaimerAccepted = false
+    @Bindable private var live = LiveStrengthController.shared
 
     var body: some View {
         TabView(selection: $router.selectedTab) {
@@ -188,6 +191,19 @@ struct RootTabView: View {
         // Tab bar on the phone, sidebar on iPad regular width and macOS — the wide
         // shell the dashboard's column layouts assume.
         .tabViewStyle(.sidebarAdaptable)
+        // A live strength workout runs over every tab: full screen, or collapsed
+        // into the mini bar above the tab bar (a sheet on the Mac, which has none).
+        #if os(iOS)
+        .tabViewBottomAccessory(isEnabled: live.session != nil && !live.isPresented) {
+            if let session = live.session {
+                LiveStrengthMiniBar(session: session) { live.isPresented = true }
+            }
+        }
+        .fullScreenCover(isPresented: $live.isPresented) { LiveStrengthView() }
+        #else
+        .sheet(isPresented: $live.isPresented) { LiveStrengthView().frame(minWidth: 460, minHeight: 720) }
+        #endif
+        .sensoryFeedback(.impact(weight: .heavy), trigger: live.cue)
         .environment(router)
         // The one place the window's size is knowable; sheets read it back
         // through `\.windowSize` to size themselves against it.

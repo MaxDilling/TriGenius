@@ -1614,6 +1614,33 @@ final class TrainingDataStore {
         return nil
     }
 
+    /// This exercise's sets in the most recent completed session that has it —
+    /// what was lifted, matched on the key plan and record share
+    /// (`SetRow.garminKey`). Empty when it was never recorded.
+    func lastLiftedSets(key: String, before: Date = .now) -> [StrengthSets.SetRow] {
+        var descriptor = FetchDescriptor<WorkoutRecord>(
+            predicate: #Predicate { $0.isCompleted && $0.date < before },
+            sortBy: [SortDescriptor(\.date, order: .reverse)]
+        )
+        descriptor.fetchLimit = 60
+        for record in (try? context.fetch(descriptor)) ?? [] where SportFamily(sportKey: record.sport) == .strength {
+            let entries = (Self.jsonObject(record.detailsJSON)?["strength"] as? [String: Any])?["exercises"] as? [[String: Any]]
+            let sets = StrengthSets.rows(performed: entries ?? []).filter { $0.garminKey == key }
+            if !sets.isEmpty { return sets }
+        }
+        return []
+    }
+
+    /// Where a new prescription of `exercise` starts: the heaviest set the athlete
+    /// last lifted on it, else the weight they last planned. Nil = bodyweight.
+    func startingWeightKg(for exercise: Exercise) -> Double? {
+        lastLiftedSets(for: exercise).compactMap(\.weightKg).max() ?? lastPlannedWeightKg(exerciseId: exercise.id)
+    }
+
+    func lastLiftedSets(for exercise: Exercise) -> [StrengthSets.SetRow] {
+        lastLiftedSets(key: StrengthSets.SetRow(exerciseId: exercise.id, exerciseName: exercise.name).garminKey ?? exercise.name)
+    }
+
     /// Depth-first through circuits: the first set of the named exercise that
     /// carries a weight (a bodyweight prescription deliberately reports none).
     private static func plannedWeight(in steps: [[String: Any]], exerciseId: String) -> Double? {

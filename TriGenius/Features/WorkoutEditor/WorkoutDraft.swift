@@ -208,9 +208,11 @@ struct StepDraft: Identifiable {
         if (dict["type"] as? String) == "exercise" {
             isExercise = true
             exerciseId = dict["exercise_id"] as? String
-            exerciseName = (dict["exercise_name"] as? String) ?? "Exercise"
-            exerciseIsTimeBased = dict["is_time_based"] as? Bool ?? false
             let sets = dict["sets"] as? [[String: Any]] ?? []
+            // Named like `StrengthSets.SetRow.title`: a plan may carry only the id.
+            exerciseName = exerciseId.flatMap(ExerciseLibrary.find(id:))?.name ?? dict["exercise_name"] as? String ?? ""
+            exerciseIsTimeBased = dict["is_time_based"] as? Bool
+                ?? (sets.first.map { $0["reps"] == nil && $0["duration_seconds"] != nil } ?? false)
             exerciseSets = max(1, sets.count)
             // Non-uniform (per-set) prescriptions collapse to the first set's
             // values — this editor only offers a uniform UI; the stepped

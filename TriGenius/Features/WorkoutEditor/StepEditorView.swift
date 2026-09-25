@@ -14,7 +14,15 @@ struct StepEditorView: View {
     /// False inside a repeat block: child steps can't be repeats themselves.
     let allowRepeat: Bool
 
-    @State private var showingExercisePicker = false
+    @State private var showingExercisePicker: Bool
+
+    /// `picking` opens the exercise picker right away.
+    init(step: Binding<StepDraft>, sport: EditorSport, allowRepeat: Bool, picking: Bool = false) {
+        _step = step
+        self.sport = sport
+        self.allowRepeat = allowRepeat
+        _showingExercisePicker = State(initialValue: picking)
+    }
 
     var body: some View {
         Form {
@@ -47,9 +55,9 @@ struct StepEditorView: View {
                 step.exerciseId = exercise.id
                 step.exerciseName = exercise.name
                 step.exerciseIsTimeBased = exercise.isTimeBased
-                // Start from the weight this athlete last prescribed for it; nil
-                // stays bodyweight rather than inventing a load.
-                step.exerciseWeightKg = TrainingDataStore.shared.lastPlannedWeightKg(exerciseId: exercise.id)
+                // Start from what this athlete last lifted or prescribed for it;
+                // nil stays bodyweight rather than inventing a load.
+                step.exerciseWeightKg = TrainingDataStore.shared.startingWeightKg(for: exercise)
             },
             onSelectCustom: { name in
                 step.exerciseId = nil
@@ -59,10 +67,15 @@ struct StepEditorView: View {
         )
     }
 
-    /// What the athlete prescribed for this exercise last time — shown beside the
-    /// weight field so a working weight is a memory, never a guess or a max test.
-    private var lastPlannedWeightKg: Double? {
-        step.exerciseId.flatMap { TrainingDataStore.shared.lastPlannedWeightKg(exerciseId: $0) }
+    /// What the athlete lifted on this exercise last time, else what they last
+    /// prescribed — shown beside the weight field so a working weight is a
+    /// memory, never a guess or a max test.
+    private var lastWeightNote: String? {
+        guard let exercise = step.exerciseId.flatMap(ExerciseLibrary.find(id:)) else { return nil }
+        let lifted = TrainingDataStore.shared.lastLiftedSets(for: exercise)
+        if !lifted.isEmpty { return "Last lifted: \(ExerciseSetsCard.volume(lifted))" }
+        return TrainingDataStore.shared.lastPlannedWeightKg(exerciseId: exercise.id)
+            .map { "Last planned: \($0.formatted(.number.precision(.fractionLength(0...1)))) kg" }
     }
 
     // MARK: Exercise (strength only)
@@ -95,9 +108,8 @@ struct StepEditorView: View {
             if step.exerciseWeightKg != nil {
                 numberField("Weight (kg)", value: $step.exerciseWeightKg, format: .number)
             }
-            if let last = lastPlannedWeightKg {
-                Text("Last planned: \(last.formatted(.number.precision(.fractionLength(0...1)))) kg")
-                    .font(.caption).foregroundStyle(.secondary)
+            if let lastWeightNote {
+                Text(lastWeightNote).font(.caption).foregroundStyle(.secondary)
             }
             Toggle("Rest until lap", isOn: $step.exerciseRestUntilLap)
             if !step.exerciseRestUntilLap {
@@ -105,23 +117,17 @@ struct StepEditorView: View {
             }
         } header: {
             Text("Prescription")
-        } footer: {
-            Text("Applies to every set.")
         }
     }
 
     private var restAfterSection: some View {
-        Section {
+        Section("After exercise") {
             Picker("Rest", selection: $step.restAfter) {
                 ForEach(RestAfter.allCases) { Text($0.label).tag($0) }
             }
             if step.restAfter == .timed {
                 mmssField("Duration", seconds: $step.restAfterSeconds)
             }
-        } header: {
-            Text("After exercise")
-        } footer: {
-            Text("The watch asks for the counted reps at every rest. Skipped when a rest step follows.")
         }
     }
 
@@ -225,23 +231,22 @@ struct StepEditorView: View {
                 } label: {
                     Text(child.summary(sport: sport)).lineLimit(2)
                 }
-                // macOS has no swipe-to-delete or drag-to-reorder; a right-click
-                // here edits without ever touching navigation/dismiss state —
-                // unlike a delete button inside the pushed detail view, which
-                // crashed AppKit's window layout on open (see git history).
+                .reorderable(child.id, in: $step.children)
+                // macOS has no swipe-to-delete; a right-click here deletes without
+                // ever touching navigation/dismiss state — unlike a delete button
+                // inside the pushed detail view, which crashed AppKit's window
+                // layout on open (see git history).
                 .contextMenu {
-                    reorderButtons($step.children, id: child.id)
                     Button("Delete", role: .destructive) {
                         step.children.removeAll { $0.id == child.id }
                     }
                 }
             }
             .onDelete { step.children.remove(atOffsets: $0) }
-            .onMove { step.children.move(fromOffsets: $0, toOffset: $1) }
             if sport == .strength {
-                Menu("Add") {
-                    Button("Exercise") { step.children.append(StepDraft.exercise()) }
-                    Button("Rest") { step.children.append(StepDraft.exerciseRest()) }
+                addButtons {
+                    Button("Exercise", systemImage: "plus") { step.children.append(StepDraft.exercise()) }
+                    Button("Rest", systemImage: "plus") { step.children.append(StepDraft.exerciseRest()) }
                 }
             } else {
                 Button("Add step") { step.children.append(StepDraft(kind: .interval)) }

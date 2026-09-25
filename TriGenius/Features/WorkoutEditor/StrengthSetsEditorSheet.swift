@@ -36,14 +36,13 @@ struct StrengthSetsEditorSheet: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
-                        // macOS has no swipe-to-delete or drag-to-reorder (see `reorderButtons`).
+                        .reorderable(set.id, in: $sets)
+                        // macOS has no swipe-to-delete.
                         .contextMenu {
-                            reorderButtons($sets, id: set.id)
                             Button("Delete", role: .destructive) { sets.removeAll { $0.id == set.id } }
                         }
                     }
                     .onDelete { sets.remove(atOffsets: $0) }
-                    .onMove { sets.move(fromOffsets: $0, toOffset: $1) }
                     Button("Add set") { sets.append(EditableSet(row: sets.last?.row ?? StrengthSets.SetRow())) }
                 } footer: {
                     Text("Your corrections replace what the watch recorded and stay through every sync.")

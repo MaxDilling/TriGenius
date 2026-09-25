@@ -53,7 +53,7 @@ struct WorkoutEditorSheet: View {
                 stepsSection
             }
             .formStyle(.grouped)
-            .navigationTitle(editingId == nil ? "New Workout" : "Edit Workout")
+            .navigationTitle(editingId == nil ? "New Workout" : "Edit \(draft.sport.label) Workout")
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -82,15 +82,24 @@ struct WorkoutEditorSheet: View {
     private var basicsSection: some View {
         Section("Workout") {
             TextField("Name", text: $draft.name, prompt: Text("auto"))
-            Picker("Sport", selection: $draft.sport) {
-                ForEach(EditorSport.allCases) { sport in
-                    Label(sport.label, systemImage: sport.family.icon).tag(sport)
+            // A plan's sport is fixed once it exists — the title names it.
+            if editingId == nil {
+                Picker("Sport", selection: $draft.sport) {
+                    ForEach(EditorSport.allCases) { sport in
+                        Label(sport.label, systemImage: sport.family.icon).tag(sport)
+                    }
                 }
             }
             DatePicker("Date", selection: $draft.date, displayedComponents: .date)
-            Toggle("Set start time", isOn: hasStartTime)
-            if draft.startMinute != nil {
-                DatePicker("Start time", selection: startTime, displayedComponents: .hourAndMinute)
+            LabeledContent("Time") {
+                HStack {
+                    if draft.startMinute != nil {
+                        Button("Clear") { draft.startMinute = nil }.buttonStyle(.borderless)
+                    }
+                    DatePicker("Time", selection: startTime, displayedComponents: .hourAndMinute)
+                        .labelsHidden()
+                        .opacity(draft.startMinute == nil ? 0.5 : 1)
+                }
             }
             numberField("Duration (min)", value: $draft.durationMinutes, format: .number)
             // Strength is the one sport with no meaningful distance — yoga,
@@ -104,11 +113,6 @@ struct WorkoutEditorSheet: View {
             }
             TextField("Notes", text: $draft.notes, axis: .vertical)
         }
-    }
-
-    private var hasStartTime: Binding<Bool> {
-        Binding(get: { draft.startMinute != nil },
-                set: { draft.startMinute = $0 ? (draft.startMinute ?? 8 * 60) : nil })
     }
 
     private var startTime: Binding<Date> {
@@ -145,27 +149,26 @@ struct WorkoutEditorSheet: View {
                     Text(step.summary(sport: draft.sport))
                         .lineLimit(2)
                 }
-                // macOS has no swipe-to-delete or drag-to-reorder; a right-click
-                // here edits without touching navigation/dismiss state — unlike a
-                // delete button inside the pushed detail view, which crashed
-                // AppKit's window layout on open (see git history).
+                .reorderable(step.id, in: $draft.steps)
+                // macOS has no swipe-to-delete; a right-click here deletes without
+                // touching navigation/dismiss state — unlike a delete button inside
+                // the pushed detail view, which crashed AppKit's window layout on
+                // open (see git history).
                 .contextMenu {
-                    reorderButtons($draft.steps, id: step.id)
                     Button("Delete", role: .destructive) {
                         draft.steps.removeAll { $0.id == step.id }
                     }
                 }
             }
             .onDelete { draft.steps.remove(atOffsets: $0) }
-            .onMove { draft.steps.move(fromOffsets: $0, toOffset: $1) }
-            Menu("Add") {
+            addButtons {
                 if draft.sport == .strength {
-                    Button("Exercise") { draft.steps.append(StepDraft.exercise()) }
-                    Button("Circuit (repeat block)") { draft.steps.append(StepDraft.exerciseCircuit()) }
-                    Button("Rest") { draft.steps.append(StepDraft.exerciseRest()) }
+                    Button("Exercise", systemImage: "plus") { draft.steps.append(StepDraft.exercise()) }
+                    Button("Circuit", systemImage: "plus") { draft.steps.append(StepDraft.exerciseCircuit()) }
+                    Button("Rest", systemImage: "plus") { draft.steps.append(StepDraft.exerciseRest()) }
                 } else {
-                    Button("Step") { draft.steps.append(StepDraft()) }
-                    Button("Repeat block") { draft.steps.append(StepDraft(isRepeat: true)) }
+                    Button("Step", systemImage: "plus") { draft.steps.append(StepDraft()) }
+                    Button("Repeat block", systemImage: "plus") { draft.steps.append(StepDraft(isRepeat: true)) }
                 }
             }
         } header: {
@@ -226,16 +229,29 @@ func numberField<F: ParseableFormatStyle>(_ label: String, value: Binding<F.Form
     }
 }
 
-/// Move Up / Move Down for a row's context menu: macOS's grouped `Form` is not a
-/// `List`, so `onMove` never gets a drag there.
-@ViewBuilder
-func reorderButtons<Item: Identifiable>(_ items: Binding<[Item]>, id: Item.ID) -> some View {
-    if let index = items.wrappedValue.firstIndex(where: { $0.id == id }) {
-        Button("Move Up", systemImage: "arrow.up") { items.wrappedValue.swapAt(index, index - 1) }
-            .disabled(index == 0)
-        Button("Move Down", systemImage: "arrow.down") { items.wrappedValue.swapAt(index, index + 1) }
-            .disabled(index == items.wrappedValue.count - 1)
+extension View {
+    /// Drag this row onto another row of `items` to move it into that slot.
+    /// Drag and drop, not `onMove`: macOS's grouped `Form` is not a `List`, so
+    /// `onMove` never gets a drag there.
+    func reorderable<Item: Identifiable>(_ id: UUID, in items: Binding<[Item]>) -> some View where Item.ID == UUID {
+        draggable(id.uuidString)
+            .dropDestination(for: String.self) { dropped, _ in
+                let list = items.wrappedValue
+                guard let movedId = dropped.first.flatMap(UUID.init(uuidString:)),
+                      let from = list.firstIndex(where: { $0.id == movedId }),
+                      let to = list.firstIndex(where: { $0.id == id }), from != to else { return }
+                items.wrappedValue.move(fromOffsets: [from], toOffset: to > from ? to + 1 : to)
+            }
     }
+}
+
+/// A form's add row: one borderless "+" button per kind, side by side.
+func addButtons<Content: View>(@ViewBuilder _ buttons: () -> Content) -> some View {
+    HStack(spacing: Theme.Spacing.l) {
+        buttons()
+    }
+    .labelStyle(.titleAndIcon)
+    .buttonStyle(.borderless)
 }
 
 /// An "m:ss" field over whole seconds (display-only conversion; the stored

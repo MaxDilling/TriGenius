@@ -195,19 +195,12 @@ private struct ExerciseLines: View {
         }
     }
 
-    /// "3 × 10 @ 20 kg" for uniform sets, "10 / 8 / 8" when the reps vary; the
-    /// weight only when every set carries the same one.
     private static func line(_ item: StrengthSets.Item) -> String {
         guard case .exercise(let lines) = item, let first = lines.first else {
             if case .rest(let rest) = item { return ExerciseSetsCard.restLabel(rest) }
             return ""
         }
-        let sets = lines.compactMap(\.set)
-        let extents = sets.map { $0.reps.map(String.init) ?? ExerciseSetsCard.time($0.seconds) }
-        let volume = Set(extents).count == 1 ? "\(sets.count) × \(extents[0])" : extents.joined(separator: " / ")
-        let loads = Set(sets.map(ExerciseSetsCard.load))
-        let load = loads.count == 1 ? loads.first.map { $0 == "BW" ? " · BW" : " @ \($0) kg" } ?? "" : ""
-        return "\(first.title) · \(volume)\(load)"
+        return "\(first.title) · \(ExerciseSetsCard.volume(lines.compactMap(\.set)))"
     }
 }
 

@@ -184,7 +184,7 @@ struct TrainingDetailView: View {
                 }
             }
         }
-        .confirmationDialog("Delete this workout?", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
+        .alert("Delete this workout?", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) {
                 TrainingDataStore.shared.deleteActivity(id: record.id)
                 dismiss()
@@ -193,7 +193,7 @@ struct TrainingDetailView: View {
         } message: {
             Text("Removes the stored row. A full re-sync of its source re-creates it — use this to verify the sync rebuilds the record.")
         }
-        .confirmationDialog("Unlink this activity from its plan?", isPresented: $showUnlinkConfirm, titleVisibility: .visible) {
+        .alert("Unlink this activity from its plan?", isPresented: $showUnlinkConfirm) {
             Button("Unlink", role: .destructive) {
                 TrainingDataStore.shared.unlinkActual(planId: record.id)
                 dismiss()
@@ -202,7 +202,7 @@ struct TrainingDetailView: View {
         } message: {
             Text("Splits this row into the open plan and a standalone activity, so you can link the correct activity to the plan.")
         }
-        .confirmationDialog("Ignore this workout?", isPresented: $showIgnoreConfirm, titleVisibility: .visible) {
+        .alert("Ignore this workout?", isPresented: $showIgnoreConfirm) {
             Button("Ignore", role: .destructive) {
                 TrainingDataStore.shared.ignoreActivity(id: record.id)
                 dismiss()
@@ -1007,13 +1007,14 @@ struct TrainingDetailView: View {
     // at ingest). Garmin's classifier names the exercise itself, so a set the
     // athlete improvised still shows up — this is the record, beside the plan it
     // was linked to. Once the athlete has saved their own corrections, the
-    // review is done and no set is flagged any more.
+    // review is done and no set is flagged any more; a session logged live in
+    // the app (`app:`) is the athlete's own count and never needs one.
 
     @ViewBuilder
     private func strengthCard(_ details: [String: Any]) -> some View {
         let rows = StrengthSets.rows(performed: (details["strength"] as? [String: Any])?["exercises"] as? [[String: Any]] ?? [])
         if !rows.isEmpty {
-            let corrected = record.overridesJSON.data(using: .utf8)
+            let corrected = completedActivityId.hasPrefix("app:") || record.overridesJSON.data(using: .utf8)
                 .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["strength"] != nil
             let lines = StrengthSets.comparison(planned: WorkoutPayloadBuilder.parseSteps(record.stepsJSON) ?? [],
                                                 performed: rows)

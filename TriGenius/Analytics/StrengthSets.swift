@@ -21,13 +21,19 @@ import Foundation
 
 nonisolated enum StrengthSets {
 
-    nonisolated enum Rest: Hashable, Sendable {
+    nonisolated enum Rest: Codable, Hashable, Sendable {
         case timed(seconds: Double)
         /// Until the athlete presses lap.
         case lapButton
     }
 
-    nonisolated struct SetRow: Hashable, Sendable {
+    /// How hard a set felt, as the athlete rated it right after — optional, and
+    /// collected for a later use (reps in reserve for e1RM), shown nowhere yet.
+    nonisolated enum Effort: String, Codable, CaseIterable, Sendable {
+        case easy, right, hard
+    }
+
+    nonisolated struct SetRow: Codable, Hashable, Sendable {
         /// `ExerciseLibrary` id — a plan's, or an athlete-edited recorded set's.
         var exerciseId: String?
         /// As stored: the plan's display name, Garmin's key for a recorded set
@@ -43,6 +49,7 @@ nonisolated enum StrengthSets {
         var weightKg: Double?
         /// Rest after this set; nil where none follows.
         var rest: Rest?
+        var effort: Effort?
 
         /// A timed rest, the only kind a recorded set carries.
         var restSeconds: Double? {
@@ -171,7 +178,8 @@ nonisolated enum StrengthSets {
                        reps: Coerce.int(set["reps"]),
                        seconds: Coerce.double(set["duration_seconds"]),
                        weightKg: Coerce.double(set["weight_kg"]),
-                       rest: Coerce.double(set["rest_seconds"]).map { .timed(seconds: $0) })
+                       rest: Coerce.double(set["rest_seconds"]).map { .timed(seconds: $0) },
+                       effort: (set["effort"] as? String).flatMap(Effort.init))
             }
         }
     }
@@ -187,6 +195,7 @@ nonisolated enum StrengthSets {
             if let seconds = row.seconds { set["duration_seconds"] = seconds }
             if let kg = row.weightKg { set["weight_kg"] = kg }
             if let rest = row.restSeconds { set["rest_seconds"] = rest }
+            if let effort = row.effort { set["effort"] = effort.rawValue }
             if let previous, previous.sameExercise(as: row) {
                 out[out.count - 1]["sets"] = (out[out.count - 1]["sets"] as? [[String: Any]] ?? []) + [set]
             } else {

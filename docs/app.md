@@ -6,6 +6,15 @@ Detail doc for `App/`, `Features/Settings/`, `AppIntents/`. Index: `CLAUDE.md` �
 
 Builds `CoachBrain` once; `applyBackend` re-applies backend + `setSources` + `reconcileWriteTarget` on any settings change. Launch does `syncAll(readSources)` then `reconcileWriteTarget`. Tab UI in `RootTabView`.
 
+## Live strength workout (`Features/LiveStrength/`)
+
+A planned strength session worked through in the app, set by set — started from "Start workout" on `PlannedWorkoutDetailView` (only a plan with exercises; one session at a time, the button resumes a running one). `RootTabView` presents it over every tab: a full-screen cover that collapses into a `tabViewBottomAccessory` mini bar on iOS/iPadOS, a sheet on the Mac.
+
+- **`StrengthSession`** (`Analytics/`, pinned by `StrengthSessionTests`) is the pure state: the plan's blocks as units (a circuit unrolled round by round), each set carrying the rest after it; every phase anchored on a `Date`, so a relaunch or a backgrounded app reads exactly. Reordering, "Do now", "Later" (current unit to the end — introduced once by a TipKit tip, `Tips.configure()` in `TriGeniusApp.init`), swapping and adding change the session's record only, never the plan.
+- **`LiveStrengthController`** owns the one running session: every change goes through `update`, which writes `live_strength.json` (Application Support, device-local — a killed app resumes), re-arms the next deadline (5 s before a rest ends, its end, a hold's end — which logs the hold) as a haptic `cue`, and disables auto-lock while a session runs. The athlete keeps the phone unlocked; there is no notification or Live Activity (see `FEATURES.md`).
+- **Save** → `DataSyncCoordinator.saveLiveStrength` (see `docs/store.md`); **Discard** drops the file and leaves the plan untouched. Nothing is written to Apple Health.
+- The exercise demo and form cues are placeholders until the library carries media.
+
 ## `App/SparkleUpdater.swift` (macOS only)
 
 Sparkle auto-update for the **Developer-ID** build — the one `Scripts/release.sh` publishes to GitHub Releases, **not** App-Store-compatible (guideline 2.4.5). `SPUStandardUpdaterController` + a "Check for Updates…" app-menu command.

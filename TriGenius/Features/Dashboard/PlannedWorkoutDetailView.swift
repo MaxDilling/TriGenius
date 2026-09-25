@@ -55,6 +55,9 @@ struct PlannedWorkoutDetailView: View {
                 header
                 heroCapsule
                 tssBasisNote
+                if family == .strength, !workout.isCompleted, !exerciseBlocks.isEmpty {
+                    startButton
+                }
                 if let structure, !structure.steps.isEmpty {
                     PlannedStructureCard(structure: structure, accent: family.color)
                 } else if !exerciseBlocks.isEmpty {
@@ -98,8 +101,12 @@ struct PlannedWorkoutDetailView: View {
             }
         }
         #if os(iOS)
-        .onChange(of: keepAwake) { UIApplication.shared.isIdleTimerDisabled = keepAwake }
-        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+        .onChange(of: keepAwake) {
+            UIApplication.shared.isIdleTimerDisabled = keepAwake || LiveStrengthController.shared.session != nil
+        }
+        .onDisappear {
+            if keepAwake { UIApplication.shared.isIdleTimerDisabled = LiveStrengthController.shared.session != nil }
+        }
         #endif
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
             // Keep the last known record if the workout was deleted out from under us.
@@ -201,6 +208,21 @@ struct PlannedWorkoutDetailView: View {
         .padding(.vertical, Theme.Spacing.l)
         .padding(.horizontal, Theme.Spacing.m)
         .glassSurface(cornerRadius: Theme.Radius.l)
+    }
+
+    // MARK: Live workout (strength)
+    //
+    // One live session at a time: while one runs, this opens it rather than
+    // starting another.
+
+    private var startButton: some View {
+        let running = LiveStrengthController.shared.session
+        let title = running == nil ? "Start workout" : running?.planId == workout.id ? "Resume workout" : "Resume running workout"
+        return Button { LiveStrengthController.shared.start(workout) } label: {
+            Label(title, systemImage: "play.fill").font(.headline).frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.glassProminent)
+        .controlSize(.large)
     }
 
     // MARK: TSS provenance

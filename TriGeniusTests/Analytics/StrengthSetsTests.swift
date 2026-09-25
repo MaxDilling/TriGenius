@@ -73,6 +73,12 @@ private func compare(_ planned: [[String: Any]], _ performed: [[String: Any]]) -
     #expect(StrengthSets.entries(rows).count == 2)
 }
 
+@Test func aRatedSetKeepsItsEffortThroughItsStoredEntry() {
+    var rows = StrengthSets.rows(performed: [performedExercise("PUSH_UP", reps: [10])])
+    rows[0].effort = .hard
+    #expect(StrengthSets.rows(performed: StrengthSets.entries(rows)).map(\.effort) == [.hard])
+}
+
 @Test func aRecordedGarminKeyReadsAsTheLibraryName() {
     let rows = StrengthSets.rows(performed: [performedExercise("PUSH_UP", reps: [10]),
                                              performedExercise("LEG_CURL", reps: [10])])
