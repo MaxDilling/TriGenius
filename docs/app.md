@@ -25,7 +25,7 @@ The Sparkle SPM dependency is the one thing that *does* live in `project.pbxproj
 
 ## `Features/Settings/SettingsView.swift`
 
-`AppSettings` (`ObservableObject`) + the `DataSource`/`WriteTarget` enums. Persists API key, backend/model, `read_sources` (≥1 always on), `metrics_source` (clamped to an enabled read source), `write_target` (Apple Watch hidden on macOS), Garmin email, and `cloud_ai_consent`; `AppSettings.stored*()` expose them to non-SwiftUI callers. `makeBackend()` is the single place backends are built.
+`AppSettings` (`ObservableObject`) + the `DataSource`/`WriteTarget` enums. Persists API key, backend/model, `read_sources` (≥1 always on), `metrics_source` (clamped to an enabled read source), `write_target` (Apple Watch hidden on macOS), Garmin email, and `cloud_ai_consent`; `AppSettings.stored*()` expose them to non-SwiftUI callers. `makeBackend()` is the single place backends are built; `makeSummaryBackend()` is the same backend for the dashboard AI summary, on its own OpenRouter model (`availableSummaryModels`, each OpenRouter model a fixed `(model, reasoningEffort)` pair).
 
 Backend defaults to on-device **Apple Intelligence**; the cloud **OpenRouter** backend is gated behind an explicit consent sheet (`CloudAIConsentView`, `cloudAIConsent` → `isConfigured`).
 

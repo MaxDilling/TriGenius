@@ -12,7 +12,7 @@ PRIORITY ORDER — when instructions conflict, higher wins:
 3. Ask when key data is missing — a good question beats a confident answer built on assumptions
 4. Everything else
 
-TODAY: {current_date}, {current_time}
+SNAPSHOT: {snapshot_time}. The athlete context and training status below were captured at this time and stay fixed for this conversation — treat them as current. When time has moved on, the athlete's message starts with "[Current time: …]"; the latest such stamp is now. Call a tool for fresher data only when the question depends on something that may have changed after the snapshot (e.g. a workout done since).
 
 {athlete_context}
 
@@ -63,7 +63,7 @@ One-off chatter ("I'm tired today") is context, not memory. Don't announce routi
 === PROFILE HYGIENE ===
 
 Profile entries go stale. When one of these signals shows up in the athlete context, ASK the athlete instead of silently building on the entry:
-- A goal whose event date is already past TODAY → ask what the next target is.
+- A goal whose event date is already in the past → ask what the next target is.
 - An injury in HARD LIMITS that no RECENT FEEDBACK entry mentions → ask whether it still limits them before planning another block around it. Never drop it yourself: a HARD LIMIT stands until the athlete says it is gone.
 - A stored fact the training data contradicts (limit "no runs over 10 km" but `get_workouts` shows 15 km; "max 6 h/wk" but the last 4 weeks average 10 h; two entries that disagree) → name both, ask which is current.
 
@@ -157,6 +157,12 @@ final class CoachBrain {
     /// Whether the OpenRouter-backed `web_search` tool is registered (Settings
     /// toggle, only while the active backend is OpenRouter).
     private(set) var webSearchEnabled = false
+    /// The system prompt frozen for the current session: byte-identical on every
+    /// request so the provider's prompt cache hits, and the same instructions the
+    /// Apple FM session was built with. Cleared wherever that session is rebuilt.
+    @ObservationIgnored private var sessionSystemPrompt: String?
+    /// The last time the model was told (the snapshot's or a message stamp).
+    @ObservationIgnored private var lastTimeStamp: Date?
 
     private let maxToolIterations = 8
 
@@ -202,6 +208,7 @@ final class CoachBrain {
     /// rebuilds the session so instructions/tools stay current *and* context
     /// (the persisted history) is restored.
     private func reseedBackend() {
+        sessionSystemPrompt = nil
         backend.resetConversation()
         backend.seedTranscript(conversationHistory)
     }
@@ -299,14 +306,31 @@ final class CoachBrain {
         await executeToolSafe(name: name, arguments: arguments)
     }
 
-    /// The fully rendered system prompt for the current state — date/time, athlete
-    /// memory, PMC + training-load context, onboarding and data-source sections.
-    /// Exposed for the Debug Mode prompt viewer; regenerated on each read.
-    var debugSystemPrompt: String { buildSystemPrompt() }
+    /// The system prompt the model sees — the session's frozen snapshot, or what
+    /// the next session would start with. Exposed for the Debug Mode prompt viewer.
+    var debugSystemPrompt: String { sessionSystemPrompt ?? buildSystemPrompt() }
 
     /// Warm up a self-managing backend so the first turn responds faster.
     func prewarm() {
-        backend.prewarm(systemPrompt: buildSystemPrompt(), tools: availableTools)
+        backend.prewarm(systemPrompt: systemPrompt(), tools: availableTools)
+    }
+
+    private func systemPrompt() -> String {
+        if let sessionSystemPrompt { return sessionSystemPrompt }
+        let now = Date()
+        let prompt = buildSystemPrompt(now: now)
+        sessionSystemPrompt = prompt
+        lastTimeStamp = now
+        return prompt
+    }
+
+    /// Prefixes the current time once it has moved 30+ minutes past the last time
+    /// the model was told, so the clock never forces a system-prompt change.
+    private func timeStamped(_ text: String) -> String {
+        let now = Date()
+        if let lastTimeStamp, now.timeIntervalSince(lastTimeStamp) < 30 * 60 { return text }
+        lastTimeStamp = now
+        return "[Current time: \(Self.dateTimeFormatter.string(from: now))]\n\(text)"
     }
 
     // MARK: - Chat
@@ -323,16 +347,18 @@ final class CoachBrain {
         lastReplyWebCitations = []
         defer { isThinking = false }
 
-        conversationHistory.append(.user(text))
+        let prompt = systemPrompt()
+        let message = timeStamped(text)
+        conversationHistory.append(.user(message))
 
         if isDebugEnabled() {
             print("""
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             👤 [TriGenius] user message:
-            \(text)
+            \(message)
             ────────────────────────────────────────────────────────
             📝 [TriGenius] system prompt sent to AI:
-            \(buildSystemPrompt())
+            \(prompt)
             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
             """)
         }
@@ -349,8 +375,8 @@ final class CoachBrain {
             let response: String
             if backend.managesOwnConversation {
                 let stream = backend.respondStreaming(
-                    userMessage: text,
-                    systemPrompt: buildSystemPrompt(),
+                    userMessage: message,
+                    systemPrompt: prompt,
                     tools: availableTools
                 )
                 for try await partial in stream { track(partial) }
@@ -359,7 +385,7 @@ final class CoachBrain {
                 try Task.checkCancellation()
                 response = latestPartial
             } else {
-                response = try await runLoop(onPartial: track)
+                response = try await runLoop(systemPrompt: prompt, onPartial: track)
             }
             conversationHistory.append(.assistantText(response))
             return response
@@ -399,12 +425,13 @@ final class CoachBrain {
                 break
             }
         }
+        lastTimeStamp = nil
         if backend.managesOwnConversation { backend.resetConversation() }
     }
 
     // MARK: - Core tool-call loop
 
-    private func runLoop(onPartial: (String) -> Void) async throws -> String {
+    private func runLoop(systemPrompt: String, onPartial: (String) -> Void) async throws -> String {
         var iterations = 0
 
         while iterations < maxToolIterations {
@@ -415,7 +442,7 @@ final class CoachBrain {
             var streamedText = ""
             var completion: LLMCompletion?
             let stream = backend.completeStreaming(
-                systemPrompt: buildSystemPrompt(),
+                systemPrompt: systemPrompt,
                 turns: conversationHistory,
                 tools: availableTools
             )
@@ -523,30 +550,21 @@ final class CoachBrain {
         errorMessage = nil
         ChatStore.shared.clear()
         // Rebuild the persistent session next turn with a fresh system prompt
-        // (current date + latest profile/data-source context).
+        // (fresh snapshot of profile/training/data-source context).
+        sessionSystemPrompt = nil
         backend.resetConversation()
     }
 
     // DateFormatter allocation is expensive — reuse static instances.
-    private static let dateFormatter: DateFormatter = {
+    private static let dateTimeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US")
-        f.dateFormat = "EEEE, MMMM d, yyyy"
+        f.dateFormat = "EEEE, MMMM d, yyyy, HH:mm"
         return f
     }()
 
-    private static let timeFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US")
-        f.dateFormat = "HH:mm"
-        return f
-    }()
-
-    private func buildSystemPrompt() -> String {
+    private func buildSystemPrompt(now: Date = Date()) -> String {
         let perf = Perf.begin("buildSystemPrompt"); defer { Perf.end(perf) }
-        let now = Date()
-        let date = Self.dateFormatter.string(from: now)
-        let time = Self.timeFormatter.string(from: now)
 
         let pmcResult = PMCEngine.current()
         let pmc = ProactiveCoach.promptSection(from: pmcResult)
@@ -572,8 +590,7 @@ final class CoachBrain {
             : ""
 
         return SYSTEM_PROMPT_TEMPLATE
-            .replacingOccurrences(of: "{current_date}", with: date)
-            .replacingOccurrences(of: "{current_time}", with: time)
+            .replacingOccurrences(of: "{snapshot_time}", with: Self.dateTimeFormatter.string(from: now))
             .replacingOccurrences(of: "{athlete_context}", with: memory.contextSummary(history: history))
             .replacingOccurrences(of: "{pmc_context}", with: pmcContext)
             .replacingOccurrences(of: "{onboarding_section}", with: onboarding)

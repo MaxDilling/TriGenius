@@ -169,7 +169,7 @@ struct RootTabView: View {
                         athleteName: memory.userProfile.name,
                         weeklyStructure: memory.weeklyStructure,
                         memory: memory,
-                        makeBackend: { settings.makeBackend() },
+                        makeBackend: { settings.makeSummaryBackend() },
                         brain: brain,
                         settings: settings,
                         onBackendChanged: onBackendChanged

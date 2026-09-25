@@ -116,6 +116,10 @@ final class AppSettings: ObservableObject {
     @Published var openRouterModel: String {
         didSet { UserDefaults.standard.set(openRouterModel, forKey: "openrouter_model") }
     }
+    /// The OpenRouter model id for the dashboard AI summary.
+    @Published var openRouterSummaryModel: String {
+        didSet { UserDefaults.standard.set(openRouterSummaryModel, forKey: "openrouter_summary_model") }
+    }
     /// Give the coach the `web_search` tool (a nested OpenRouter call with the
     /// `web` plugin, billed per search). Persisted under `openrouter_web_search`.
     @Published var openRouterWebSearch: Bool {
@@ -278,17 +282,31 @@ final class AppSettings: ObservableObject {
         return v > 0 ? v : nil
     }
 
-    /// A curated shortlist of tool-capable OpenRouter model ids. OpenRouter
-    /// exposes hundreds; these are the ones worth defaulting to for the coach.
-    static let availableOpenRouterModels = [
-        "openrouter/auto",
-        "deepseek/deepseek-v4-flash-latest",
-        "deepseek/deepseek-v4-pro-0813",
-        "google/gemini-3.7-flash",
-        "openai/gpt-oss-120b:free",
-        "google/gemma-4-31b-it:free",
+    typealias OpenRouterModel = (model: String, reasoningEffort: String)
 
+    /// A curated shortlist of tool-capable OpenRouter model ids, each fixed to the
+    /// `reasoning.effort` it always runs at. OpenRouter exposes hundreds; these
+    /// are the ones worth defaulting to for the coach.
+    static let availableOpenRouterModels: [OpenRouterModel] = [
+        ("openrouter/auto", "medium"),
+        ("z-ai/glm-5.3", "low"),
+        ("google/gemini-3.8-flash", "medium"),
+        ("openai/gpt-6-luna", "max"),
+        ("z-ai/glm-5.3-flash", "medium"),
+        ("xiaomi/mimo-v2.6-pro", "medium")
     ]
+
+    /// The dashboard AI summary's models, same pairing; the first entry is the default.
+    static let availableSummaryModels: [OpenRouterModel] = [
+        ("z-ai/glm-5.3", "low"),
+        ("z-ai/glm-5.3-flash", "low"),
+        ("google/gemini-3.8-flash", "low"),
+        ("openrouter/auto", "low")
+    ]
+
+    static func openRouterReasoningEffort(for model: String) -> String? {
+        availableOpenRouterModels.first { $0.model == model }?.reasoningEffort
+    }
 
     init() {
         openRouterAPIKey = KeychainStore.string(for: KeychainStore.openRouterAPIKey) ?? ""
@@ -299,6 +317,7 @@ final class AppSettings: ObservableObject {
         useAppleCloudCompute = UserDefaults.standard.bool(forKey: "use_apple_cloud_compute")
         cloudAIConsent = UserDefaults.standard.bool(forKey: "cloud_ai_consent")
         openRouterModel = Self.storedOpenRouterModel()
+        openRouterSummaryModel = UserDefaults.standard.string(forKey: "openrouter_summary_model") ?? Self.availableSummaryModels[0].model
         openRouterWebSearch = UserDefaults.standard.bool(forKey: "openrouter_web_search")
         estimateFTPFromVO2max = UserDefaults.standard.bool(forKey: Self.estimateFTPFromVO2maxKey)
         estimateVO2maxFromRides = UserDefaults.standard.bool(forKey: Self.estimateVO2maxFromRidesKey)
@@ -417,7 +436,7 @@ final class AppSettings: ObservableObject {
     /// OpenRouter model id as seen by non-SwiftUI callers (the web_search tool —
     /// read at execute time, so a model change applies without re-registering).
     static func storedOpenRouterModel() -> String {
-        UserDefaults.standard.string(forKey: "openrouter_model") ?? availableOpenRouterModels[0]
+        UserDefaults.standard.string(forKey: "openrouter_model") ?? availableOpenRouterModels[0].model
     }
 
     var isConfigured: Bool {
@@ -429,6 +448,16 @@ final class AppSettings: ObservableObject {
     }
 
     func makeBackend() -> LLMBackend {
+        makeBackend(openRouterModel: openRouterModel, reasoningEffort: Self.openRouterReasoningEffort(for: openRouterModel))
+    }
+
+    /// The dashboard AI summary's backend: the active one, on its own model when that's OpenRouter.
+    func makeSummaryBackend() -> LLMBackend {
+        let effort = Self.availableSummaryModels.first { $0.model == openRouterSummaryModel }?.reasoningEffort
+        return makeBackend(openRouterModel: openRouterSummaryModel, reasoningEffort: effort)
+    }
+
+    private func makeBackend(openRouterModel model: String, reasoningEffort: String?) -> LLMBackend {
         switch selectedBackend {
         case .openRouter:
             return OpenAICompatibleBackend(
@@ -436,7 +465,8 @@ final class AppSettings: ObservableObject {
                 baseURL: OpenAICompatibleBackend.openRouterBaseURL,
                 apiKey: openRouterAPIKey,
                 extraHeaders: OpenAICompatibleBackend.openRouterHeaders,
-                model: openRouterModel
+                model: model,
+                reasoningEffort: reasoningEffort
             )
         case .appleIntelligence:
             return FoundationModelBackendFactory.make(useCloud: useAppleCloudCompute)
@@ -701,7 +731,7 @@ struct SettingsView: View {
                             context: DashboardContext(
                                 readSources: settings.readSources,
                                 weeklyStructure: memory.weeklyStructure,
-                                makeBackend: settings.makeBackend,
+                                makeBackend: settings.makeSummaryBackend,
                                 aiInsightEnabled: settings.isVisible(.aiInsight)
                             )
                         )
@@ -850,11 +880,17 @@ struct SettingsView: View {
             }
 
             Picker("Model", selection: $settings.openRouterModel) {
-                ForEach(AppSettings.availableOpenRouterModels, id: \.self) { model in
-                    Text(model).tag(model)
+                ForEach(AppSettings.availableOpenRouterModels, id: \.model) { entry in
+                    Text(entry.model).tag(entry.model)
                 }
             }
             .onChange(of: settings.openRouterModel) { onBackendChanged() }
+
+            Picker("Summary model", selection: $settings.openRouterSummaryModel) {
+                ForEach(AppSettings.availableSummaryModels, id: \.model) { entry in
+                    Text(entry.model).tag(entry.model)
+                }
+            }
 
             Toggle("Web search", isOn: $settings.openRouterWebSearch)
                 .onChange(of: settings.openRouterWebSearch) { onBackendChanged() }

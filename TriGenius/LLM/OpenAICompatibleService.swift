@@ -49,6 +49,7 @@ final class OpenAICompatibleBackend: LLMBackend {
     private let extraHeaders: [String: String]
     private let timeout: TimeInterval
     private let webSearch: Bool
+    private let reasoningEffort: String?
     private(set) var model: String
 
     /// `baseURL` must include the API version suffix the provider serves under
@@ -56,13 +57,15 @@ final class OpenAICompatibleBackend: LLMBackend {
     /// provider-specific niceties (e.g. OpenRouter's `X-Title`). `webSearch`
     /// attaches OpenRouter's `web` plugin (billed per search; OpenRouter-only) —
     /// set only by the `web_search` tool's nested one-shot call, never on the
-    /// coach conversation itself.
+    /// coach conversation itself. `reasoningEffort` is sent as OpenRouter's
+    /// `reasoning.effort`; nil omits the field.
     init(
         displayName: String,
         baseURL: String,
         apiKey: String? = nil,
         extraHeaders: [String: String] = [:],
         model: String,
+        reasoningEffort: String? = nil,
         webSearch: Bool = false,
         timeout: TimeInterval = 180
     ) {
@@ -73,6 +76,7 @@ final class OpenAICompatibleBackend: LLMBackend {
         self.extraHeaders = extraHeaders
         self.timeout = timeout
         self.webSearch = webSearch
+        self.reasoningEffort = reasoningEffort
         self.model = model.isEmpty ? "local-model" : model
     }
 
@@ -212,13 +216,17 @@ final class OpenAICompatibleBackend: LLMBackend {
             body["tools"] = tools.map(openAIToolDict(from:))
         }
 
+        if let reasoningEffort {
+            body["reasoning"] = ["effort": reasoningEffort]
+        }
+
         if webSearch {
             // `max_results` kept low to keep the summarizer's prompt lean —
             // Exa bills per request, not per result.
             body["plugins"] = [["id": "web", "max_results": 5]]
         }
 
-        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys])
         return request
     }
 
@@ -261,7 +269,7 @@ final class OpenAICompatibleBackend: LLMBackend {
                         id = "call_\(fallbackCounter)"
                     }
                     pendingCallIDs.append(id)
-                    let argsJSON = (try? JSONSerialization.data(withJSONObject: call.arguments))
+                    let argsJSON = (try? JSONSerialization.data(withJSONObject: call.arguments, options: [.sortedKeys]))
                         .flatMap { String(data: $0, encoding: .utf8) } ?? "{}"
                     return [
                         "id": id,

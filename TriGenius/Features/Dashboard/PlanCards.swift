@@ -7,7 +7,7 @@ import SwiftUI
 // Statistics and (fitness vs plan) in the coach chat; both lead to the Plan tab.
 
 struct FitnessVsPlanCard: View {
-    static let title = "Fitness vs plan"
+    static let title = "Planned vs. Actual Fitness"
 
     let model: CTLTrendModel
 

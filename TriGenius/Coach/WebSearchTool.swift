@@ -46,12 +46,14 @@ final class WebSearchToolHandler: CoachToolHandler {
         guard let key = KeychainStore.string(for: KeychainStore.openRouterAPIKey), !key.isEmpty else {
             return "Error: web search unavailable (no OpenRouter API key)."
         }
+        let model = AppSettings.storedOpenRouterModel()
         let backend = OpenAICompatibleBackend(
             displayName: "OpenRouter web search",
             baseURL: OpenAICompatibleBackend.openRouterBaseURL,
             apiKey: key,
             extraHeaders: OpenAICompatibleBackend.openRouterHeaders,
-            model: AppSettings.storedOpenRouterModel(),
+            model: model,
+            reasoningEffort: AppSettings.openRouterReasoningEffort(for: model),
             webSearch: true,
             timeout: 60
         )
