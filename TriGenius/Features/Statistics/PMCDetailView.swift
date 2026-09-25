@@ -25,7 +25,7 @@ struct PMCDetailView: View {
                     .cardTitle("Ramp rate · CTL per week")
                     .contentCard()
                 SectionHeading("About Fitness & Form")
-                Text("Fitness (CTL) is your 42-day weighted average training load, Fatigue (ATL) the 7-day one. Form (TSB) is fitness minus fatigue: negative while you build, positive once you are fresh — it reads on the right-hand scale, with zero in the middle. Dashed lines are projected from your planned workouts. The ramp rate is how much fitness changes per week, the plan's in grey behind it — the shaded band marks a sustainable build.")
+                Text("Every workout gets a training load (TL) score from its duration and intensity — an hour at your threshold scores 100. Fitness (CTL, chronic training load) is your average daily load over roughly the last six weeks, with recent days counting more: it rises slowly as your body adapts to training. Fatigue (ATL, acute training load) is the same over roughly the last week: it jumps after hard days and falls quickly with rest. Form (TSB, training stress balance) is fitness minus fatigue. Negative form is normal while you build — you are tired, but getting fitter; positive form means you are fresh, which is what you want on race day. Form reads on the right-hand scale, with zero in the middle. Dashed lines are projected from your planned workouts. The ramp rate is how much your fitness changes per week, your plan's in grey behind it. The shaded band marks a build your body can absorb; rising faster raises the risk of injury and overtraining.")
                     .font(.subheadline).foregroundStyle(.secondary)
                     .contentCard()
             }
@@ -36,7 +36,7 @@ struct PMCDetailView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .rangeToolbar($range)
+        .rangeBar($range)
         .task { planCurve = ATPEngine.current()?.planCurve ?? [] }
     }
 }

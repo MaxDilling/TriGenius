@@ -42,6 +42,8 @@ struct PerformanceMetric: Identifiable {
     /// is flagged estimated — the "~" says a number isn't measured, not where it came
     /// from. Nil for markers that only ever hold readings.
     var estimateNote: String? = nil
+    /// What the marker is and how to read it, under its detail chart.
+    let about: String
 
     var id: String { key }
 
@@ -58,38 +60,52 @@ struct PerformanceMetric: Identifiable {
     static let all: [PerformanceMetric] = [
         // Performance (physiological capacity)
         PerformanceMetric(key: "vo2max_running", title: "VO₂max (Run)", group: .performance, accent: SportFamily.run.color,
-                          unit: "ml/kg/min", storageUnit: "ml_kg_min", format: intFormat, parse: doubleParse, higherIsBetter: true),
+                          unit: "ml/kg/min", storageUnit: "ml_kg_min", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          about: "VO₂max is the maximum amount of oxygen your body can take up and use each minute during all-out exercise, per kilogram of body weight. It is set by how much blood your heart pumps per minute and how much oxygen your muscles extract from it — the size of your endurance engine. Your watch estimates it from how fast you run at a given heart rate. It rises slowly with regular training, so look at the trend over weeks, not day to day."),
         PerformanceMetric(key: "vo2max_cycling", title: "VO₂max (Bike)", group: .performance, accent: SportFamily.bike.color,
-                          unit: "ml/kg/min", storageUnit: "ml_kg_min", format: intFormat, parse: doubleParse, higherIsBetter: true),
+                          unit: "ml/kg/min", storageUnit: "ml_kg_min", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          about: "VO₂max is the maximum amount of oxygen your body can take up and use each minute during all-out exercise, per kilogram of body weight. It is set by how much blood your heart pumps per minute and how much oxygen your muscles extract from it — the size of your endurance engine. Your watch estimates it from the power you produce at a given heart rate, so it only appears if you ride with a power meter. It rises slowly with regular training, so look at the trend over weeks."),
         PerformanceMetric(key: "cycling_ftp", title: "FTP (Bike)", group: .performance, accent: SportFamily.bike.color,
                           unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true,
-                          estimateNote: "Estimated from cycling VO₂max and weight."),
+                          estimateNote: "Estimated from cycling VO₂max and weight.",
+                          about: "FTP (Functional Threshold Power) is the highest power, in watts, you could hold for about an hour of hard riding. It sits close to your lactate threshold: below it, your body clears lactate as fast as your muscles produce it and you can keep going for a long time; above it, lactate accumulates and you tire within minutes. The app uses FTP to set your cycling training zones and to work out how hard each ride with power was. If it is out of date, those zones and numbers are off too."),
         PerformanceMetric(key: "running_ftp", title: "FTP (Run)", group: .performance, accent: SportFamily.run.color,
-                          unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true),
+                          unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          about: "Running FTP is the highest power, in watts, you could hold for about an hour of hard running. Like cycling FTP, it marks the boundary between an effort you can sustain and one where lactate accumulates and you tire within minutes. It only exists if your watch or a foot pod measures running power. Devices measure running power differently, so compare it only with your own earlier values, never with someone else's."),
         PerformanceMetric(key: "lactate_threshold_hr", title: "LTHR (Run)", group: .performance, accent: SportFamily.run.color,
                           unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true,
-                          estimateNote: "Estimated from max HR and recent sustained runs."),
+                          estimateNote: "Estimated from max HR and recent sustained runs.",
+                          about: "LTHR (lactate threshold heart rate) is your heart rate at the point where lactate starts to accumulate in your muscles faster than your body can clear it. Below it you can keep going for a long time; above it you tire within minutes — in trained athletes it is roughly the effort you could hold for an hour. The app uses it to set your running heart-rate zones and to work out how hard a run was when no pace data is available."),
         PerformanceMetric(key: "lactate_threshold_hr_cycling", title: "LTHR (Bike)", group: .performance, accent: SportFamily.bike.color,
                           unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true,
-                          estimateNote: "Estimated from the heart rate held in rides near your best 20-minute power."),
+                          estimateNote: "Estimated from the heart rate held in rides near your best 20-minute power.",
+                          about: "Your LTHR on the bike: the heart rate at which lactate starts to accumulate in your muscles faster than your body can clear it. It is usually a few beats lower than when running, because cycling works less muscle mass, so your heart does not need to pump as much blood — which is why the bike has its own value. The app uses it to set your cycling heart-rate zones and to work out how hard a ride was without a power meter."),
         PerformanceMetric(key: "lactate_threshold_speed", title: "LT Pace", group: .performance, accent: SportFamily.run.color,
                           unit: "/km", storageUnit: "m_per_s", format: paceFromSpeed(1000), parse: speedFromPace(1000), higherIsBetter: true, paceDistanceM: 1000,
-                          estimateNote: "Reconstructed from heart rate and pace on recent runs."),
+                          estimateNote: "Reconstructed from heart rate and pace on recent runs.",
+                          about: "LT pace (lactate threshold pace) is your running pace at the lactate threshold — the point where lactate accumulates in your muscles faster than your body can clear it. It is roughly the pace you could hold for an hour of hard running. The app uses it to set your running pace zones and to work out how hard each run was, with hills taken into account: uphill counts as harder, downhill as easier. A faster LT pace means you run faster at the same effort."),
         PerformanceMetric(key: "swim_css_speed", title: "CSS", group: .performance, accent: SportFamily.swim.color,
-                          unit: "/100m", storageUnit: "m_per_s", format: paceFromSpeed(100), parse: speedFromPace(100), higherIsBetter: true, paceDistanceM: 100),
+                          unit: "/100m", storageUnit: "m_per_s", format: paceFromSpeed(100), parse: speedFromPace(100), higherIsBetter: true, paceDistanceM: 100,
+                          about: "CSS (Critical Swim Speed) is the fastest pace per 100 m you can keep up without steadily tiring — the swimming counterpart of your lactate threshold. It is usually found by swimming 400 m and 200 m as fast as you can: the 200 m difference in distance divided by the difference in time. The app uses it to work out how hard each swim was. A faster CSS means you swim faster at the same effort."),
         PerformanceMetric(key: "max_hr", title: "Max HR", group: .performance, accent: Theme.Palette.body,
-                          unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true),
+                          unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          about: "Your maximum heart rate is the highest your heart can beat at an all-out effort, and the upper end of your heart-rate range. It depends mostly on your genes and declines slowly with age — training barely changes it, so a higher max HR does not mean you are fitter. A new value usually just means your watch caught a harder effort than before."),
         PerformanceMetric(key: "weight_kg", title: "Weight", group: .performance, accent: Theme.Palette.body,
-                          unit: "kg", storageUnit: "kg", format: oneDecimalFormat, parse: doubleParse, higherIsBetter: false),
+                          unit: "kg", storageUnit: "kg", format: oneDecimalFormat, parse: doubleParse, higherIsBetter: false,
+                          about: "Your weight directly affects your VO₂max: at the same fitness, a lighter body gets a higher VO₂max and a heavier one a lower value. On the bike, less weight means faster climbs at the same power, because what counts uphill is watts per kilogram. Weight swings by 1–2 kg from day to day through water, food and stored carbohydrate (glycogen), so look at the trend over weeks."),
         // Recovery (daily wellness signals)
         PerformanceMetric(key: "resting_hr", title: "Resting HR", group: .recovery, accent: Theme.Palette.recovery,
-                          unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: false),
+                          unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: false,
+                          about: "Your resting heart rate is how fast your heart beats when you are completely relaxed. Endurance training makes your heart stronger, so it pumps more blood per beat and needs fewer beats at rest — resting HR usually drops slowly as your fitness improves. If it is several beats higher than usual for a few days, your body may be tired, getting sick or stressed — a good time to take it easy. Single days jump around, so the bold line shows your 7-day average."),
         PerformanceMetric(key: "hrv_overnight", title: "HRV (Overnight)", group: .recovery, accent: Theme.Palette.recovery,
-                          unit: "ms", storageUnit: "ms", format: intFormat, parse: doubleParse, higherIsBetter: true),
+                          unit: "ms", storageUnit: "ms", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          about: "HRV (heart rate variability) is how much the time between consecutive heartbeats varies, measured while you sleep. It reflects your autonomic nervous system: when its \"rest and recover\" side (parasympathetic) is in charge, the gaps vary more and HRV is high; hard training, illness, stress or alcohol shift it toward \"fight or flight\" (sympathetic) and HRV drops. A value in your usual range means you are ready for hard training; a clear drop means your body needs rest. HRV differs a lot between people, so only compare it with your own values; the bold line shows your 7-day average."),
         PerformanceMetric(key: "sleep_score", title: "Sleep Score", group: .recovery, accent: Theme.Palette.recovery,
-                          unit: "", storageUnit: "", format: intFormat, parse: doubleParse, higherIsBetter: true),
+                          unit: "", storageUnit: "", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          about: "A score from 0 to 100 your watch gives each night, based on how long you slept, how much time you spent in deep and REM sleep, and how restless you were. Every manufacturer calculates it differently, so look at the trend rather than single nights. Several poor nights in a row mean your body recovers less from training."),
         PerformanceMetric(key: "sleep_duration_h", title: "Sleep Duration", group: .recovery, accent: Theme.Palette.recovery,
-                          unit: "h", storageUnit: "h", format: oneDecimalFormat, parse: doubleParse, higherIsBetter: true),
+                          unit: "h", storageUnit: "h", format: oneDecimalFormat, parse: doubleParse, higherIsBetter: true,
+                          about: "How long you slept. Most adults need 7–9 hours, and more when training a lot. Your body adapts to training mainly while you sleep: in deep sleep it releases most of its growth hormone, which drives muscle repair, and it refills its energy stores. Several short nights make training harder and less effective."),
     ]
 
     /// The markers the athlete can hand-enter (physiological capacity + weight);
@@ -244,7 +260,8 @@ struct MetricCard: View {
         NavigationLink {
             MetricDetailView(metric: metric, points: points, range: range)
         } label: {
-            SummaryTile(title: metric.title, color: metric.accent, date: points.last?.date,
+            SummaryTile(title: metric.title, color: metric.accent,
+                        date: metric.group == .recovery ? nil : points.last?.date,
                         value: points.last.map(metric.display) ?? "—", unit: metric.unit,
                         delta: trend.deltaText(metric).map {
                             .init(value: $0, isRise: trend.rawDelta > 0,
@@ -282,16 +299,23 @@ struct MetricDetailView: View {
 
     private var trend: MetricTrend { MetricTrend(metric: metric, points: points, range: range) }
 
+    private var scrubbedPoint: MetricPoint? {
+        scrubDate.flatMap { date in visiblePoints.first { $0.date == date } }
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.l) {
-                header
+                readout
                 if visiblePoints.last?.isEstimated == true, let note = metric.estimateNote {
                     Text(note).font(.caption).foregroundStyle(.secondary)
                 }
-                chart.contentCard()
+                chart
                 stats
+                SectionHeading("About \(metric.title)")
+                Text(metric.about)
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .contentCard()
                 manualSection
             }
             .padding(Theme.Spacing.l)
@@ -301,7 +325,14 @@ struct MetricDetailView: View {
         #if !os(macOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .rangeToolbar($range)
+        .rangeBar($range)
+        .toolbar {
+            if metric.group == .performance {
+                ToolbarItem(placement: .primaryAction) {
+                    Button("Add value", systemImage: "plus") { showAdd = true }
+                }
+            }
+        }
         .task { manualEntries = TrainingDataStore.shared.manualMetricEntries(key: metric.key) }
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
             manualEntries = TrainingDataStore.shared.manualMetricEntries(key: metric.key)
@@ -318,12 +349,7 @@ struct MetricDetailView: View {
     private var manualSection: some View {
         if metric.group == .performance {
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Text("Manual Entries").font(.headline)
-                    Spacer()
-                    Button { showAdd = true } label: { Image(systemName: "plus.circle.fill").font(.title3) }
-                        .buttonStyle(.plain).foregroundStyle(.tint)
-                }
+                SectionHeading("Manual Entries")
                 if manualEntries.isEmpty {
                     Text("No manual values yet. Tap + to add one.")
                         .font(.subheadline).foregroundStyle(.secondary)
@@ -351,20 +377,32 @@ struct MetricDetailView: View {
         }
     }
 
-    private var header: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            Circle().fill(metric.accent).frame(width: 9, height: 9)
-            Text(visiblePoints.last.map { metric.display($0) } ?? "—")
-                .font(.largeTitle.bold())
-            Text(metric.unit).font(.subheadline).foregroundStyle(.secondary)
-            Spacer()
-            if let deltaText = trend.deltaText(metric) {
-                HStack(spacing: 2) {
-                    Image(systemName: trend.rawDelta > 0 ? "arrow.up" : "arrow.down")
-                    Text(deltaText)
+    /// Health-style readout: the latest value over the span charted, or the scrubbed
+    /// reading on its own day.
+    private var readout: some View {
+        let scrubbed = scrubbedPoint
+        return VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Circle().fill(metric.accent).frame(width: 9, height: 9)
+                Text((scrubbed ?? visiblePoints.last).map(metric.display) ?? "—")
+                    .font(.largeTitle.bold()).monospacedDigit()
+                Text(metric.unit).font(.subheadline).foregroundStyle(.secondary)
+                Spacer()
+                if let deltaText = trend.deltaText(metric) {
+                    HStack(spacing: 2) {
+                        Image(systemName: trend.rawDelta > 0 ? "arrow.up" : "arrow.down")
+                        Text(deltaText)
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(trend.isImproved ? Theme.Palette.success : Theme.Palette.warning)
+                    // The delta spans the range; it steps aside while one reading shows.
+                    .opacity(scrubbed == nil ? 1 : 0)
                 }
-                .font(.subheadline.weight(.semibold))
-                .foregroundStyle(trend.isImproved ? Theme.Palette.success : Theme.Palette.warning)
+            }
+            if let first = visiblePoints.first, let last = visiblePoints.last {
+                Text(scrubbed.map { $0.date.formatted(.dateTime.day().month(.abbreviated).year()) }
+                     ?? (first.date..<last.date).formatted(.interval.day().month(.abbreviated).year()))
+                    .font(.subheadline).foregroundStyle(.secondary)
             }
         }
     }
@@ -405,7 +443,11 @@ struct MetricDetailView: View {
                             )
                         )
                 }
-                scrubMarks
+                if let p = scrubbedPoint {
+                    RuleMark(x: .value("Scrub", p.date))
+                        .foregroundStyle(.secondary.opacity(0.6))
+                        .lineStyle(StrokeStyle(lineWidth: 1))
+                }
             }
             .chartScrubbing($scrubDate) { date in
                 visiblePoints.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) })?.date
@@ -434,23 +476,6 @@ struct MetricDetailView: View {
         }
     }
 
-    @ChartContentBuilder private var scrubMarks: some ChartContent {
-        if let date = scrubDate,
-           let p = visiblePoints.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }) {
-            RuleMark(x: .value("Scrub", p.date))
-                .foregroundStyle(.secondary.opacity(0.6))
-                .lineStyle(StrokeStyle(lineWidth: 1))
-                .annotation(position: .top, spacing: 0,
-                            overflowResolution: .init(x: .fit(to: .plot), y: .fit(to: .plot))) {
-                    ChartTooltip(
-                        title: p.date.formatted(.dateTime.day().month(.abbreviated).year()),
-                        rows: [.init(color: metric.accent, label: metric.title,
-                                     value: "\(metric.display(p)) \(metric.unit)")]
-                    )
-                }
-        }
-    }
-
     @ViewBuilder
     private var stats: some View {
         let values = visiblePoints.map(\.value)
@@ -458,9 +483,13 @@ struct MetricDetailView: View {
             let mean = values.reduce(0, +) / Double(values.count)
             HStack(spacing: Theme.Spacing.m) {
                 stat("Low / High", "\(metric.format(lo)) – \(metric.format(hi))")
+                Divider()
                 stat("Mean", metric.format(mean))
+                Divider()
                 stat("Points", "\(visiblePoints.count)")
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .cardSurface()
         }
     }
 
@@ -470,6 +499,5 @@ struct MetricDetailView: View {
             Text(value).font(.subheadline.weight(.semibold))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .cardSurface()
     }
 }

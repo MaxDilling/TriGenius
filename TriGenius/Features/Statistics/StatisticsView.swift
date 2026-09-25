@@ -5,7 +5,7 @@ import SwiftUI
 // The analysis screen behind the dashboard's "All Stats" link, grouped by the
 // question it answers: Fitness & Form (am I fit and fresh), Plan (am I on plan),
 // Training Mix (is my training balanced), Power Curve and Performance / Recovery
-// (am I actually faster). One range control in the navigation bar governs every card below it and
+// (am I actually faster). One range control beneath the navigation bar governs every card below it and
 // opens each detail page at the same window. All charts render shared
 // `Shared/Charts/` components from plain value models; missing data shows as
 // absence, never a fabricated distribution.
@@ -55,7 +55,7 @@ struct StatisticsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .rangeToolbar($viewModel.range)
+        .rangeBar($viewModel.range)
         .task { viewModel.load() }
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
             viewModel.load()

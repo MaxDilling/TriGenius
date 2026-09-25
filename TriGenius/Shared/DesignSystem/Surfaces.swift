@@ -166,18 +166,21 @@ extension View {
 
 // MARK: - Segmented picker
 
-/// The compact segmented switch every heading, card and toolbar uses to change what
-/// a view shows.
+/// The segmented switch every heading, card and toolbar uses to change what a view
+/// shows — compact, or spanning the width it is given (`fill`).
 struct SegmentedPicker<Value: Hashable>: View {
     private let title: String
     @Binding private var selection: Value
     private let options: [Value]
     private let label: (Value) -> String
+    private let fill: Bool
 
-    init(_ title: String, selection: Binding<Value>, options: [Value], label: @escaping (Value) -> String) {
+    init(_ title: String, selection: Binding<Value>, options: [Value], fill: Bool = false,
+         label: @escaping (Value) -> String) {
         self.title = title
         self._selection = selection
         self.options = options
+        self.fill = fill
         self.label = label
     }
 
@@ -187,6 +190,6 @@ struct SegmentedPicker<Value: Hashable>: View {
         }
         .pickerStyle(.segmented)
         .labelsHidden()
-        .fixedSize()
+        .fixedSize(horizontal: !fill, vertical: true)
     }
 }

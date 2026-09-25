@@ -6,10 +6,10 @@ import SwiftUI
 // each detail page it opens — so a range picked on one reads the same on the next.
 
 enum TimeRange: String, CaseIterable, Identifiable {
-    case oneMonth = "1M"
+    case oneMonth = "M"
     case threeMonths = "3M"
     case sixMonths = "6M"
-    case oneYear = "1Y"
+    case oneYear = "Y"
     case all = "All"
 
     var id: String { rawValue }
@@ -48,16 +48,14 @@ enum TimeRange: String, CaseIterable, Identifiable {
 }
 
 extension View {
-    /// The screen-wide range in the navigation bar: it governs every chart below, and
-    /// those run far enough that a control scrolling out of reach is friction.
-    func rangeToolbar(_ range: Binding<TimeRange>) -> some View {
-        toolbar {
-            // The segmented control brings its own capsule; without this the toolbar
-            // wraps it in a second one and the glass stacks.
-            ToolbarItem(placement: .primaryAction) {
-                SegmentedPicker("Range", selection: range, options: TimeRange.allCases, label: \.rawValue)
-            }
-            .sharedBackgroundVisibility(.hidden)
+    /// The screen-wide range, full width beneath the navigation bar as in Apple Health.
+    /// Pinned there rather than scrolling with the content: it governs every chart
+    /// below, and those run far enough that a control scrolling out of reach is friction.
+    func rangeBar(_ range: Binding<TimeRange>) -> some View {
+        safeAreaBar(edge: .top) {
+            SegmentedPicker("Range", selection: range, options: TimeRange.allCases, fill: true, label: \.rawValue)
+                .padding(.horizontal, Theme.Spacing.l)
+                .padding(.bottom, Theme.Spacing.s)
         }
     }
 }
