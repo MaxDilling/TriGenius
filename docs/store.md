@@ -50,7 +50,7 @@ App settings (backend/model, `read_sources` CSV, `metrics_source`, `write_target
 
 ## Keychain
 
-The OpenRouter API key and the Garmin login (OAuth tokens + email), all in `KeychainStore` marked synchronizable, so the secrets ride iCloud Keychain to the athlete's other devices (not the CloudKit data store) and never sit in plaintext UserDefaults. `GarminAuth` reads/writes its tokens here; `AppSettings.garminEmail` too. Both one-time-migrate any pre-iCloud UserDefaults value.
+The OpenRouter API key and the Garmin login (OAuth tokens + email), all in `KeychainStore` marked synchronizable, so the secrets ride iCloud Keychain to the athlete's other devices (not the CloudKit data store) and never sit in plaintext UserDefaults. `GarminAuth` reads/writes its tokens here; `AppSettings.garminEmail` too. Items are `kSecAttrAccessibleAfterFirstUnlock` — the background refresh reads and rotates the Garmin tokens while the phone is locked; `migrateAccessibility()` (app launch) moves items written with the when-unlocked default.
 
 ## `TrainingDatabase.swift`
 

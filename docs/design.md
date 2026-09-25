@@ -10,7 +10,7 @@ Modern, compact, data-dense — and deliberately **not** "AI-looking". We integr
 
 ## 1. Liquid Glass — the real thing
 
-"Liquid Glass" here means **Apple's system API** (`glassEffect(_:in:)`, `GlassEffectContainer`, `.buttonStyle(.glass)`), available on our iOS 26+ / macOS 27 deployment target. We use it — we do **not** reimplement glass with stacked `Material` + blurred color blobs.
+"Liquid Glass" here means **Apple's system API** (`glassEffect(_:in:)`, `GlassEffectContainer`, `.buttonStyle(.glass)`), available on our iOS 27 / macOS 27 deployment target. We use it — we do **not** reimplement glass with stacked `Material` + blurred color blobs.
 
 **Two layers, kept separate:**
 
