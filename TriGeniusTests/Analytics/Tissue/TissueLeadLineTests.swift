@@ -44,10 +44,6 @@ private let achillesConflict = TissueConflict(group: .calves, tissue: .tendon,
     #expect(lead(conflicts: [achillesConflict]).text == "Tue run: Achilles load spike.")
 }
 
-@Test func conflict_isTheOnlyTappableLead() {
-    #expect(lead(conflicts: [achillesConflict]).opensConflict)
-}
-
 @Test func conflict_outranksThinHistory() {
     // A conflict is actionable even when the estimates are still coarse.
     #expect(lead(conflicts: [achillesConflict], sessions: 9).glyph == .conflict)

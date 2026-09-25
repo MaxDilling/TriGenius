@@ -2,17 +2,21 @@ import SwiftUI
 
 // MARK: - Statistics
 //
-// The analysis screen behind the dashboard's Fitness & Form tiles, grouped by the
-// question it answers: Fitness & Form (am I fit and fresh), Training Mix (is my
-// training balanced), Power Curve and Performance / Recovery (am I actually
-// faster). One range control in the navigation bar governs every card below it and
+// The analysis screen behind the dashboard's "All Stats" link, grouped by the
+// question it answers: Fitness & Form (am I fit and fresh), Plan (am I on plan),
+// Training Mix (is my training balanced), Power Curve and Performance / Recovery
+// (am I actually faster). One range control in the navigation bar governs every card below it and
 // opens each detail page at the same window. All charts render shared
 // `Shared/Charts/` components from plain value models; missing data shows as
 // absence, never a fabricated distribution.
 
 struct StatisticsView: View {
-    @State private var viewModel = StatisticsViewModel()
+    @State private var viewModel: StatisticsViewModel
     private var wide = WideLayout()
+
+    init(weeklyStructure: WeeklyStructure) {
+        _viewModel = State(initialValue: StatisticsViewModel(weeklyStructure: weeklyStructure))
+    }
 
     var body: some View {
         ScrollView {
@@ -20,11 +24,21 @@ struct StatisticsView: View {
                 if let pmc = viewModel.pmc {
                     section("Fitness & Form") {
                         LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide, fill: 4), spacing: Theme.Spacing.m) {
-                            PMCStatTiles(result: pmc, range: viewModel.range) { detail(pmc) }
+                            PMCStatTiles(result: pmc, range: viewModel.range)
                             if let week = viewModel.ramp.last {
                                 rampTile(week, pmc: pmc)
                             }
                         }
+                    }
+                }
+
+                let week = viewModel.week.flatMap { $0.visibleFamilies.isEmpty ? nil : $0 }
+                if !viewModel.ctlTrend.actual.isEmpty || week != nil {
+                    section("Plan") {
+                        if !viewModel.ctlTrend.actual.isEmpty {
+                            FitnessVsPlanCard(model: viewModel.ctlTrend)
+                        }
+                        if let week { WeeklyTargetCard(week: week) }
                     }
                 }
 
@@ -51,10 +65,6 @@ struct StatisticsView: View {
         }
     }
 
-    private func detail(_ pmc: PMCResult) -> PMCDetailView {
-        PMCDetailView(result: pmc, range: viewModel.range)
-    }
-
     private func section<Content: View>(_ title: String,
                                         @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
@@ -67,13 +77,15 @@ struct StatisticsView: View {
 
     private func rampTile(_ week: RampWeek, pmc: PMCResult) -> some View {
         let band = RampRate.safeBand
-        return NavigationLink { detail(pmc) } label: {
+        let format: (Double) -> String = { $0.formatted(.number.precision(.fractionLength(1)).sign(strategy: .always())) }
+        return NavigationLink { PMCDetailView(result: pmc, range: viewModel.range) } label: {
             SummaryTile(title: "Ramp rate", color: Theme.Palette.info,
-                        value: week.delta.formatted(.number.precision(.fractionLength(1)).sign(strategy: .always())),
+                        value: format(week.delta),
                         unit: "CTL/wk",
                         status: band.contains(week.delta) ? "Sustainable build"
                             : week.delta > band.upperBound ? "Above the safe ramp" : "Below build range",
-                        series: viewModel.ramp.map { MetricPoint(date: $0.weekStart, value: $0.delta) })
+                        series: viewModel.ramp.map { MetricPoint(date: $0.weekStart, value: $0.delta) },
+                        zeroLine: true) { format($0.value) }
         }
         .buttonStyle(.plain)
     }

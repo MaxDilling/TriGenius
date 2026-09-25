@@ -18,6 +18,11 @@ enum Theme {
         static let m: CGFloat = 12
         static let l: CGFloat = 16
         static let xl: CGFloat = 24
+
+        /// How far a card's title row reaches up into the card's inset. A line of
+        /// text carries ~5 pt of air above its glyphs, so tucked up by this the title
+        /// reads as the same 16 pt as the sides — as on Apple Fitness's cards.
+        static let titleTuck: CGFloat = 6
     }
 
     /// Corner-radius scale. Three steps only — small controls, cards, hero
@@ -44,11 +49,11 @@ enum Theme {
         static let danger = Color.red
 
         /// PMC series identity — CTL / ATL / TSB wear these wherever they appear:
-        /// tiles, chart lines, legend, tooltip, the Form axis. The Form *bars* are
-        /// the exception, signalling fresh vs. fatigued with `success` / `warning`.
+        /// tiles, chart lines and fills, legend, tooltip, the Form axis. Form is
+        /// TrainingPeaks' amber, clear of the run orange.
         static let fitness = Color.blue
         static let fatigue = Color.pink
-        static let form = Color.orange
+        static let form = Color(red: 0.93, green: 0.69, blue: 0.13)
 
         /// Planned / reference series, drawn behind the actual one it is compared to.
         static let plan = Color.gray

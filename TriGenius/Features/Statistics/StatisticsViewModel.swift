@@ -16,6 +16,9 @@ final class StatisticsViewModel {
     var zoneSport: SportFamily = .run { didSet { rebuildZones() } }
 
     private(set) var pmc: PMCResult?
+    /// Actual vs planned fitness over the range, plus the plan just ahead.
+    private(set) var ctlTrend = CTLTrendModel(actual: [], planned: [])
+    private(set) var week: WeekTargets?
     private(set) var share = SportShareModel(metric: .tss, weeks: [])
     private(set) var zones: [ZoneMetric: [Double]] = [:]
     /// Today's bounds, not each workout's own — the range can span a threshold
@@ -26,11 +29,21 @@ final class StatisticsViewModel {
 
     private var records: [WorkoutRecord] = []
     private var weeks = 0
+    private let weeklyStructure: WeeklyStructure
+
+    init(weeklyStructure: WeeklyStructure) {
+        self.weeklyStructure = weeklyStructure
+    }
 
     func load() {
         let now = Date()
         let result = PMCEngine.current()
         pmc = result
+        let plan = ATPEngine.current()
+        ctlTrend = CTLTrendModel.around(points: result.points, planCurve: plan?.planCurve ?? [],
+                                        from: range.start(now: now) ?? result.points.first?.date, today: now)
+        week = WeeklyTargets.thisWeek(weeklyStructure: weeklyStructure, atpPlan: plan,
+                                      creditFactor: AppSettings.storedCreditFactor(), today: now)
         weeks = range.weeks(first: result.points.first?.date)
         guard let windowStart = TrainingVolume.recentWeekStarts(weeks: weeks, today: now).first
         else { return }

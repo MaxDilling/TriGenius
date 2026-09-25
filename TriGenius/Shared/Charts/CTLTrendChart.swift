@@ -18,14 +18,15 @@ struct CTLTrendModel: Codable, Equatable {
     var actual: [CTLPoint]    // daily actual CTL, window start … today
     var planned: [CTLPoint]   // ATP plan curve across the full window
 
-    /// The ±window around today: actual CTL up to today, plan curve across it.
+    /// Actual CTL from `start` (default: 15 days back) up to today, the plan curve
+    /// from `start` to 15 days ahead.
     @MainActor
     static func around(points: [PMCPoint], planCurve: [PMCPoint],
-                       today: Date = Date(), daysBack: Int = 15, daysForward: Int = 15) -> CTLTrendModel {
+                       from start: Date? = nil, today: Date = Date()) -> CTLTrendModel {
         let cal = Calendar.current
         let day = cal.startOfDay(for: today)
-        let start = cal.date(byAdding: .day, value: -daysBack, to: day) ?? day
-        let end = cal.date(byAdding: .day, value: daysForward, to: day) ?? day
+        let start = start ?? cal.date(byAdding: .day, value: -15, to: day) ?? day
+        let end = cal.date(byAdding: .day, value: 15, to: day) ?? day
         return CTLTrendModel(
             actual: points.filter { $0.date >= start }.map { CTLPoint(date: $0.date, ctl: $0.ctl) },
             planned: planCurve.filter { $0.date >= start && $0.date <= end }

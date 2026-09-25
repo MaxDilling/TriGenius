@@ -108,12 +108,6 @@ struct LiveQueuePage: View {
                 }
             }
             Spacer(minLength: 0)
-            Text("Now")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
-                .padding(.horizontal, Theme.Spacing.s)
-                .padding(.vertical, Theme.Spacing.xs)
-                .background(Color.accentColor.opacity(0.18), in: Capsule())
             if !session.upcoming.isEmpty {
                 iconButton("Later", systemImage: "arrow.down.to.line") {
                     laterTip.invalidate(reason: .actionPerformed)
@@ -121,7 +115,7 @@ struct LiveQueuePage: View {
                 }
             }
         }
-        .cardSurface()
+        .cardSurface(tint: .accentColor)
     }
 
     /// "Set 2 of 3 · 8 · BW · rest 0:45".

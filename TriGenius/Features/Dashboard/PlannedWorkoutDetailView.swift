@@ -71,7 +71,7 @@ struct PlannedWorkoutDetailView: View {
             }
             .padding()
         }
-        .navigationTitle(workout.name)
+        .navigationTitle(family.displayName)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -81,7 +81,7 @@ struct PlannedWorkoutDetailView: View {
             }
             ToolbarItem(placement: .primaryAction) {
                 Button() { editor = .edit(workout) } label: {
-                    Image(systemName: "pencil")
+                    Label("Edit", systemImage: "pencil")
                 }
             }
             ToolbarItem {
@@ -131,7 +131,7 @@ struct PlannedWorkoutDetailView: View {
                 .background(family.color.opacity(0.15))
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.m))
             VStack(alignment: .leading, spacing: 3) {
-                Text(family.displayName).font(.headline)
+                Text(workout.name).font(.headline)
                 HStack(spacing: 4) {
                     Text("Planned")
                     Text("·")
@@ -216,8 +216,8 @@ struct PlannedWorkoutDetailView: View {
         let icon: String
     }
 
-    // Sport and date are already in the header (icon + title) and aren't
-    // repeated here.
+    // Sport and date are already in the title and header and aren't repeated
+    // here.
     private var detailRowList: [DetailRow] {
         var rows: [DetailRow] = []
         if family == .swim, let pool = workout.poolLengthMeters, pool > 0 {

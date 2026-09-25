@@ -41,13 +41,13 @@ struct CTLTrendChatCard: View {
     @State private var model: CTLTrendModel?
 
     var body: some View {
-        ChartChatCard(title: "Fitness vs plan") {
+        Group {
             if let model, !(model.actual.isEmpty && model.planned.isEmpty) {
-                CTLTrendChart(model: model)
-            } else if model != nil {
-                NoChartData(text: "No fitness data yet.")
+                FitnessVsPlanCard(model: model).coachAccent()
             } else {
-                ChartLoading()
+                ChartChatCard(title: FitnessVsPlanCard.title) {
+                    if model != nil { NoChartData(text: "No fitness data yet.") } else { ChartLoading() }
+                }
             }
         }
         .task {
@@ -77,7 +77,7 @@ struct RampRateChatCard: View {
         .task {
             model = RampRateModel(
                 weeks: RampRate.weeklySeries(points: PMCEngine.current().points, weeks: weeks),
-                safeBand: RampRate.safeBand
+                planned: RampRate.weeklySeries(points: ATPEngine.current()?.planCurve ?? [], weeks: weeks)
             )
         }
     }
@@ -150,13 +150,7 @@ private struct ChartChatCard<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            Text(title).font(.caption).foregroundStyle(.secondary)
-            content
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .cardSurface()
-        .coachAccent()
+        content.cardTitle(title).contentCard().coachAccent()
     }
 }
 

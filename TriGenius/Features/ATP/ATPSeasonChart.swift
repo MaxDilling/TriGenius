@@ -79,8 +79,6 @@ struct ATPSeasonChart: View {
     @State private var showForm = true
 
     private let cal = Calendar.current
-    /// Form (TSB) amber — orange/gold, as in TrainingPeaks.
-    private let formColor = Color(red: 0.93, green: 0.69, blue: 0.13)
 
     private var seasonStart: Date { plan.weeks.first?.weekStart ?? Date() }
     private var seasonEnd: Date { plan.planCurve.last?.date ?? seasonStart }
@@ -205,21 +203,21 @@ struct ATPSeasonChart: View {
     // actual — on its own centred scale, filled from the (middle) zero line.
     @ChartContentBuilder private var formMarks: some ChartContent {
         RuleMark(y: .value("Form zero", formCenter))
-            .foregroundStyle(formColor.opacity(0.25))
+            .foregroundStyle(Theme.Palette.form.opacity(0.25))
             .lineStyle(StrokeStyle(lineWidth: 0.5, dash: [2, 3]))
         ForEach(plan.planCurve) { p in
             AreaMark(x: .value("Date", p.date),
                      yStart: .value("Form zero", formCenter), yEnd: .value("Form", scaleTSB(p.tsb)))
-                .foregroundStyle(formColor.opacity(0.15))
+                .foregroundStyle(Theme.Palette.form.opacity(0.15))
         }
         ForEach(plan.planCurve) { p in
             LineMark(x: .value("Date", p.date), y: .value("Form", scaleTSB(p.tsb)), series: .value("c", "formPlan"))
-                .foregroundStyle(formColor)
+                .foregroundStyle(Theme.Palette.form)
                 .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
         }
         ForEach(actual) { p in
             LineMark(x: .value("Date", p.date), y: .value("Form", scaleTSB(p.tsb)), series: .value("c", "formActual"))
-                .foregroundStyle(formColor)
+                .foregroundStyle(Theme.Palette.form)
         }
     }
 
@@ -373,7 +371,7 @@ struct ATPSeasonChart: View {
                 legend(Theme.Palette.success, "Actual Fitness")
                 Button { showForm.toggle() } label: {
                     HStack(spacing: Theme.Spacing.xs) {
-                        Circle().fill(showForm ? formColor : .secondary.opacity(0.3)).frame(width: 7, height: 7)
+                        Circle().fill(showForm ? Theme.Palette.form : .secondary.opacity(0.3)).frame(width: 7, height: 7)
                         Text("Form").foregroundStyle(showForm ? .secondary : .tertiary)
                     }
                 }

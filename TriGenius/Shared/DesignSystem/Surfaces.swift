@@ -17,16 +17,14 @@ import SwiftUI
 extension View {
 
     /// Content-layer card: opaque grouped background. Every card insets its content
-    /// by the same `Theme.Spacing.l`.
-    func cardSurface(
-        cornerRadius: CGFloat = Theme.Radius.l,
-        padding: CGFloat = Theme.Spacing.l
-    ) -> some View {
+    /// by the same `Theme.Spacing.l`. A `tint` marks the one card that is active
+    /// right now — mixed into the fill, so the card stays opaque.
+    func cardSurface(padding: CGFloat = Theme.Spacing.l, tint: Color? = nil) -> some View {
         self
             .padding(padding)
             .background(
-                Color.appSecondaryBackground,
-                in: .rect(cornerRadius: cornerRadius, style: .continuous)
+                tint.map { Color.appSecondaryBackground.mix(with: $0, by: 0.25) } ?? Color.appSecondaryBackground,
+                in: .rect(cornerRadius: Theme.Radius.l, style: .continuous)
             )
     }
 
@@ -73,8 +71,8 @@ extension View {
 
 /// Page-level section heading: freestanding above the section's content and a
 /// clear size step above anything inside a card, so it visibly scopes the block
-/// below it. The optional accessory is for *actions* (an add button, a picker),
-/// never navigation — a card that leads somewhere carries its own `Chevron`.
+/// below it. The optional accessory trails the title — an add button, a picker, a
+/// link to the section's full screen.
 struct SectionHeading<Accessory: View>: View {
     private let title: String
     private let accessory: Accessory
@@ -160,6 +158,7 @@ extension View {
                 Spacer(minLength: 0)
                 accessory()
             }
+            .padding(.top, -Theme.Spacing.titleTuck)
             self
         }
     }

@@ -57,27 +57,24 @@ enum WriteTarget: String, CaseIterable, Identifiable {
 /// order is the default display order.
 enum DashboardSection: String, CaseIterable, Identifiable {
     case upNext = "up_next"
-    case performance = "performance"
+    case pinned = "pinned"
     case tissueLoad = "tissue_load"
-    case weeklyTarget = "weekly_target"
     case aiInsight = "ai_insight"
 
     var id: String { rawValue }
     var displayName: String {
         switch self {
         case .upNext: return "Up Next"
-        case .performance: return "Fitness & Form"
+        case .pinned: return "Pinned"
         case .tissueLoad: return "Tissue Load"
-        case .weeklyTarget: return "Weekly Target"
         case .aiInsight: return "AI Summary"
         }
     }
     var icon: String {
         switch self {
         case .upNext: return "calendar.day.timeline.left"
-        case .performance: return "chart.xyaxis.line"
+        case .pinned: return "pin"
         case .tissueLoad: return "figure.strengthtraining.traditional"
-        case .weeklyTarget: return "target"
         case .aiInsight: return "sparkles"
         }
     }

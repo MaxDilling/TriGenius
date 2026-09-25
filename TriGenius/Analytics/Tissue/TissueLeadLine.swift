@@ -14,8 +14,6 @@ nonisolated struct TissueLeadLine: Equatable, Sendable {
 
     var text: String
     var glyph: Glyph?
-    /// Only a conflict is a button — it opens the resolution sheet. The rest state facts.
-    var opensConflict: Bool = false
 
     static func make(conflicts: [TissueConflict],
                      forecasts: [TissueForecast],
@@ -33,8 +31,7 @@ nonisolated struct TissueLeadLine: Equatable, Sendable {
                 : first.group.label
             let day = weekday(first.session.date, calendar: calendar, locale: locale, style: .short)
             let sport = first.session.sport.displayName.lowercased()
-            return TissueLeadLine(text: "\(day) \(sport): \(tissue) load spike.",
-                                  glyph: .conflict, opensConflict: true)
+            return TissueLeadLine(text: "\(day) \(sport): \(tissue) load spike.", glyph: .conflict)
         }
 
         if sessionCount < TissueConstants.minimumSessionsForAdvice {

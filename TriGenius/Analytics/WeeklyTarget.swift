@@ -47,7 +47,39 @@ struct WeeklyProjection: Sendable {
     var projectedCreditTSS: Double = 0
 }
 
+/// This week's rings: each discipline's target and projected close (cross-training
+/// credit applied), and the disciplines that get a ring at all.
+struct WeekTargets {
+    let weekStart: Date
+    let targets: [SportFamily: WeeklyTarget]
+    let projections: [SportFamily: WeeklyProjection]
+    let visibleFamilies: [SportFamily]
+
+    func target(for family: SportFamily) -> WeeklyTarget {
+        targets[family] ?? WeeklyTarget(durationMinutes: 0, tss: 0)
+    }
+
+    func projection(for family: SportFamily) -> WeeklyProjection {
+        projections[family] ?? WeeklyProjection()
+    }
+}
+
 enum WeeklyTargets {
+
+    /// The one computation behind every reader of this week's rings — dashboard,
+    /// Statistics, the AI insight, the widget and the background check.
+    @MainActor
+    static func thisWeek(weeklyStructure: WeeklyStructure, atpPlan: ATPPlan?, creditFactor: Double,
+                         store: TrainingDataStore = .shared, today: Date = Date()) -> WeekTargets {
+        let weekStart = TrainingVolume.weekStart(of: today)
+        let weekEnd = Calendar.current.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
+        let targets = targets(scheduled: store.scheduledWorkouts(from: weekStart, to: weekEnd),
+                              weeklyStructure: weeklyStructure, atpPlan: atpPlan, referenceDate: today)
+        var projections = projection(store: store, today: today)
+        applyCrossTrainingCredit(targets: targets, into: &projections, factor: creditFactor)
+        return WeekTargets(weekStart: weekStart, targets: targets, projections: projections,
+                           visibleFamilies: visibleFamilies(sportRatio: weeklyStructure.sportRatio))
+    }
 
     // MARK: TSS estimation
 

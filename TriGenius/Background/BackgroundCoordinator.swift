@@ -109,29 +109,14 @@ final class BackgroundCoordinator {
         // this week's per-discipline target against the projected close (completed
         // + still-planned). The targets need the athlete's plan/structure; a fresh
         // CoachMemory reads the persisted coach_memory.json on init.
-        let memory = CoachMemory()
-        let cal = Calendar.current
-        let weekStart = TrainingVolume.weekStart(of: Date())
-        let weekEnd = cal.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
-        let weekScheduled = TrainingDataStore.shared.scheduledWorkouts(from: weekStart, to: weekEnd)
-        let targets = WeeklyTargets.targets(
-            scheduled: weekScheduled,
-            weeklyStructure: memory.weeklyStructure,
-            atpPlan: ATPEngine.current()
-        )
-        var projection = WeeklyTargets.projection(store: TrainingDataStore.shared)
-        signals += ProactiveCoach.weeklyTargetSignals(targets: targets, projection: projection)
-
-        // Apply cross-training credit + the visible-family gate so the background
-        // widget refresh matches the foreground dashboard exactly.
-        WeeklyTargets.applyCrossTrainingCredit(targets: targets, into: &projection,
-                                               factor: AppSettings.storedCreditFactor())
-        let visible = WeeklyTargets.visibleFamilies(sportRatio: memory.weeklyStructure.sportRatio)
+        let week = WeeklyTargets.thisWeek(weeklyStructure: CoachMemory().weeklyStructure,
+                                          atpPlan: ATPEngine.current(),
+                                          creditFactor: AppSettings.storedCreditFactor())
+        signals += ProactiveCoach.weeklyTargetSignals(targets: week.targets, projection: week.projections)
 
         // Refresh the Home Screen widget's snapshot from the same numbers, so it
         // stays current even when the app is only woken in the background.
-        WeeklyTargetSnapshotWriter.write(targets: targets, projections: projection,
-                                         families: visible, weekStart: weekStart)
+        WeeklyTargetSnapshotWriter.write(week)
 
         await NotificationCenterService.shared.postDailyDigest(signals)
 

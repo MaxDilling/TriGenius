@@ -3,8 +3,9 @@ import SwiftUI
 // MARK: - Tissue Load card (Dashboard)
 //
 // Three rows answering one question each: when is this group clear for hard work
-// again. The lanes behind the answer are the evidence and open the full grid; the
-// closing row names what is free today and hands planning it to the coach.
+// again — or, where there is room, the full grid. A row opens its group, the card
+// the Tissue Load screen; the closing row names what is free today and hands
+// planning it to the coach.
 
 nonisolated enum TissueCardMode: String, CaseIterable, Identifiable, Sendable {
     case sevenDays, sixWeeks
@@ -16,21 +17,26 @@ nonisolated enum TissueCardMode: String, CaseIterable, Identifiable, Sendable {
 struct TissueLoadCard: View {
     @Environment(\.dynamicTypeSize) private var typeSize
 
-    var mode: TissueCardMode = .sevenDays
+    @Binding var mode: TissueCardMode
     let model: TissueCardModel
     /// Nil until six weeks of history exist; the mode is then not offered.
     var chronic: TissueChronicModel?
-    var onResolveConflict: () -> Void = {}
+    /// Every group's lanes, where there is room — replaces the 7-day rows.
+    var grid: TissueGridModel?
     var onSelect: (TissueGroup) -> Void = { _ in }
     var onAskCoach: (String) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            titleRow
+                .padding(.bottom, Theme.Spacing.m + Theme.Spacing.xs)
             if mode == .sixWeeks, let chronic {
                 chronicBody(chronic)
+            } else if let grid {
+                TissueGrid(days: grid.days, rows: grid.rows, isWide: true, onSelect: onSelect)
+                TissueLegend()
+                    .padding(.top, Theme.Spacing.m)
             } else {
-                lead
-                    .padding(.bottom, Theme.Spacing.m)
                 header
                 ForEach(model.rows) { row in
                     Button { onSelect(row.group) } label: { rowBody(row) }
@@ -41,8 +47,9 @@ struct TissueLoadCard: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        // Both modes hold the same height so switching never reflows the dashboard —
-        // except at accessibility sizes, where growing is the point.
+        // The rows and the 6-week view hold the same height so switching never
+        // reflows the dashboard — except at accessibility sizes, where growing is
+        // the point.
         .frame(minHeight: typeSize.isAccessibilitySize ? nil : TissueMetrics.cardContent,
                alignment: .top)
         .cardSurface()
@@ -51,34 +58,6 @@ struct TissueLoadCard: View {
     // MARK: 6-week mode
 
     @ViewBuilder private func chronicBody(_ chronic: TissueChronicModel) -> some View {
-        Text(chronic.lead)
-            .font(.subheadline.weight(.semibold))
-            .fixedSize(horizontal: false, vertical: true)
-            .padding(.bottom, Theme.Spacing.xs)
-
-        if let action = chronic.action, let prompt = chronic.coachPrompt {
-            Button { onAskCoach(prompt) } label: {
-                HStack(spacing: Theme.Spacing.s) {
-                    RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(Theme.Palette.Tissue.underStrong)
-                        .frame(width: 12, height: 12)
-                    Text(action)
-                        .font(.footnote.weight(.semibold))
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                }
-                .padding(.horizontal, Theme.Spacing.s)
-                .frame(minHeight: 40)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.appTertiaryBackground,
-                            in: .rect(cornerRadius: Theme.Radius.s, style: .continuous))
-            }
-            .buttonStyle(.plain)
-        }
-
         HStack(spacing: Theme.Spacing.s) {
             if !typeSize.isAccessibilitySize {
                 Color.clear.frame(maxWidth: .infinity, maxHeight: 0)
@@ -105,6 +84,30 @@ struct TissueLoadCard: View {
         ForEach(chronic.rows) { row in
             Button { onSelect(row.group) } label: { chronicRow(row) }
                 .buttonStyle(.plain)
+        }
+
+        if let action = chronic.action, let prompt = chronic.coachPrompt {
+            Button { onAskCoach(prompt) } label: {
+                HStack(spacing: Theme.Spacing.s) {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(Theme.Palette.Tissue.underStrong)
+                        .frame(width: 12, height: 12)
+                    Text(action)
+                        .font(.footnote.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, Theme.Spacing.s)
+                .frame(minHeight: 40)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.appTertiaryBackground,
+                            in: .rect(cornerRadius: Theme.Radius.s, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .padding(.top, Theme.Spacing.xs)
         }
     }
 
@@ -168,11 +171,38 @@ struct TissueLoadCard: View {
         .accessibilityHidden(true)
     }
 
-    // MARK: Lead
+    // MARK: Title row
 
-    private var lead: some View {
-        TissueLeadRow(lead: model.lead, onResolveConflict: onResolveConflict)
-            .padding(.bottom, Theme.Spacing.xs)
+    /// The mode's lead sentence as the card's title, the window switch beside it.
+    private var titleRow: some View {
+        HStack(spacing: Theme.Spacing.s) {
+            Group {
+                if mode == .sixWeeks, let chronic {
+                    Text(chronic.lead)
+                } else {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        switch model.lead.glyph {
+                        case .conflict:
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(Theme.Palette.Tissue.conflict)
+                        case .taper:
+                            Image(systemName: "flag.fill")
+                        case nil:
+                            EmptyView()
+                        }
+                        Text(model.lead.text)
+                    }
+                }
+            }
+            .font(.headline)
+            .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            if chronic != nil {
+                SegmentedPicker("Window", selection: $mode, options: TissueCardMode.allCases, label: \.label)
+            }
+            Chevron()
+        }
+        .padding(.top, -Theme.Spacing.titleTuck)
     }
 
     // MARK: Day header
@@ -361,43 +391,5 @@ struct TissueLoadCard: View {
                         in: .rect(cornerRadius: Theme.Radius.s, style: .continuous))
         }
         .buttonStyle(.plain)
-    }
-}
-
-/// The lead line as a row: its glyph and sentence, a button when it names a conflict.
-/// Shared by the card and the wide dashboard's grid, so both warn the same way.
-struct TissueLeadRow: View {
-    let lead: TissueLeadLine
-    var onResolveConflict: () -> Void = {}
-
-    var body: some View {
-        if lead.opensConflict {
-            Button(action: onResolveConflict) { content }.buttonStyle(.plain)
-        } else {
-            content
-        }
-    }
-
-    private var content: some View {
-        HStack(spacing: Theme.Spacing.xs) {
-            switch lead.glyph {
-            case .conflict:
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundStyle(Theme.Palette.Tissue.conflict)
-            case .taper:
-                Image(systemName: "flag.fill")
-            case nil:
-                EmptyView()
-            }
-            Text(lead.text)
-                .font(.headline)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-            if lead.opensConflict {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-        }
     }
 }

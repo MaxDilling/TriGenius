@@ -42,21 +42,26 @@ extension View {
             if hit != inFooter.wrappedValue { inFooter.wrappedValue = hit }
         }
         return chartOverlay { proxy in
-            scrubSurface { point in
-                snapped.wrappedValue = point.flatMap { proxy.value(atX: $0.x, as: V.self) }
-                reportFooter(point?.y, in: proxy.plotSize.height)
-            }
-            // Hover never enters the touch stream, so it rides alongside the
-            // long-press below it rather than competing with it — a hovering
-            // Pencil scrubs, a finger still long-presses.
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let location):
-                    snapped.wrappedValue = proxy.value(atX: location.x, as: V.self)
-                    reportFooter(location.y, in: proxy.plotSize.height)
-                case .ended:
-                    snapped.wrappedValue = nil
-                    reportFooter(nil, in: proxy.plotSize.height)
+            GeometryReader { geo in
+                // The overlay spans the whole chart, axes included; the proxy speaks
+                // plot coordinates, which a leading axis shifts right.
+                let origin = proxy.plotFrame.map { geo[$0].origin } ?? .zero
+                scrubSurface { point in
+                    snapped.wrappedValue = point.flatMap { proxy.value(atX: $0.x - origin.x, as: V.self) }
+                    reportFooter(point.map { $0.y - origin.y }, in: proxy.plotSize.height)
+                }
+                // Hover never enters the touch stream, so it rides alongside the
+                // long-press below it rather than competing with it — a hovering
+                // Pencil scrubs, a finger still long-presses.
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let location):
+                        snapped.wrappedValue = proxy.value(atX: location.x - origin.x, as: V.self)
+                        reportFooter(location.y - origin.y, in: proxy.plotSize.height)
+                    case .ended:
+                        snapped.wrappedValue = nil
+                        reportFooter(nil, in: proxy.plotSize.height)
+                    }
                 }
             }
         }
@@ -70,9 +75,13 @@ extension View {
 /// natively with UIScrollView — a swipe cancels it and scrolls; a ~0.2 s hold
 /// recognizes, excludes the pan, and tracks the finger to scrub. macOS has no touch
 /// to track, so a hit-testable rectangle carries the hover on its own.
-@ViewBuilder func scrubSurface(onTouch: @escaping (CGPoint?) -> Void) -> some View {
+@ViewBuilder func scrubSurface(touch: Bool = true, onTouch: @escaping (CGPoint?) -> Void) -> some View {
     #if os(iOS)
-    ScrubTouchOverlay(onChange: onTouch)
+    if touch {
+        ScrubTouchOverlay(onChange: onTouch)
+    } else {
+        Rectangle().fill(.clear).contentShape(Rectangle())
+    }
     #else
     Rectangle().fill(.clear).contentShape(Rectangle())
     #endif
@@ -119,11 +128,13 @@ extension View {
     /// bar inside a ScrollView still scrolls on a swipe and scrubs on a hold.
     /// `hitInset` grows the surface vertically past the view's bounds — a 10 pt bar is
     /// a poor finger target — without touching layout or the width the fraction is of.
-    func horizontalScrubbing(_ fraction: Binding<Double?>, hitInset: CGFloat = 0) -> some View {
+    /// `touch: false` scrubs on hover only and leaves every touch to the view
+    /// underneath — a view inside a link, which a tap has to open.
+    func horizontalScrubbing(_ fraction: Binding<Double?>, hitInset: CGFloat = 0, touch: Bool = true) -> some View {
         overlay {
             GeometryReader { geo in
                 let width = geo.size.width
-                scrubSurface { point in
+                scrubSurface(touch: touch) { point in
                     fraction.wrappedValue = width > 0
                         ? point.map { min(max($0.x / width, 0), 1) }
                         : nil
@@ -174,7 +185,8 @@ struct ChartTooltip: View {
             }
         }
         // Content layer, never glass/material: dense data stays opaque (docs/design.md §1).
-        .cardSurface(cornerRadius: Theme.Radius.s, padding: Theme.Spacing.s)
+        .padding(Theme.Spacing.s)
+        .background(Color.appSecondaryBackground, in: .rect(cornerRadius: Theme.Radius.s, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.s, style: .continuous)
             .strokeBorder(.separator))
     }

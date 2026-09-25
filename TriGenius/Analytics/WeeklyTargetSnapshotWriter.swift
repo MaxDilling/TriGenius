@@ -3,9 +3,8 @@ import WidgetKit
 
 // MARK: - Weekly Target Snapshot Writer (app side)
 //
-// Boils the dashboard's already-computed per-discipline weekly targets +
-// projections down into the shared `WeeklyTargetSnapshot` and hands it to the
-// Home Screen widget. Called from the two places that already compute these:
+// Boils this week's rings (`WeeklyTargets.thisWeek`) down into the shared
+// `WeeklyTargetSnapshot` and hands it to the Home Screen widget. Called from
 // `DashboardViewModel.load(...)` (foreground) and `BackgroundCoordinator`'s
 // proactive check (background) — so the widget stays fresh even when the app is
 // only woken in the background.
@@ -16,20 +15,13 @@ import WidgetKit
 
 enum WeeklyTargetSnapshotWriter {
 
-    /// Build a snapshot from the current targets/projections and persist it into
-    /// the App Group, then ask WidgetKit to reload the timeline. `families` is the
-    /// visible set (disciplines with a current goal, `WeeklyTargets.visibleFamilies`)
-    /// — the widget only draws a ring per entry, so filtering here gates both widget
-    /// sizes. `projections` must already carry any cross-training credit.
-    static func write(
-        targets: [SportFamily: WeeklyTarget],
-        projections: [SportFamily: WeeklyProjection],
-        families: [SportFamily],
-        weekStart: Date
-    ) {
-        let entries: [WeeklyTargetSnapshot.Entry] = families.map { family in
-            let target = targets[family] ?? WeeklyTarget(durationMinutes: 0, tss: 0)
-            let projection = projections[family] ?? WeeklyProjection()
+    /// Persist a snapshot into the App Group, then ask WidgetKit to reload the
+    /// timeline. One entry per visible family — the widget only draws a ring per
+    /// entry, so this gates both widget sizes.
+    static func write(_ week: WeekTargets) {
+        let entries: [WeeklyTargetSnapshot.Entry] = week.visibleFamilies.map { family in
+            let target = week.target(for: family)
+            let projection = week.projection(for: family)
             return WeeklyTargetSnapshot.Entry(
                 sport: family.rawValue,
                 displayName: family.displayName,
@@ -47,7 +39,7 @@ enum WeeklyTargetSnapshotWriter {
 
         let snapshot = WeeklyTargetSnapshot(
             generatedAt: Date(),
-            weekStart: weekStart,
+            weekStart: week.weekStart,
             disciplines: entries
         )
         snapshot.save()

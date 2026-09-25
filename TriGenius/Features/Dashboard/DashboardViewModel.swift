@@ -35,13 +35,7 @@ final class DashboardViewModel {
     var ctlTrend = CTLTrendModel(actual: [], planned: [])
     /// Actual vs ATP-planned CTL around today — the dashboard Fitness & Form chart.
     var weeklyBuckets: [TrainingVolume.WeekBucket] = []
-    var targets: [SportFamily: WeeklyTarget] = [:]
-    /// Per-discipline expected week close (completed + still-planned) — the faded
-    /// projection arc on the weekly rings.
-    var projections: [SportFamily: WeeklyProjection] = [:]
-    /// The disciplines that currently have a goal (positive `sport_ratio`) — the
-    /// only ones that get a weekly ring.
-    var visibleFamilies: [SportFamily] = SportFamily.triathlon
+    var week: WeekTargets?
     var agendaDays: [AgendaDay] = []
     /// Tissue Load, from `TissueLoadModel` over the store (`TissueCardModel.Input.live`).
     var tissueCard: TissueCardModel?
@@ -57,14 +51,6 @@ final class DashboardViewModel {
 
     /// The current (most recent) week bucket, for the "this week" summary.
     var currentWeek: TrainingVolume.WeekBucket? { weeklyBuckets.last }
-
-    func target(for family: SportFamily) -> WeeklyTarget {
-        targets[family] ?? WeeklyTarget(durationMinutes: 0, tss: 0)
-    }
-
-    func projection(for family: SportFamily) -> WeeklyProjection {
-        projections[family] ?? WeeklyProjection()
-    }
 
     func loadInitialIfNeeded(context: DashboardContext) async {
         guard !hasLoaded else { return }
@@ -95,28 +81,10 @@ final class DashboardViewModel {
         self.atpPlan = atpPlan
         ctlTrend = CTLTrendModel.around(points: pmc?.points ?? [], planCurve: atpPlan?.planCurve ?? [])
 
-        // This week's planned workouts drive the per-discipline targets.
-        let cal = Calendar.current
-        let weekStart = TrainingVolume.weekStart(of: Date())
-        let weekEnd = cal.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
-        let weekScheduled = store.scheduledWorkouts(from: weekStart, to: weekEnd)
-        targets = WeeklyTargets.targets(
-            scheduled: weekScheduled,
-            weeklyStructure: context.weeklyStructure,
-            atpPlan: atpPlan
-        )
-        projections = WeeklyTargets.projection(store: store)
-        WeeklyTargets.applyCrossTrainingCredit(
-            targets: targets,
-            into: &projections,
-            factor: AppSettings.storedCreditFactor()
-        )
-        visibleFamilies = WeeklyTargets.visibleFamilies(sportRatio: context.weeklyStructure.sportRatio)
-
-        // Keep the Home Screen widget's snapshot in sync with what the dashboard
-        // is showing (same visible set + credited projections).
-        WeeklyTargetSnapshotWriter.write(targets: targets, projections: projections,
-                                         families: visibleFamilies, weekStart: weekStart)
+        let week = WeeklyTargets.thisWeek(weeklyStructure: context.weeklyStructure, atpPlan: atpPlan,
+                                          creditFactor: AppSettings.storedCreditFactor(), store: store)
+        self.week = week
+        WeeklyTargetSnapshotWriter.write(week)
 
         agendaDays = Self.buildAgenda(records: records, store: store)
 
@@ -167,13 +135,14 @@ final class DashboardViewModel {
             insight = nil
             return
         }
+        let targets = week?.targets ?? [:]
         let fallback = Self.heuristicInsight(targets: targets, currentWeek: currentWeek)
         let (summary, signature) = DashboardInsightInput.build(
             store: TrainingDataStore.shared,
             pmc: pmc,
             weeklyBuckets: weeklyBuckets,
             targets: targets,
-            projections: projections,
+            projections: week?.projections ?? [:],
             weeklyStructure: context.weeklyStructure,
             atpPlan: ATPEngine.current()
         )
@@ -220,7 +189,7 @@ final class DashboardViewModel {
     /// Deterministic chat prompt to pre-fill (unsent) when the athlete taps the AI
     /// insight card — mirrors the same worst-gap read the card itself is built on.
     var insightFollowUpPrompt: String {
-        if let worst = Self.worstGap(targets: targets, currentWeek: currentWeek) {
+        if let worst = Self.worstGap(targets: week?.targets ?? [:], currentWeek: currentWeek) {
             return "Plan a \(worst.family.displayName.lowercased()) workout for me this week."
         }
         return "Give me a quick review of my training week."
@@ -236,23 +205,15 @@ final class DashboardViewModel {
         let pmc = PMCEngine.current()
         let weeklyBuckets = TrainingVolume.weeklyBuckets(records: store.activities())
         let atpPlan = ATPEngine.current()
-
-        let cal = Calendar.current
-        let weekStart = TrainingVolume.weekStart(of: Date())
-        let weekEnd = cal.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
-        let targets = WeeklyTargets.targets(
-            scheduled: store.scheduledWorkouts(from: weekStart, to: weekEnd),
-            weeklyStructure: context.weeklyStructure,
-            atpPlan: atpPlan
-        )
-        let projections = WeeklyTargets.projection(store: store)
+        let week = WeeklyTargets.thisWeek(weeklyStructure: context.weeklyStructure, atpPlan: atpPlan,
+                                          creditFactor: AppSettings.storedCreditFactor(), store: store)
 
         let (summary, _) = DashboardInsightInput.build(
             store: store,
             pmc: pmc,
             weeklyBuckets: weeklyBuckets,
-            targets: targets,
-            projections: projections,
+            targets: week.targets,
+            projections: week.projections,
             weeklyStructure: context.weeklyStructure,
             atpPlan: atpPlan
         )

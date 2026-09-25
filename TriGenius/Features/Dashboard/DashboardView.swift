@@ -9,10 +9,10 @@ import Combine
 // athlete's configured order/visibility (`AppSettings.dashboardLayout`):
 //   • Up Next: today's completed + upcoming planned workouts, one row per
 //     workout → its detail screen.
-//   • Fitness & Form: CTL / ATL / TSB summary tiles and fitness vs the ATP plan
-//     → StatisticsView.
+//   • Pinned: CTL / ATL / TSB summary tiles → Fitness & Form detail; fitness vs
+//     the ATP plan and this week's per-discipline rings → Plan tab; the heading's
+//     "All Stats" → StatisticsView.
 //   • Tissue Load: the structural load card → its grid / group detail.
-//   • Weekly Target (Volume): per-discipline rings, actual vs. target → Plan tab.
 //   • AI insight: the coach's one-line read on the week → chat, prefilled.
 //
 // Everything that leads somewhere carries a `Chevron`.
@@ -34,11 +34,10 @@ struct DashboardView: View {
 
     @Environment(CoachRouter.self) private var router
     @State private var viewModel = DashboardViewModel()
-    @State private var volumeMetric: VolumeMetric = .tss
     @State private var tissueMode: TissueCardMode = .sevenDays
     @State private var showsTissueGrid = false
-    /// The group a tapped conflict warning opens.
-    @State private var conflictGroup: TissueGroup?
+    /// The group a tapped Tissue Load row opens.
+    @State private var selectedGroup: TissueGroup?
 
     private var wide = WideLayout()
 
@@ -107,9 +106,8 @@ struct DashboardView: View {
     @ViewBuilder private func sectionView(_ section: DashboardSection) -> some View {
         switch section {
         case .upNext: upNext
-        case .performance: fitnessAndForm
+        case .pinned: pinned
         case .tissueLoad: tissueLoad
-        case .weeklyTarget: weeklyTarget
         case .aiInsight: aiInsightCard
         }
     }
@@ -162,123 +160,63 @@ struct DashboardView: View {
         return "Hi there"
     }
 
-    // MARK: Fitness & Form
+    // MARK: Pinned
 
-    private var fitnessAndForm: some View {
+    private var pinned: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            SectionHeading("Fitness & Form")
+            SectionHeading("Pinned") {
+                NavigationLink { StatisticsView(weeklyStructure: weeklyStructure) } label: {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        Text("All Stats").font(.subheadline.weight(.semibold)).foregroundStyle(.tint)
+                        Chevron()
+                    }
+                }
+                .buttonStyle(.plain)
+            }
             if let result = viewModel.pmc, result.snapshot != nil {
                 LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide, fill: 3), spacing: Theme.Spacing.m) {
-                    PMCStatTiles(result: result, range: .oneMonth) { StatisticsView() }
+                    PMCStatTiles(result: result, range: .oneMonth)
                 }
                 if !viewModel.ctlTrend.actual.isEmpty {
-                    NavigationLink { StatisticsView() } label: { trendCard(result) }
-                        .buttonStyle(.plain)
+                    FitnessVsPlanCard(model: viewModel.ctlTrend)
                 }
             } else {
                 Text("No training-load data yet. Sync your activities to see CTL / ATL / TSB.")
                     .font(.subheadline).foregroundStyle(.secondary)
                     .contentCard()
             }
+            if let week = viewModel.week, !week.visibleFamilies.isEmpty {
+                WeeklyTargetCard(week: week)
+            }
         }
-    }
-
-    /// Actual fitness against the ATP plan around today, headed by this week's ramp.
-    private func trendCard(_ result: PMCResult) -> some View {
-        let ramp = RampRate.weeklySeries(points: result.points, weeks: 2).last.map { week in
-            Text("\(week.delta.formatted(.number.precision(.fractionLength(1)).sign(strategy: .always()))) CTL/wk")
-                .foregroundStyle(RampRate.safeBand.contains(week.delta) ? Theme.Palette.success
-                                 : week.delta > RampRate.safeBand.upperBound ? Theme.Palette.warning : .secondary)
-        }
-        return VStack(alignment: .leading, spacing: Theme.Spacing.l) {
-            CardHeader(title: "Fitness vs plan", color: Theme.Palette.fitness, detail: ramp)
-            CTLTrendChart(model: viewModel.ctlTrend)
-        }
-        .contentCard()
     }
 
     // MARK: Tissue Load
 
-    // A conflict warning opens the group it names — its detail explains the spike and
-    // links the session.
+    // A row opens its group — a conflict row's detail explains the spike and links
+    // the session; the rest of the card opens the Tissue Load screen.
     @ViewBuilder private var tissueLoad: some View {
         if let model = viewModel.tissueCard {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                SectionHeading("Tissue Load") {
-                    if viewModel.tissueChronic != nil {
-                        SegmentedPicker("Window", selection: $tissueMode,
-                                        options: TissueCardMode.allCases, label: \.label)
-                    }
-                }
+                SectionHeading("Tissue Load")
                 // Wide layouts have the room for the whole grid, so they skip the
                 // card's edit down to three rows.
-                if wide.isWide, let grid = viewModel.tissueGrid, tissueMode == .sevenDays {
-                    VStack(alignment: .leading, spacing: Theme.Spacing.l) {
-                        TissueLeadRow(lead: model.lead, onResolveConflict: openConflict)
-                        TissueGrid(days: grid.days, rows: grid.rows, isWide: true,
-                                   onSelect: { _ in showsTissueGrid = true })
-                        TissueLegend()
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .cardSurface()
-                } else {
-                    TissueLoadCard(mode: tissueMode, model: model, chronic: viewModel.tissueChronic,
-                                   onResolveConflict: openConflict,
-                                   onSelect: { _ in showsTissueGrid = true },
-                                   onAskCoach: { router.openChat(prefill: $0) })
-                }
+                TissueLoadCard(mode: $tissueMode, model: model, chronic: viewModel.tissueChronic,
+                               grid: wide.isWide ? viewModel.tissueGrid : nil,
+                               onSelect: { selectedGroup = $0 },
+                               onAskCoach: { router.openChat(prefill: $0) })
+                    .contentShape(Rectangle())
+                    .onTapGesture { showsTissueGrid = true }
             }
             .navigationDestination(isPresented: $showsTissueGrid) {
                 if let input = viewModel.tissueInput {
                     TissueLoadScreen(input: input, onAskCoach: { router.openChat(prefill: $0) })
                 }
             }
-            .navigationDestination(item: $conflictGroup) { group in
+            .navigationDestination(item: $selectedGroup) { group in
                 if let input = viewModel.tissueInput, let detail = TissueGroupDetailModel.make(group: group, input: input) {
                     TissueGroupDetail(model: detail, onAskCoach: { router.openChat(prefill: $0) })
                 }
-            }
-        }
-    }
-
-    private func openConflict() {
-        conflictGroup = viewModel.tissueInput?.conflicts.first?.group
-    }
-
-    // MARK: Weekly Target (Volume)
-
-    @ViewBuilder private var weeklyTarget: some View {
-        if !viewModel.visibleFamilies.isEmpty {
-            VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                SectionHeading("Weekly Target") {
-                    SegmentedPicker("Metric", selection: $volumeMetric,
-                                    options: VolumeMetric.allCases, label: \.label)
-                }
-
-                HStack(alignment: wide.isWide ? .center : .top,
-                       spacing: wide.isWide ? Theme.Spacing.l : 8) {
-                    ForEach(viewModel.visibleFamilies) { family in
-                        // Actual comes from the projection (its own weekly sum) so the
-                        // solid arc and the projection arc share one number.
-                        let target = viewModel.target(for: family)
-                        let projection = viewModel.projection(for: family)
-                        VolumeRing(family: family,
-                                   metric: volumeMetric,
-                                   horizontal: wide.isWide,
-                                   actualTSS: projection.actualTSS,
-                                   targetTSS: target.tss,
-                                   actualKm: projection.actualKm,
-                                   targetKm: target.distanceKm,
-                                   projectedTSS: projection.projectedTSS,
-                                   projectedKm: projection.projectedKm,
-                                   creditedTSS: projection.creditedTSS,
-                                   projectedCreditTSS: projection.projectedCreditTSS)
-                    }
-                    Chevron()
-                }
-                .contentCard()
-                .contentShape(Rectangle())
-                .onTapGesture { router.selectedTab = .plan }
             }
         }
     }
@@ -455,126 +393,3 @@ private struct UpNextItem: Identifiable {
         return planned?.plannedSummaryLine() ?? ""
     }
 }
-
-// MARK: - Volume metric (TSS vs. distance)
-
-/// Which metric the Weekly Target rings fill against and show on top. The other
-/// metric drops to the secondary line below.
-enum VolumeMetric: CaseIterable {
-    case tss, distance
-
-    var label: String { self == .tss ? "TSS" : "km" }
-}
-
-// MARK: - Volume Ring
-
-private struct VolumeRing: View {
-    let family: SportFamily
-    let metric: VolumeMetric
-    /// Wide layouts put the numbers beside the ring instead of under it, so three
-    /// tiles fill the row rather than floating in it.
-    var horizontal = false
-    let actualTSS: Double
-    let targetTSS: Double
-    let actualKm: Double
-    let targetKm: Double
-    /// Expected week close (completed + still-planned) for the active metric —
-    /// rendered as a faded arc continuing past the solid "actual" fill.
-    let projectedTSS: Double
-    let projectedKm: Double
-    /// Cross-training credit (TSS only) borrowed from other disciplines' surplus,
-    /// drawn as a distinct mid-opacity segment between the solid fill and the
-    /// projection arc.
-    let creditedTSS: Double
-    let projectedCreditTSS: Double
-
-    private var actual: Double { metric == .tss ? actualTSS : actualKm }
-    private var target: Double { metric == .tss ? targetTSS : targetKm }
-    private var projected: Double { max(metric == .tss ? projectedTSS : projectedKm, actual) }
-    // Credit is TSS-only — distance doesn't transfer across sports.
-    private var credited: Double { metric == .tss ? creditedTSS : 0 }
-    private var projectedCredit: Double { metric == .tss ? projectedCreditTSS : 0 }
-
-    private func fraction(_ value: Double) -> Double { target > 0 ? min(value / target, 1) : 0 }
-    /// Solid fill: what the athlete actually did in this discipline.
-    private var realTop: Double { fraction(actual) }
-    /// End of the borrowed-credit segment (real + credit).
-    private var creditTop: Double { fraction(actual + credited) }
-    /// End of the projection arc (projected close + its credit).
-    private var projTop: Double { fraction(projected + projectedCredit) }
-
-    /// True once even the credited projected close falls short of the target — the
-    /// visible gap that signals an at-risk week.
-    private var fallsShort: Bool { target > 0 && projTop < 0.99 }
-
-    var body: some View {
-        let layout = horizontal ? AnyLayout(HStackLayout(spacing: Theme.Spacing.m))
-                                : AnyLayout(VStackLayout(spacing: 8))
-        layout {
-            ZStack {
-                Circle().stroke(Color.primary.opacity(0.10), lineWidth: 7)
-                // Projection: the still-planned continuation beyond the completed
-                // (solid) arc, up to the weekly target. Same 7pt radius as the
-                // solid arc but dashed + lighter so it reads as "planned, not yet
-                // done" rather than "done".
-                if projTop > creditTop {
-                    Circle()
-                        .trim(from: creditTop, to: projTop)
-                        .stroke(family.color.opacity(0.65),
-                                style: StrokeStyle(lineWidth: 7, lineCap: .butt, dash: [2, 2]))
-                        .rotationEffect(.degrees(-90))
-                }
-                // Cross-training credit: mid-opacity solid segment past the real
-                // fill, so borrowed load reads as borrowed rather than done.
-                if creditTop > realTop {
-                    Circle()
-                        .trim(from: realTop, to: creditTop)
-                        .stroke(family.color.opacity(0.80),
-                                style: StrokeStyle(lineWidth: 7, lineCap: .butt))
-                        .rotationEffect(.degrees(-90))
-                }
-                Circle()
-                    .trim(from: 0, to: realTop)
-                    .stroke(family.color, style: StrokeStyle(lineWidth: 7, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-                Image(systemName: family.icon).font(.title3).foregroundStyle(family.color)
-            }
-            .frame(width: 60, height: 60)
-
-            VStack(alignment: horizontal ? .leading : .center, spacing: 1) {
-                Text(label(metric, actual)).font(.subheadline.weight(.semibold))
-                if target > 0 {
-                    Text("/ \(label(metric, target))").font(.caption2).foregroundStyle(.secondary)
-                }
-                if projected > actual {
-                    // The expected close given what is still planned this week —
-                    // tertiary (lighter) when on track, amber only when at risk.
-                    Text("→ \(label(metric, projected))")
-                        .font(.caption2)
-                        .foregroundStyle(fallsShort ? Theme.Palette.warning : Color.secondary.opacity(0.6))
-                        .padding(.top, 1)
-                }
-                
-                Text(label(secondaryMetric, secondaryActual))
-                    .font(.caption.weight(.semibold)).foregroundStyle(family.color)
-                    .padding(.top, 2)
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: horizontal ? .leading : .center)
-    }
-
-    private var secondaryMetric: VolumeMetric { metric == .tss ? .distance : .tss }
-    private var secondaryActual: Double { metric == .tss ? actualKm : actualTSS }
-
-    private func label(_ m: VolumeMetric, _ value: Double) -> String {
-        switch m {
-        case .tss:
-            return "\(Int(value.rounded())) TSS"
-        case .distance:
-            return value >= 10
-                ? "\(Int(value.rounded())) km"
-                : String(format: "%.1f km", value)
-        }
-    }
-}
-

@@ -423,6 +423,23 @@ nonisolated struct MetricPoint: Sendable, Identifiable {
             .sorted { $0.date < $1.date }
     }
 
+    /// The mean of the trailing `days` at every point of a date-ordered series — the
+    /// trend of a signal whose day-to-day noise swamps a first-to-last change. Dated
+    /// like the points themselves, so the line spans exactly the readings it smooths.
+    static func rollingMeans(_ points: [MetricPoint], days: Int = 7) -> [MetricPoint] {
+        let window = Double(days) * 86_400
+        var start = 0
+        var sum = 0.0
+        return points.indices.map { i in
+            sum += points[i].value
+            while points[i].date.timeIntervalSince(points[start].date) >= window {
+                sum -= points[start].value
+                start += 1
+            }
+            return MetricPoint(date: points[i].date, value: sum / Double(i - start + 1))
+        }
+    }
+
     /// Cut a series into stretches a chart can draw as separate lines.
     ///
     /// Needed because `lineStyle` in Swift Charts applies to a whole *series*: styling

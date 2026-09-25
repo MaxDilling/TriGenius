@@ -135,21 +135,7 @@ struct ATPTabView: View {
     // MARK: Events (below the chart)
 
     private var eventsCard: some View {
-        eventsSection
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .cardSurface()
-    }
-
-    private var eventsSection: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            HStack {
-                Text("Events").font(.headline)
-                Spacer()
-                Button {
-                    editingEvent = EventDraft(id: UUID().uuidString, name: "", date: startDate,
-                                              eventType: .triOlympic, priority: .a, targetCTL: nil)
-                } label: { Image(systemName: "plus.circle.fill") }
-            }
             if events.isEmpty {
                 Text("Add at least one A/B event to anchor the plan.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -159,6 +145,13 @@ struct ATPTabView: View {
                     .buttonStyle(.plain)
             }
         }
+        .cardTitle("Events") {
+            Button {
+                editingEvent = EventDraft(id: UUID().uuidString, name: "", date: startDate,
+                                          eventType: .triOlympic, priority: .a, targetCTL: nil)
+            } label: { Image(systemName: "plus.circle.fill") }
+        }
+        .contentCard()
     }
 
     /// What the list shows. Display only — `events` keeps every race, so the plan
@@ -223,21 +216,21 @@ struct ATPTabView: View {
     }
 
     private func chartCard(_ plan: ATPPlan) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+        ATPSeasonChart(
+            plan: plan,
+            onPinWeek: { week, tss in
+                TrainingDataStore.shared.setATPOverride(weekStart: week, pinnedTSS: tss)
+            },
+            onUnpinWeek: { week in
+                TrainingDataStore.shared.clearATPOverride(weekStart: week)
+            },
+            edgeBleed: Theme.Spacing.l)
+        .cardTitle("Season") {
             if let current = currentWeek(plan) {
                 Text("\(current.period.label) · \(Int(current.plannedTSS)) TSS this week"
                      + (current.weeksToNextEvent.map { " · \($0) wk to event" } ?? ""))
                     .font(.caption).foregroundStyle(.secondary)
             }
-            ATPSeasonChart(
-                plan: plan,
-                onPinWeek: { week, tss in
-                    TrainingDataStore.shared.setATPOverride(weekStart: week, pinnedTSS: tss)
-                },
-                onUnpinWeek: { week in
-                    TrainingDataStore.shared.clearATPOverride(weekStart: week)
-                },
-                edgeBleed: Theme.Spacing.l)
         }
         .contentCard()
     }

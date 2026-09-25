@@ -17,7 +17,7 @@ private struct TissueCardPreview: View {
             VStack(alignment: .leading, spacing: Theme.Spacing.s) {
                 Text(title).font(.caption).foregroundStyle(.secondary)
                 SectionHeading("Tissue Load") { EmptyView() }
-                TissueLoadCard(mode: mode, model: model, chronic: chronic)
+                TissueLoadCard(mode: .constant(mode), model: model, chronic: chronic)
             }
             .padding(Theme.Spacing.l)
         }

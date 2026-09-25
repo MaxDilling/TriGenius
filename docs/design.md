@@ -43,14 +43,14 @@ To mark an element the CoachBrain created or modified, use `.coachAccent(_:)` �
 
 The Apple Health model: summaries in tiles, a tap pushes the full page.
 
-- **`SummaryTile`** (`Shared/Charts/SummaryTile.swift`) is the one summary card — PMC values, ramp rate, every physiological marker, on the dashboard, in Statistics and in chat. Anatomy: `CardHeader` (title in the metric's colour · date of the reading · `Chevron`), value over its unit with an optional delta and status line, full-bleed sparkline footer. A tile shows a date only for a *reading* (a marker), never for a value computed daily (PMC, ramp). Noisy daily signals (recovery) draw their weekly-mean `trendLine` over faded readings, and their delta comes from it. Tiles flow in `LazyVGrid(columns: SummaryTile.columns(wide:fill:))`: adaptive for a catalogue, `fill` for a fixed set that spans the full width.
+- **`SummaryTile`** (`Shared/Charts/SummaryTile.swift`) is the one summary card — PMC values, ramp rate, every physiological marker, on the dashboard, in Statistics and in chat. Anatomy: `CardHeader` (title in the metric's colour · date of the reading · `Chevron`), value over its unit with an optional delta and status line, full-bleed sparkline footer (plain paths, not a `Chart` — a screen of tiles has to resize smoothly). Hovering the sparkline moves the readout to the point under the pointer — hover only, so a tap still opens the detail. A tile shows a date only for a *reading* (a marker), never for a value computed daily (PMC, ramp). Noisy daily signals (recovery) draw their trailing 7-day-mean `trendLine` over faded readings, and their delta comes from it. Signed series (Form, ramp rate) set `zeroLine`: zero stays in view as a dotted line and the area fills toward it. Tiles flow in `LazyVGrid(columns: SummaryTile.columns(wide:fill:))`: adaptive for a catalogue, `fill` for a fixed set that spans the full width.
 - **Every card titles itself with `.cardTitle(_:systemImage:accessory:)`** — `.headline`, the same size on every card, 16 pt above the content; a picker or Edit button rides in the accessory slot. Tiles use the coloured `CardHeader` at the same size. No card title lives outside its card.
 - **Colour means category**: a sport marker wears its discipline colour (`SportFamily.color`), the others `Theme.Palette.body` / `.recovery`; PMC series keep `fitness` / `fatigue` / `form`.
-- **Anything that leads somewhere carries a `Chevron`** — tiles, rows, the plan line, a card that switches tabs. A section's `SectionHeading` accessory is for actions only.
+- **Anything that leads somewhere carries a `Chevron`** — tiles, rows, the plan line, a card that switches tabs.
 - **Drilling into data pushes a page; creating or editing opens a sheet.** A detail page puts its readout (value + date, updated while scrubbing) at the top, the range in the navigation bar, the chart, then "About" text.
 - **One `TimeRange`** (`1M 3M 6M 1Y All`, `.rangeToolbar(_:)`) for every analysis view; a detail page opens at the range of the screen it came from.
 - **One `SegmentedPicker`** for every view switch in a heading, card or toolbar.
-- **No dual Y axes.** Series on different scales become small multiples sharing the time axis (`PMCDetailView`).
+- **One secondary axis, only for Form.** Form (TSB) is signed and rides the trailing axis centred on zero, filled from zero in the Form amber, faded beneath the load lines (`ATPSeasonChart`, `PMCDetailView`). Any other series on a different scale becomes its own chart sharing the time axis.
 
 ## 5. Layout paradigms (Calendar & Workouts)
 
@@ -64,7 +64,8 @@ The Apple Health model: summaries in tiles, a tap pushes the full page.
 Resolve every spacing / radius / status color to a token — no magic numbers.
 
 - **Spacing:** `Theme.Spacing` — `xs 4 · s 8 · m 12 · l 16 · xl 24`. Favor the tight end.
-- **Radius:** `Theme.Radius` — `s 8 · m 12 · l 16` (continuous corners, applied by the surface modifiers). Every card uses `l` for its corners and `Theme.Spacing.l` for its inset — both `cardSurface()` defaults, so a card never passes either; `s` / `m` are for controls and tooltips.
+- **Radius:** `Theme.Radius` — `s 8 · m 12 · l 16` (continuous corners, applied by the surface modifiers). Every card uses `l` for its corners (fixed in `cardSurface()`); `s` / `m` are for controls and tooltips. The one card that is active right now (the live workout's current exercise) passes `cardSurface(tint:)` instead of wearing a badge.
+- **Insets:** every card insets by `Theme.Spacing.l` (the `cardSurface()` default). A card's title row — `cardTitle`, `CardHeader`, the Tissue lead — tucks up by `Theme.Spacing.titleTuck`: text carries ~5 pt of air above its glyphs, so the title then reads as the same 16 pt as the sides, as on Apple Fitness's cards.
 - **Status colors:** `Theme.Palette` — `warning · success · info · danger` instead of raw `.orange` / `.green` / `.red`.
 - **Surfaces:** `.cardSurface()`, `.contentCard()`, `.glassSurface(tint:)`, `.headerPill()`, `.coachAccent(_:)` from `Surfaces.swift`.
 - **System colors:** `Color.appBackground` / `appSecondaryBackground` / `appTertiaryBackground` / `appTertiaryLabel` (cross-platform, in `Color+App.swift`).

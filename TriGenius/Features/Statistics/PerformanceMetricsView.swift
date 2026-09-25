@@ -46,10 +46,11 @@ struct PerformanceMetric: Identifiable {
     var id: String { key }
 
     /// Recovery signals are noisy day to day, so their trend — the delta and the line
-    /// drawn over the readings — runs on weekly means. Nil where the readings already
-    /// are the trend.
-    func trendLine(_ points: [MetricPoint]) -> [MetricPoint]? {
-        group == .recovery ? MetricPoint.weeklyMeans(points) : nil
+    /// drawn over the readings — runs on the trailing 7-day mean. Taken over the whole
+    /// history before cutting to `range`, so the window's first days average a full
+    /// week too. Nil where the readings already are the trend.
+    func trendLine(_ points: [MetricPoint], in range: TimeRange) -> [MetricPoint]? {
+        group == .recovery ? MetricPoint.rollingMeans(points).filter { range.contains($0.date) } : nil
     }
 
     /// The markers shown, in priority order. CSS / LT thresholds are stored as
@@ -208,15 +209,15 @@ struct PerformanceMetricsSection: View {
 
 // MARK: - Trend math
 
-/// First-to-last change of a metric over a set of points, plus whether that
+/// First-to-last change of a metric's trend within a range, plus whether that
 /// change is an improvement. Shared by the card and the detail view so the
 /// delta is computed identically everywhere.
 private struct MetricTrend {
     let rawDelta: Double
     let isImproved: Bool
 
-    init(metric: PerformanceMetric, points: [MetricPoint]) {
-        let points = metric.trendLine(points) ?? points
+    init(metric: PerformanceMetric, points: [MetricPoint], range: TimeRange) {
+        let points = metric.trendLine(points, in: range) ?? points.filter { range.contains($0.date) }
         let delta = (points.last?.value ?? 0) - (points.first?.value ?? 0)
         rawDelta = points.count >= 2 ? delta : 0
         isImproved = metric.higherIsBetter ? rawDelta > 0 : rawDelta < 0
@@ -239,7 +240,7 @@ struct MetricCard: View {
 
     var body: some View {
         let recent = points.filter { range.contains($0.date) }
-        let trend = MetricTrend(metric: metric, points: recent)
+        let trend = MetricTrend(metric: metric, points: points, range: range)
         NavigationLink {
             MetricDetailView(metric: metric, points: points, range: range)
         } label: {
@@ -249,7 +250,7 @@ struct MetricCard: View {
                             .init(value: $0, isRise: trend.rawDelta > 0,
                                   color: trend.isImproved ? Theme.Palette.success : Theme.Palette.warning)
                         },
-                        series: recent, trendLine: metric.trendLine(recent))
+                        series: recent, trendLine: metric.trendLine(points, in: range), display: metric.display)
         }
         .buttonStyle(.plain)
     }
@@ -279,7 +280,7 @@ struct MetricDetailView: View {
         points.filter { range.contains($0.date) }
     }
 
-    private var trend: MetricTrend { MetricTrend(metric: metric, points: visiblePoints) }
+    private var trend: MetricTrend { MetricTrend(metric: metric, points: points, range: range) }
 
 
     var body: some View {
@@ -389,7 +390,7 @@ struct MetricDetailView: View {
                                                    dash: stretch.isProvisional ? [1, 4] : []))
                     }
                 }
-                ForEach(metric.trendLine(visiblePoints) ?? []) { p in
+                ForEach(metric.trendLine(points, in: range) ?? []) { p in
                     LineMark(x: .value("Date", p.date), y: .value("Value", p.value), series: .value("Stretch", -1))
                         .foregroundStyle(metric.accent)
                         .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round))
