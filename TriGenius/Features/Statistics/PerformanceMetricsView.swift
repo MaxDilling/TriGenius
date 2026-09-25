@@ -45,42 +45,49 @@ struct PerformanceMetric: Identifiable {
 
     var id: String { key }
 
+    /// Recovery signals are noisy day to day, so their trend — the delta and the line
+    /// drawn over the readings — runs on weekly means. Nil where the readings already
+    /// are the trend.
+    func trendLine(_ points: [MetricPoint]) -> [MetricPoint]? {
+        group == .recovery ? MetricPoint.weeklyMeans(points) : nil
+    }
+
     /// The markers shown, in priority order. CSS / LT thresholds are stored as
     /// raw speed (m/s) and rendered back into "m:ss" pace for display.
     static let all: [PerformanceMetric] = [
         // Performance (physiological capacity)
-        PerformanceMetric(key: "vo2max_running", title: "VO₂max (Run)", group: .performance, accent: .red,
+        PerformanceMetric(key: "vo2max_running", title: "VO₂max (Run)", group: .performance, accent: SportFamily.run.color,
                           unit: "ml/kg/min", storageUnit: "ml_kg_min", format: intFormat, parse: doubleParse, higherIsBetter: true),
-        PerformanceMetric(key: "vo2max_cycling", title: "VO₂max (Bike)", group: .performance, accent: .orange,
+        PerformanceMetric(key: "vo2max_cycling", title: "VO₂max (Bike)", group: .performance, accent: SportFamily.bike.color,
                           unit: "ml/kg/min", storageUnit: "ml_kg_min", format: intFormat, parse: doubleParse, higherIsBetter: true),
-        PerformanceMetric(key: "cycling_ftp", title: "FTP (Bike)", group: .performance, accent: .blue,
+        PerformanceMetric(key: "cycling_ftp", title: "FTP (Bike)", group: .performance, accent: SportFamily.bike.color,
                           unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true,
                           estimateNote: "Estimated from cycling VO₂max and weight."),
-        PerformanceMetric(key: "running_ftp", title: "FTP (Run)", group: .performance, accent: .indigo,
+        PerformanceMetric(key: "running_ftp", title: "FTP (Run)", group: .performance, accent: SportFamily.run.color,
                           unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true),
-        PerformanceMetric(key: "lactate_threshold_hr", title: "LT Heart Rate", group: .performance, accent: .pink,
+        PerformanceMetric(key: "lactate_threshold_hr", title: "LTHR (Run)", group: .performance, accent: SportFamily.run.color,
                           unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true,
                           estimateNote: "Estimated from max HR and recent sustained runs."),
-        PerformanceMetric(key: "lactate_threshold_hr_cycling", title: "LT Heart Rate (Bike)", group: .performance, accent: .pink,
+        PerformanceMetric(key: "lactate_threshold_hr_cycling", title: "LTHR (Bike)", group: .performance, accent: SportFamily.bike.color,
                           unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true,
                           estimateNote: "Estimated from the heart rate held in rides near your best 20-minute power."),
-        PerformanceMetric(key: "lactate_threshold_speed", title: "LT Pace", group: .performance, accent: .teal,
+        PerformanceMetric(key: "lactate_threshold_speed", title: "LT Pace", group: .performance, accent: SportFamily.run.color,
                           unit: "/km", storageUnit: "m_per_s", format: paceFromSpeed(1000), parse: speedFromPace(1000), higherIsBetter: true, paceDistanceM: 1000,
                           estimateNote: "Reconstructed from heart rate and pace on recent runs."),
-        PerformanceMetric(key: "swim_css_speed", title: "CSS (Swim)", group: .performance, accent: .cyan,
+        PerformanceMetric(key: "swim_css_speed", title: "CSS", group: .performance, accent: SportFamily.swim.color,
                           unit: "/100m", storageUnit: "m_per_s", format: paceFromSpeed(100), parse: speedFromPace(100), higherIsBetter: true, paceDistanceM: 100),
-        PerformanceMetric(key: "max_hr", title: "Max Heart Rate", group: .performance, accent: .purple,
+        PerformanceMetric(key: "max_hr", title: "Max HR", group: .performance, accent: Theme.Palette.body,
                           unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true),
-        PerformanceMetric(key: "weight_kg", title: "Weight", group: .performance, accent: .brown,
+        PerformanceMetric(key: "weight_kg", title: "Weight", group: .performance, accent: Theme.Palette.body,
                           unit: "kg", storageUnit: "kg", format: oneDecimalFormat, parse: doubleParse, higherIsBetter: false),
         // Recovery (daily wellness signals)
-        PerformanceMetric(key: "resting_hr", title: "Resting HR", group: .recovery, accent: .mint,
+        PerformanceMetric(key: "resting_hr", title: "Resting HR", group: .recovery, accent: Theme.Palette.recovery,
                           unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: false),
-        PerformanceMetric(key: "hrv_overnight", title: "HRV (Overnight)", group: .recovery, accent: .green,
+        PerformanceMetric(key: "hrv_overnight", title: "HRV (Overnight)", group: .recovery, accent: Theme.Palette.recovery,
                           unit: "ms", storageUnit: "ms", format: intFormat, parse: doubleParse, higherIsBetter: true),
-        PerformanceMetric(key: "sleep_score", title: "Sleep Score", group: .recovery, accent: .blue,
+        PerformanceMetric(key: "sleep_score", title: "Sleep Score", group: .recovery, accent: Theme.Palette.recovery,
                           unit: "", storageUnit: "", format: intFormat, parse: doubleParse, higherIsBetter: true),
-        PerformanceMetric(key: "sleep_duration_h", title: "Sleep Duration", group: .recovery, accent: .indigo,
+        PerformanceMetric(key: "sleep_duration_h", title: "Sleep Duration", group: .recovery, accent: Theme.Palette.recovery,
                           unit: "h", storageUnit: "h", format: oneDecimalFormat, parse: doubleParse, higherIsBetter: true),
     ]
 
@@ -127,6 +134,11 @@ struct PerformanceMetric: Identifiable {
 /// Reads each marker's history from the store on appear; renders nothing when
 /// no marker has any data yet.
 struct PerformanceMetricsSection: View {
+    init(range: TimeRange) { self.range = range }
+
+    let range: TimeRange
+
+    private var wide = WideLayout()
     @State private var histories: [String: [MetricPoint]] = [:]
     @State private var loaded = false
     @State private var showAdd = false
@@ -134,8 +146,6 @@ struct PerformanceMetricsSection: View {
     private func available(_ group: PerformanceMetric.Group) -> [PerformanceMetric] {
         PerformanceMetric.all.filter { $0.group == group && (histories[$0.key]?.isEmpty == false) }
     }
-
-    private let columns = [GridItem(.adaptive(minimum: 150), spacing: 10)]
 
     var body: some View {
         // A concrete VStack (not a transparent `Group`) so the `.task` loader
@@ -155,7 +165,7 @@ struct PerformanceMetricsSection: View {
                 } else if loaded {
                     Text("No performance metrics yet. VO₂max, FTP and your threshold values appear here once your data source reports them.")
                         .font(.subheadline).foregroundStyle(.secondary)
-                        .glassCard(padding: Theme.Spacing.m)
+                        .contentCard()
                 }
             }
 
@@ -177,9 +187,9 @@ struct PerformanceMetricsSection: View {
     }
 
     private func grid(_ metrics: [PerformanceMetric]) -> some View {
-        LazyVGrid(columns: columns, spacing: 10) {
+        LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide), spacing: Theme.Spacing.m) {
             ForEach(metrics) { metric in
-                MetricCard(metric: metric, points: histories[metric.key] ?? [])
+                MetricCard(metric: metric, points: histories[metric.key] ?? [], range: range)
             }
         }
     }
@@ -206,6 +216,7 @@ private struct MetricTrend {
     let isImproved: Bool
 
     init(metric: PerformanceMetric, points: [MetricPoint]) {
+        let points = metric.trendLine(points) ?? points
         let delta = (points.last?.value ?? 0) - (points.first?.value ?? 0)
         rawDelta = points.count >= 2 ? delta : 0
         isImproved = metric.higherIsBetter ? rawDelta > 0 : rawDelta < 0
@@ -217,230 +228,86 @@ private struct MetricTrend {
     }
 }
 
-/// A Y-axis domain tightened to the data's own min/max (plus a margin on each
-/// side), so even small progressions fill the chart's height instead of
-/// flattening against `.automatic`'s round-number padding. `bottomPad` can be
-/// raised independently of `topPad` so the full-bleed card sparkline keeps the
-/// line off the bottom edge (the area still fills the gap below it).
-private func tightDomain(_ points: [MetricPoint], topPad: Double = 0.18, bottomPad: Double = 0.18) -> ClosedRange<Double> {
-    let values = points.map(\.value)
-    guard let lo = values.min(), let hi = values.max() else { return 0...1 }
-    let range = hi - lo
-    // A flat series has no range to scale by — fall back to a small synthetic span.
-    let unit = range > 0 ? range : max(abs(hi) * 0.28, 1)
-    return (lo - unit * bottomPad)...(hi + unit * topPad)
-}
-
 // MARK: - Card
 
+/// A marker's `SummaryTile`, opening its detail page at the same window. The chat's
+/// metric-trend card reuses it.
 struct MetricCard: View {
     let metric: PerformanceMetric
     let points: [MetricPoint]
-    /// Sparkline window in months. The Statistics grid uses the 3-month default;
-    /// the chat's metric-trend card passes its token's `months`.
-    var windowMonths: Int
-
-    @State private var showDetail = false
-    @State private var scrubDate: Date?
-
-    init(metric: PerformanceMetric, points: [MetricPoint], windowMonths: Int = 3) {
-        self.metric = metric
-        self.points = points
-        self.windowMonths = windowMonths
-    }
-
-    /// The card sparkline summarises only the recent past — `windowMonths` —
-    /// so day-to-day progression reads clearly without the whole history
-    /// compressing it flat. (The detail view still offers longer windows.)
-    /// The current value still comes from the full series' last point.
-    private var recentPoints: [MetricPoint] {
-        guard let start = Calendar.current.date(byAdding: .month, value: -windowMonths, to: Date()) else { return points }
-        return points.filter { $0.date >= start }
-    }
-
-    private var trend: MetricTrend { MetricTrend(metric: metric, points: recentPoints) }
-
-    /// The sparkline point under the pointer/finger — while scrubbing, the card's
-    /// own value line becomes the readout (a floating tooltip has no room on the
-    /// 36 pt footer).
-    private var scrubbed: MetricPoint? {
-        guard let date = scrubDate else { return nil }
-        return recentPoints.min { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }
-    }
+    let range: TimeRange
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            // Header + value carry the normal card padding…
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 5) {
-                    Circle().fill(metric.accent).frame(width: 7, height: 7)
-                    Text(metric.title).font(.caption).foregroundStyle(.secondary)
-                }
-
-                HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    Text((scrubbed ?? points.last).map { metric.display($0) } ?? "—")
-                        .font(.title2.bold())
-                    Text(metric.unit).font(.caption2).foregroundStyle(.secondary)
-                    Spacer()
-                    if let scrubbed {
-                        Text(scrubbed.date.formatted(.dateTime.day().month(.abbreviated)))
-                            .font(.caption2).foregroundStyle(.secondary)
-                    } else if let deltaText = trend.deltaText(metric) {
-                        HStack(spacing: 1) {
-                            Image(systemName: trend.rawDelta > 0 ? "arrow.up" : "arrow.down")
-                            Text(deltaText)
-                        }
-                        .font(.caption2)
-                        .foregroundStyle(trend.isImproved ? Theme.Palette.success : Theme.Palette.warning)
-                    }
-                }
-            }
-            .padding([.top, .horizontal], Theme.Spacing.m)
-
-            // …while the sparkline runs edge-to-edge as a full-bleed footer,
-            // clipped to the card's rounded bottom corners so it never pokes past.
-            sparkline
-                .frame(height: 36)
-                .clipShape(.rect(
-                    topLeadingRadius: 0, bottomLeadingRadius: Theme.Radius.l,
-                    bottomTrailingRadius: Theme.Radius.l, topTrailingRadius: 0,
-                    style: .continuous
-                ))
+        let recent = points.filter { range.contains($0.date) }
+        let trend = MetricTrend(metric: metric, points: recent)
+        NavigationLink {
+            MetricDetailView(metric: metric, points: points, range: range)
+        } label: {
+            SummaryTile(title: metric.title, color: metric.accent, date: points.last?.date,
+                        value: points.last.map(metric.display) ?? "—", unit: metric.unit,
+                        delta: trend.deltaText(metric).map {
+                            .init(value: $0, isRise: trend.rawDelta > 0,
+                                  color: trend.isImproved ? Theme.Palette.success : Theme.Palette.warning)
+                        },
+                        series: recent, trendLine: metric.trendLine(recent))
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .glassSurface(cornerRadius: Theme.Radius.l)
-        // `glassSurface` only shapes the glass background; clip the card so the
-        // full-bleed sparkline respects the rounded corners instead of poking out.
-        .clipShape(.rect(cornerRadius: Theme.Radius.l, style: .continuous))
-        .contentShape(Rectangle())
-        .onTapGesture { showDetail = true }
-        .sheet(isPresented: $showDetail) {
-            MetricDetailView(metric: metric, points: points)
-        }
-    }
-
-    @ViewBuilder
-    private var sparkline: some View {
-        if recentPoints.count >= 2 {
-            Chart {
-                ForEach(recentPoints) { p in
-                    LineMark(x: .value("Date", p.date), y: .value("Value", p.value))
-                        .interpolationMethod(.linear)
-                        .foregroundStyle(metric.accent)
-                    AreaMark(x: .value("Date", p.date), y: .value("Value", p.value))
-                        .interpolationMethod(.linear)
-                        .foregroundStyle(metric.accent.opacity(0.12))
-                }
-                if let scrubbed {
-                    RuleMark(x: .value("Scrub", scrubbed.date))
-                        .foregroundStyle(.secondary.opacity(0.6))
-                        .lineStyle(StrokeStyle(lineWidth: 1))
-                }
-            }
-            .chartXAxis(.hidden)
-            .chartYAxis(.hidden)
-            // Extra bottom buffer keeps the line floating above the card's lower
-            // edge; the area still fills the gap beneath it.
-            .chartYScale(domain: tightDomain(recentPoints, topPad: 0.15, bottomPad: 0.45))
-            // `.monotone` can overshoot the data range and Charts does not clip
-            // its plot to the frame by default — without this the area bleeds
-            // far outside the small sparkline rect.
-            .clipped()
-            .chartScrubbing($scrubDate) { date in
-                recentPoints.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) })?.date
-            }
-        } else {
-            // A single data point has no trend to draw — keep the card height
-            // stable with a quiet baseline rather than an empty chart.
-            Rectangle()
-                .fill(.secondary.opacity(0.12))
-                .frame(height: 1)
-                .frame(maxHeight: .infinity, alignment: .center)
-        }
+        .buttonStyle(.plain)
     }
 }
 
 // MARK: - Detail view
 
-/// The enlarged, time-range-adjustable chart shown when a metric card is tapped.
-/// Filters the card's full history to the selected window and plots it with
-/// axes, so the athlete can inspect the progression over a chosen period.
-/// The chart + history for one marker. Reached from the metric grid and from
-/// Settings' automatic-calculation screen, so it is not file-private.
+/// The chart + history for one marker, pushed from its tile and from Settings'
+/// automatic-calculation screen.
 struct MetricDetailView: View {
     let metric: PerformanceMetric
     let points: [MetricPoint]
 
-    @Environment(\.dismiss) private var dismiss
-    @State private var range: TimeRange = .threeMonths
+    @State private var range: TimeRange
     @State private var scrubDate: Date?
     @State private var manualEntries: [MetricPoint] = []
     @State private var showAdd = false
     @State private var editEntry: MetricPoint?
 
-    /// The selectable windows over which the progression can be viewed.
-    private enum TimeRange: String, CaseIterable, Identifiable {
-        case oneMonth = "1M"
-        case threeMonths = "3M"
-        case sixMonths = "6M"
-        case oneYear = "1Y"
-        case all = "All"
-
-        var id: String { rawValue }
-
-        /// Cut-off date for the window, or `nil` for "All".
-        func start(now: Date) -> Date? {
-            let cal = Calendar.current
-            switch self {
-            case .oneMonth: return cal.date(byAdding: .month, value: -1, to: now)
-            case .threeMonths: return cal.date(byAdding: .month, value: -3, to: now)
-            case .sixMonths: return cal.date(byAdding: .month, value: -6, to: now)
-            case .oneYear: return cal.date(byAdding: .year, value: -1, to: now)
-            case .all: return nil
-            }
-        }
+    init(metric: PerformanceMetric, points: [MetricPoint], range: TimeRange = .threeMonths) {
+        self.metric = metric
+        self.points = points
+        self._range = State(initialValue: range)
     }
 
     private var visiblePoints: [MetricPoint] {
-        guard let start = range.start(now: Date()) else { return points }
-        return points.filter { $0.date >= start }
+        points.filter { range.contains($0.date) }
     }
 
     private var trend: MetricTrend { MetricTrend(metric: metric, points: visiblePoints) }
 
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: Theme.Spacing.l) {
-                    header
-                    if visiblePoints.last?.isEstimated == true, let note = metric.estimateNote {
-                        Text(note).font(.caption).foregroundStyle(.secondary)
-                    }
-                    rangePicker
-                    chart
-                    stats
-                    manualSection
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                header
+                if visiblePoints.last?.isEstimated == true, let note = metric.estimateNote {
+                    Text(note).font(.caption).foregroundStyle(.secondary)
                 }
-                .padding(Theme.Spacing.l)
+                chart.contentCard()
+                stats
+                manualSection
             }
-            .navigationTitle(metric.title)
-            #if !os(macOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
-            }
-            .task { manualEntries = TrainingDataStore.shared.manualMetricEntries(key: metric.key) }
-            .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
-                manualEntries = TrainingDataStore.shared.manualMetricEntries(key: metric.key)
-            }
-            .sheet(isPresented: $showAdd) { ManualMetricEntryView(defaultKey: metric.key) }
-            .sheet(item: $editEntry) { p in
-                ManualMetricEntryView(editing: .init(metric: metric, date: p.date, value: p.value))
-            }
+            .padding(Theme.Spacing.l)
+        }
+        .background(Color.appBackground)
+        .navigationTitle(metric.title)
+        #if !os(macOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .rangeToolbar($range)
+        .task { manualEntries = TrainingDataStore.shared.manualMetricEntries(key: metric.key) }
+        .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
+            manualEntries = TrainingDataStore.shared.manualMetricEntries(key: metric.key)
+        }
+        .sheet(isPresented: $showAdd) { ManualMetricEntryView(defaultKey: metric.key) }
+        .sheet(item: $editEntry) { p in
+            ManualMetricEntryView(editing: .init(metric: metric, date: p.date, value: p.value))
         }
     }
 
@@ -474,8 +341,7 @@ struct MetricDetailView: View {
                             }
                             .buttonStyle(.plain)
                         }
-                        .padding(Theme.Spacing.s)
-                        .glassSurface(cornerRadius: Theme.Radius.m)
+                        .cardSurface()
                         .contentShape(Rectangle())
                         .onTapGesture { editEntry = p }
                     }
@@ -502,15 +368,8 @@ struct MetricDetailView: View {
         }
     }
 
-    private var rangePicker: some View {
-        Picker("Range", selection: $range) {
-            ForEach(TimeRange.allCases) { Text($0.rawValue).tag($0) }
-        }
-        .pickerStyle(.segmented)
-    }
-
     @ViewBuilder
-private var chart: some View {
+    private var chart: some View {
         if visiblePoints.count >= 2 {
             Chart {
                 // One `LineMark` per stretch, not per point: `lineStyle` applies to a
@@ -522,13 +381,18 @@ private var chart: some View {
                         LineMark(x: .value("Date", p.date), y: .value("Value", p.value),
                                  series: .value("Stretch", stretch.id))
                             .interpolationMethod(.linear)
-                            .foregroundStyle(metric.accent)
+                            .foregroundStyle(metric.accent.opacity(metric.group == .recovery ? 0.35 : 1))
                             // An estimate carried forward, or resting on a window too
                             // thin for the aggregate to be robust, is not a reading;
                             // drawn solid it is indistinguishable from one.
                             .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round,
                                                    dash: stretch.isProvisional ? [1, 4] : []))
                     }
+                }
+                ForEach(metric.trendLine(visiblePoints) ?? []) { p in
+                    LineMark(x: .value("Date", p.date), y: .value("Value", p.value), series: .value("Stretch", -1))
+                        .foregroundStyle(metric.accent)
+                        .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round))
                 }
                 ForEach(visiblePoints) { p in
                     AreaMark(x: .value("Date", p.date), y: .value("Value", p.value))
@@ -605,7 +469,6 @@ private var chart: some View {
             Text(value).font(.subheadline.weight(.semibold))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Theme.Spacing.s)
-        .glassSurface(cornerRadius: Theme.Radius.m)
+        .cardSurface()
     }
 }

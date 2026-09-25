@@ -16,11 +16,11 @@ Modern, compact, data-dense — and deliberately **not** "AI-looking". We integr
 
 | Layer | What | How |
 |---|---|---|
-| **Content** | Data-dense content: metrics, lists, detail rows, cards | Opaque grouped backgrounds via `.cardSurface()` (→ `Color.appSecondaryBackground`). Most of the UI is here. |
-| **Control / Navigation** | Floating, grouping chrome: toolbars, the coach chat bubble, a day-column container | Real glass via `.glassSurface(tint:)`. |
+| **Content** | Everything with data in it: tiles, cards, lists, detail rows, charts | Opaque via `.cardSurface()` / `.contentCard()` (→ `Color.appSecondaryBackground`). All of the app's data lives here. |
+| **Control / Navigation** | Floating chrome: header pills, toolbars, segmented pickers, buttons, the coach chat bubble, a day-column container | Real glass via `.glassSurface(tint:)`, `.headerPill()`, `.buttonStyle(.glass)`. |
 
 Rules:
-- **Never stack glass on glass**, and never put dense data straight on glass — it muddies contrast. Glass is the floating control layer, not the content layer.
+- **Never put a card on glass** and never stack glass on glass — over the plain app background glass has nothing to refract, reads as muddy grey, and costs the most to render. Glass is the floating control layer, not the content layer.
 - Prefer **one** glass container over many glass cards (e.g. a whole day column as a single `GlassEffectContainer`, not N glass boxes).
 - **No manual ambient blobs / `.blur(radius: 100)` behind glass.** System glass refracts the real content behind it; use `backgroundExtensionEffect()` if you need bleed.
 - App background is the **adaptive system background** (`Color.appBackground`), not forced `Color.black`.
@@ -39,30 +39,44 @@ To mark an element the CoachBrain created or modified, use `.coachAccent(_:)` �
 
 **Coach chat:** coach/system replies use a translucent **glass** bubble (`.glassSurface()`); the user's own messages use a **solid** flat color. The material difference is what separates AI insight from user input.
 
-## 4. Layout paradigms (Calendar & Workouts)
+## 4. Cards & navigation
+
+The Apple Health model: summaries in tiles, a tap pushes the full page.
+
+- **`SummaryTile`** (`Shared/Charts/SummaryTile.swift`) is the one summary card — PMC values, ramp rate, every physiological marker, on the dashboard, in Statistics and in chat. Anatomy: `CardHeader` (title in the metric's colour · date of the reading · `Chevron`), value over its unit with an optional delta and status line, full-bleed sparkline footer. A tile shows a date only for a *reading* (a marker), never for a value computed daily (PMC, ramp). Noisy daily signals (recovery) draw their weekly-mean `trendLine` over faded readings, and their delta comes from it. Tiles flow in `LazyVGrid(columns: SummaryTile.columns(wide:fill:))`: adaptive for a catalogue, `fill` for a fixed set that spans the full width.
+- **Every card titles itself with `.cardTitle(_:systemImage:accessory:)`** — `.headline`, the same size on every card, 16 pt above the content; a picker or Edit button rides in the accessory slot. Tiles use the coloured `CardHeader` at the same size. No card title lives outside its card.
+- **Colour means category**: a sport marker wears its discipline colour (`SportFamily.color`), the others `Theme.Palette.body` / `.recovery`; PMC series keep `fitness` / `fatigue` / `form`.
+- **Anything that leads somewhere carries a `Chevron`** — tiles, rows, the plan line, a card that switches tabs. A section's `SectionHeading` accessory is for actions only.
+- **Drilling into data pushes a page; creating or editing opens a sheet.** A detail page puts its readout (value + date, updated while scrubbing) at the top, the range in the navigation bar, the chart, then "About" text.
+- **One `TimeRange`** (`1M 3M 6M 1Y All`, `.rangeToolbar(_:)`) for every analysis view; a detail page opens at the range of the screen it came from.
+- **One `SegmentedPicker`** for every view switch in a heading, card or toolbar.
+- **No dual Y axes.** Series on different scales become small multiples sharing the time axis (`PMCDetailView`).
+
+## 5. Layout paradigms (Calendar & Workouts)
 
 - **Reduce vertical scrolling.** Prefer compact horizontal rows over bulky vertical cards in lists; separate entries with thin translucent dividers.
 - **Color tinting over icons.** Don't use large discipline icons (swim/bike/run). Use a small icon and lightly **tint** the row/glass with the discipline color.
 - **Life vs. training.** Non-training calendar events (Work, Uni) must be visually subordinate: colorless, flat, minimal height — so colored training sessions stand out as the day's anchors.
 - **Hero metrics.** In detail views, lift the 2–3 most important metrics (TL, Duration, IF/TE) into a prominent hero capsule at the top; keep secondary metrics in a compact list below.
 
-## 5. Tokens (`Theme.swift`)
+## 6. Tokens (`Theme.swift`)
 
 Resolve every spacing / radius / status color to a token — no magic numbers.
 
 - **Spacing:** `Theme.Spacing` — `xs 4 · s 8 · m 12 · l 16 · xl 24`. Favor the tight end.
-- **Radius:** `Theme.Radius` — `s 8 · m 12 · l 16` (continuous corners, applied by the surface modifiers).
+- **Radius:** `Theme.Radius` — `s 8 · m 12 · l 16` (continuous corners, applied by the surface modifiers). Every card uses `l` for its corners and `Theme.Spacing.l` for its inset — both `cardSurface()` defaults, so a card never passes either; `s` / `m` are for controls and tooltips.
 - **Status colors:** `Theme.Palette` — `warning · success · info · danger` instead of raw `.orange` / `.green` / `.red`.
-- **Surfaces:** `.cardSurface()`, `.glassSurface(tint:)`, `.coachAccent(_:)` from `Surfaces.swift`.
+- **Surfaces:** `.cardSurface()`, `.contentCard()`, `.glassSurface(tint:)`, `.headerPill()`, `.coachAccent(_:)` from `Surfaces.swift`.
 - **System colors:** `Color.appBackground` / `appSecondaryBackground` / `appTertiaryBackground` / `appTertiaryLabel` (cross-platform, in `Color+App.swift`).
 
-## 6. Cross-platform (macOS)
+## 7. Cross-platform (macOS)
 
 The app is multiplatform. Glass, sidebars and window backgrounds behave differently on macOS — the `Color.app*` helpers already map to AppKit equivalents. Don't assume iOS-only chrome; test the macOS destination for any new surface.
 
 ## Summary for UI code generation
 
-- Default content to **`.cardSurface()`** (opaque); reserve **`.glassSurface()`** for the floating control/nav layer.
+- All content on **`.cardSurface()` / `.contentCard()`** (opaque); **`.glassSurface()`** only for the floating control/nav layer.
+- Summaries are **`SummaryTile`s**; anything tappable that navigates shows a **`Chevron`**; drill-down pushes, editing is a sheet.
 - Use **real `glassEffect`**, never hand-rolled material+blob glass.
 - Pull every value from **`Theme`**; never hardcode spacing/radius/status colors.
 - Keep it **adaptive** (light + dark), compact, and data-dense.

@@ -202,7 +202,7 @@ final class ActivityReadToolHandler: CoachToolHandler {
         let weekly = metric.group == .recovery && end.timeIntervalSince(start) > 14.5 * 86_400
         if weekly { entry["resolution"] = "weekly_mean" }
         if window.count > 1 { entry["summary"] = summaryLine(metric, window: window) }
-        entry["history"] = dropRepeats(weekly ? weeklyMeans(window) : window, format: metric.format)
+        entry["history"] = dropRepeats(weekly ? MetricPoint.weeklyMeans(window) : window, format: metric.format)
             .map { "\(DateFormatter.ymd.string(from: $0.date)) \(metric.format($0.value))" }
             .joined(separator: ", ")
         return entry
@@ -264,20 +264,6 @@ final class ActivityReadToolHandler: CoachToolHandler {
         var s = "\(delta < 0 ? "-" : "+")\(formatted)"
         if months >= 1.4 { s += String(format: ", %+.1f/mo", delta / months) }
         return s
-    }
-
-    /// Collapse daily wellness points into one mean per calendar week, labelled
-    /// by the week's start day.
-    private func weeklyMeans(_ points: [MetricPoint]) -> [MetricPoint] {
-        let cal = Calendar.current
-        var byWeek: [Date: [Double]] = [:]
-        for p in points {
-            let week = cal.dateInterval(of: .weekOfYear, for: p.date)?.start ?? p.date
-            byWeek[week, default: []].append(p.value)
-        }
-        return byWeek
-            .map { MetricPoint(date: $0.key, value: $0.value.reduce(0, +) / Double($0.value.count)) }
-            .sorted { $0.date < $1.date }
     }
 
     /// Omit points repeating the previous displayed value, always keeping the

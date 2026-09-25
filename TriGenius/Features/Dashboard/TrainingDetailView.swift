@@ -59,7 +59,6 @@ struct TrainingDetailView: View {
     @State private var showRenameEdit = false
     @State private var nameInput = ""
     @State private var showDeleteConfirm = false
-    @State private var showTSSBasis = false
     @State private var showUnlinkConfirm = false
     @State private var showIgnoreConfirm = false
     @State private var editingSets: [StrengthSets.SetRow]?
@@ -262,7 +261,7 @@ struct TrainingDetailView: View {
     private var compactBody: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.l) {
             header
-            heroCapsule
+            HeroMetricsCard(metrics: heroMetrics)
             comparisonCard
             plannedStructureCard
             if legs.isEmpty {
@@ -300,14 +299,14 @@ struct TrainingDetailView: View {
     @ViewBuilder
     private var rail: some View {
         if let leg = selectedLegValue {
-            totalsCard(totalsMetrics(leg.segment.durationMinutes, leg.segment.tss, leg.segment.distanceKm,
-                                     family: leg.segment.family),
-                       basis: leg.segment.tssBasis)
+            HeroMetricsCard(metrics: totalsMetrics(leg.segment.durationMinutes, leg.segment.tss,
+                                                   leg.segment.distanceKm, family: leg.segment.family,
+                                                   basis: leg.segment.tssBasis))
             activityCard(leg.segment.details, title: "\(leg.name) · Metrics")
             zonesCard(leg.segment.details)
         } else {
             if legs.isEmpty { header.cardSurface() }
-            totalsCard(heroMetrics, basis: tssBasis)
+            HeroMetricsCard(metrics: heroMetrics)
             comparisonCard
             plannedStructureCard
             activityCard(details, title: legs.isEmpty ? "Activity" : "Metrics", extra: transitionsRow)
@@ -385,21 +384,14 @@ struct TrainingDetailView: View {
     }
 
     // MARK: Hero metrics
-    //
-    // The 2–3 most important metrics, featured up top in a glass capsule.
-
-    private struct HeroMetric: Identifiable {
-        let id = UUID()
-        let value: String
-        let label: String
-    }
 
     /// The totals of a workout or of one multisport leg.
     private func totalsMetrics(_ durationMinutes: Double, _ tss: Double?, _ distanceKm: Double,
-                               family: SportFamily) -> [HeroMetric] {
+                               family: SportFamily, basis: String?) -> [HeroMetric] {
         var metrics: [HeroMetric] = [
             HeroMetric(value: durationHM(durationMinutes), label: "Duration"),
-            HeroMetric(value: tss.map { "\(Int($0.rounded()))" } ?? "—", label: "TSS"),
+            HeroMetric(value: tss.map { "\(Int($0.rounded()))" } ?? "—", label: "TSS",
+                       note: basis.map { "TSS computed from \($0)" }),
         ]
         if distanceKm > 0 {
             metrics.append(HeroMetric(value: family.distanceLabel(distanceKm, decimals: 1), label: "Distance"))
@@ -408,58 +400,7 @@ struct TrainingDetailView: View {
     }
 
     private var heroMetrics: [HeroMetric] {
-        totalsMetrics(record.durationMinutes, record.tss, record.distanceKm, family: family)
-    }
-
-    private func totalsRow(_ metrics: [HeroMetric], basis: String?) -> some View {
-        HStack(spacing: 0) {
-            ForEach(Array(metrics.enumerated()), id: \.element.id) { index, metric in
-                if index > 0 {
-                    Divider().frame(height: 34)
-                }
-                heroCell(metric, basis: basis)
-            }
-        }
-        .padding(.vertical, Theme.Spacing.l)
-        .padding(.horizontal, Theme.Spacing.m)
-    }
-
-    private var heroCapsule: some View {
-        totalsRow(heroMetrics, basis: tssBasis).glassSurface(cornerRadius: Theme.Radius.l)
-    }
-
-    /// The rail's totals — numbers belong on the opaque content layer.
-    private func totalsCard(_ metrics: [HeroMetric], basis: String?) -> some View {
-        totalsRow(metrics, basis: basis).frame(maxWidth: .infinity).cardSurface()
-    }
-
-    /// The TSS cell reveals its computation basis in a popover on tap.
-    @ViewBuilder
-    private func heroCell(_ metric: HeroMetric, basis: String?) -> some View {
-        let cell = VStack(spacing: Theme.Spacing.xs) {
-            Text(metric.value)
-                .font(.title2.weight(.semibold))
-                .monospacedDigit()
-                .lineLimit(1).minimumScaleFactor(0.6)
-            Text(metric.label)
-                .font(.caption).foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        if metric.label == "TSS", let basis {
-            cell
-                .contentShape(Rectangle())
-                .onTapGesture { showTSSBasis = true }
-                .popover(isPresented: $showTSSBasis, arrowEdge: .top) {
-                    Label("TSS computed from \(basis)", systemImage: "function")
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: 280)
-                        .padding()
-                        .presentationCompactAdaptation(.popover)
-                }
-        } else {
-            cell
-        }
+        totalsMetrics(record.durationMinutes, record.tss, record.distanceKm, family: family, basis: tssBasis)
     }
 
     // MARK: Planned vs Completed
@@ -513,8 +454,6 @@ struct TrainingDetailView: View {
         let rows = comparisonMetrics
         if !rows.isEmpty {
             VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                Label("Planned vs Completed", systemImage: "arrow.left.arrow.right")
-                    .font(.headline)
                 Grid(alignment: .leading, horizontalSpacing: Theme.Spacing.m,
                      verticalSpacing: Theme.Spacing.s) {
                     GridRow {
@@ -538,6 +477,7 @@ struct TrainingDetailView: View {
                     }
                 }
             }
+            .cardTitle("Planned vs Completed", systemImage: "arrow.left.arrow.right")
             .frame(maxWidth: .infinity, alignment: .leading)
             .cardSurface()
         }
@@ -584,22 +524,6 @@ struct TrainingDetailView: View {
         let snapshot = TrainingDataStore.shared.performanceHistory().snapshot(asOf: record.date)
         return TSSCalculator.compute(details: details, snapshot: snapshot,
                                      heartRate: storedHeartRateSamples).basis?.label
-    }
-
-    // MARK: Coach insight ("Silent AI")
-    //
-    // Static placeholder for now — to be wired to the LLM later. Styled as an
-    // insight (glass + a coach-tinted hairline), not a badge.
-
-    private var coachInsight: some View {
-        HStack(alignment: .top, spacing: Theme.Spacing.s) {
-            // Text("Controlled aerobic session — pacing stayed in range for a solid endurance stimulus.")
-            //     .font(.subheadline)
-            // Spacer(minLength: 0)
-        }
-        .padding(Theme.Spacing.m)
-        .glassSurface(cornerRadius: Theme.Radius.m)
-        .coachAccent(family.color, cornerRadius: Theme.Radius.m)
     }
 
     // MARK: Activity metrics
@@ -682,7 +606,6 @@ struct TrainingDetailView: View {
         let rows = activityMetricList(details) + extra
         if !rows.isEmpty {
             VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                Text(title).font(.headline)
                 VStack(spacing: 0) {
                     ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
                         if index > 0 { Divider() }
@@ -697,6 +620,7 @@ struct TrainingDetailView: View {
                     }
                 }
             }
+            .cardTitle(title)
             .frame(maxWidth: .infinity, alignment: .leading)
             .cardSurface()
         }
@@ -715,9 +639,9 @@ struct TrainingDetailView: View {
         }
         if !ZoneDistributionStack.isEmpty(zones) {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                Text("Time in zone").font(.headline)
                 ZoneDistributionStack(seconds: zones, bounds: bounds)
             }
+            .cardTitle("Time in zone")
             .frame(maxWidth: .infinity, alignment: .leading)
             .cardSurface()
         }
@@ -732,7 +656,6 @@ struct TrainingDetailView: View {
         let comment = Coerce.string(details["notes"])
         if feel != nil || rpe != nil || (comment?.isEmpty == false) {
             VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                Label("How it felt", systemImage: "face.smiling").font(.headline)
                 if let feel {
                     metricRow("Feel", feelLabel(feel), "face.smiling")
                 }
@@ -743,6 +666,7 @@ struct TrainingDetailView: View {
                     Text(comment).font(.subheadline).foregroundStyle(.secondary)
                 }
             }
+            .cardTitle("How it felt", systemImage: "face.smiling")
             .frame(maxWidth: .infinity, alignment: .leading)
             .cardSurface()
         }
@@ -865,7 +789,6 @@ struct TrainingDetailView: View {
 
     private var splitsCard: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            Text("Splits").font(.headline)
             ProportionBar(
                 segments: legs.map {
                     .init(label: $0.name, color: $0.color,
@@ -879,6 +802,7 @@ struct TrainingDetailView: View {
                 }
             }
         }
+        .cardTitle("Splits")
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
     }
@@ -1047,7 +971,6 @@ struct TrainingDetailView: View {
 
     private func swimIntervalsCard(_ intervals: [[String: Any]]) -> some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            Text("Intervals").font(.headline)
             Grid(alignment: .trailing, horizontalSpacing: Theme.Spacing.m, verticalSpacing: Theme.Spacing.xs) {
                 GridRow {
                     Text("#").gridColumnAlignment(.leading)
@@ -1075,6 +998,7 @@ struct TrainingDetailView: View {
                 }
             }
         }
+        .cardTitle("Intervals")
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
     }

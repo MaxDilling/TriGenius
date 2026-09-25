@@ -129,7 +129,7 @@ struct ATPTabView: View {
             .buttonStyle(.borderedProminent)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .cardSurface(cornerRadius: Theme.Radius.l, padding: Theme.Spacing.l)
+        .cardSurface()
     }
 
     // MARK: Events (below the chart)
@@ -137,7 +137,7 @@ struct ATPTabView: View {
     private var eventsCard: some View {
         eventsSection
             .frame(maxWidth: .infinity, alignment: .leading)
-            .cardSurface(cornerRadius: Theme.Radius.l, padding: Theme.Spacing.l)
+            .cardSurface()
     }
 
     private var eventsSection: some View {
@@ -239,9 +239,7 @@ struct ATPTabView: View {
                 },
                 edgeBleed: Theme.Spacing.l)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(Theme.Spacing.l)
-        .glassSurface(cornerRadius: Theme.Radius.l)
+        .contentCard()
     }
 
     private var emptyHint: some View {

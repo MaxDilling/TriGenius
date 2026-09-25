@@ -5,9 +5,6 @@ import SwiftUI
 // Three rows answering one question each: when is this group clear for hard work
 // again. The lanes behind the answer are the evidence and open the full grid; the
 // closing row names what is free today and hands planning it to the coach.
-//
-// Opaque on purpose (`cardSurface`, not the dashboard's `glassCard`): 6 pt bars and
-// 7 pt diamonds lose contrast over refracting glass.
 
 nonisolated enum TissueCardMode: String, CaseIterable, Identifiable, Sendable {
     case sevenDays, sixWeeks
@@ -33,6 +30,7 @@ struct TissueLoadCard: View {
                 chronicBody(chronic)
             } else {
                 lead
+                    .padding(.bottom, Theme.Spacing.m)
                 header
                 ForEach(model.rows) { row in
                     Button { onSelect(row.group) } label: { rowBody(row) }
@@ -47,7 +45,7 @@ struct TissueLoadCard: View {
         // except at accessibility sizes, where growing is the point.
         .frame(minHeight: typeSize.isAccessibilitySize ? nil : TissueMetrics.cardContent,
                alignment: .top)
-        .cardSurface(cornerRadius: Theme.Radius.l)
+        .cardSurface()
     }
 
     // MARK: 6-week mode
@@ -392,7 +390,7 @@ struct TissueLeadRow: View {
                 EmptyView()
             }
             Text(lead.text)
-                .font(.subheadline.weight(.semibold))
+                .font(.headline)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
             if lead.opensConflict {

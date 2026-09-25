@@ -19,9 +19,12 @@ extension Color {
         #endif
     }
 
+    /// The card colour. macOS has no system colour that stands off its (desktop-tinted)
+    /// window background — `underPageBackgroundColor` sits within a few levels of it —
+    /// so the Mac gets its own pair.
     static var appSecondaryBackground: Color {
         #if os(macOS)
-        Color(nsColor: .underPageBackgroundColor)
+        appAdaptive(light: 0xFFFFFF, dark: 0x363638)
         #else
         Color(uiColor: .secondarySystemBackground)
         #endif
@@ -62,7 +65,10 @@ extension Color {
     /// Adaptive color from the two sRGB hex values of one token (0xRRGGBB). For design
     /// tokens whose light and dark variants are chosen for contrast rather than derived
     /// from each other — `Theme.Palette.Tissue` is the caller.
-    static func appAdaptive(light: UInt32, dark: UInt32,
+    ///
+    /// `nonisolated` so the provider closure isn't MainActor-isolated: SwiftUI resolves
+    /// it on its async render thread, where the isolation check traps.
+    nonisolated static func appAdaptive(light: UInt32, dark: UInt32,
                             lightAlpha: CGFloat = 1, darkAlpha: CGFloat = 1) -> Color {
         func components(_ hex: UInt32) -> (CGFloat, CGFloat, CGFloat) {
             (CGFloat((hex >> 16) & 0xFF) / 255, CGFloat((hex >> 8) & 0xFF) / 255, CGFloat(hex & 0xFF) / 255)

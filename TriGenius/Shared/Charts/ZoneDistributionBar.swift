@@ -11,8 +11,7 @@ import SwiftUI
 // athlete's numbers) and, when the bounds are known, the numbers themselves. It
 // takes over the line the metric name occupies rather than floating above the bar:
 // the bubble would stand taller than the whole bar block and overflow the enclosing
-// card, and one overflowing a `.glassSurface()` composites under its rim (see
-// `ChartTooltip`).
+// card.
 
 /// Every metric that has time in it, as titled bars — the shared layout behind the
 /// workout detail view, Statistics and the coach's chat card, so a new `ZoneMetric`

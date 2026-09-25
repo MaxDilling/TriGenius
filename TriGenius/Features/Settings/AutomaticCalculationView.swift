@@ -116,7 +116,7 @@ struct AutomaticCalculationView: View {
                             Toggle(row.title, isOn: row.calculation)
                         }
                     }
-                    .glassCard(padding: Theme.Spacing.m)
+                    .contentCard()
                     storedHistory
                 }
 
@@ -151,7 +151,7 @@ struct AutomaticCalculationView: View {
                 RecomputeHistoryButton()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .glassCard(padding: Theme.Spacing.m)
+            .contentCard()
         } else {
             Text("A change applies to newly synced activities right away. Training load and time in zone for everything already stored keep the thresholds they were scored with until you recompute.")
                 .font(.footnote).foregroundStyle(.secondary)
@@ -179,7 +179,7 @@ struct AutomaticCalculationView: View {
                 Text("Needs: \(row.needs)").font(.caption2).foregroundStyle(.tertiary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .glassCard(padding: Theme.Spacing.m)
+            .contentCard()
         }
         .buttonStyle(.plain)
     }
@@ -260,7 +260,7 @@ struct AutomaticCalculationView: View {
                     }
                 }
             }
-            .glassCard(padding: Theme.Spacing.m)
+            .contentCard()
             Text("How much of your aerobic ceiling you hold at threshold. This one really is personal — athletes differ enough here to move threshold pace by several seconds per kilometre — so it is derived from your own threshold heart rate rather than assumed. Set it by hand only if you have run a 30-minute threshold test: take the share of your heart-rate reserve you held and divide by 1.035.")
                 .font(.footnote).foregroundStyle(.secondary)
         }

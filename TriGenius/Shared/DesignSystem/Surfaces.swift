@@ -2,27 +2,25 @@
 //
 // The two surface layers of TriGenius, plus the "Silent AI" signal.
 //
-//  - cardSurface:  the CONTENT layer. Opaque, grouped background for
-//                  data-dense content (metrics, lists, detail rows). This is
-//                  the default — most of the UI lives here.
-//  - glassSurface: the CONTROL / NAVIGATION layer. Apple's real Liquid Glass
-//                  (`glassEffect`, iOS/macOS 26+), reserved for floating and
-//                  grouping chrome — toolbars, the coach chat bubble, a day
-//                  column container. Never stack glass on glass or put dense
-//                  data straight on it.
+//  - cardSurface:  the CONTENT layer. Opaque, grouped background for every
+//                  card, tile and detail row — all of the app's data.
+//  - glassSurface: the CONTROL / NAVIGATION layer. Apple's real Liquid Glass,
+//                  reserved for floating chrome — header pills, the coach chat
+//                  bubble, a day column container. Never put data on it.
 //  - coachAccent:  signals that the CoachBrain created/modified an element,
 //                  via a subtle static tinted hairline — no badge, no pulse.
 //
-// See DESIGN.md for the rules these modifiers encode.
+// See docs/design.md for the rules these modifiers encode.
 
 import SwiftUI
 
 extension View {
 
-    /// Content-layer card: opaque grouped background with compact padding.
+    /// Content-layer card: opaque grouped background. Every card insets its content
+    /// by the same `Theme.Spacing.l`.
     func cardSurface(
-        cornerRadius: CGFloat = Theme.Radius.m,
-        padding: CGFloat = Theme.Spacing.m
+        cornerRadius: CGFloat = Theme.Radius.l,
+        padding: CGFloat = Theme.Spacing.l
     ) -> some View {
         self
             .padding(padding)
@@ -32,13 +30,9 @@ extension View {
             )
     }
 
-    /// The standard content card on the dashboard and statistics screens: padded,
-    /// full width, on real Liquid Glass. The screen groups them under one
-    /// `GlassEffectContainer` so the panes blend as a single glass system.
-    func glassCard(padding: CGFloat = Theme.Spacing.l) -> some View {
-        self.padding(padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .glassSurface(cornerRadius: Theme.Radius.l)
+    /// A full-width content card — the standard block under a `SectionHeading`.
+    func contentCard(padding: CGFloat = Theme.Spacing.l) -> some View {
+        frame(maxWidth: .infinity, alignment: .leading).cardSurface(padding: padding)
     }
 
     /// One control in a screen header: a glass capsule at the shared chrome height.
@@ -66,7 +60,7 @@ extension View {
     /// pulsing glow.
     func coachAccent(
         _ color: Color = .accentColor,
-        cornerRadius: CGFloat = Theme.Radius.m
+        cornerRadius: CGFloat = Theme.Radius.l
     ) -> some View {
         self.overlay(
             RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
@@ -79,11 +73,8 @@ extension View {
 
 /// Page-level section heading: freestanding above the section's content and a
 /// clear size step above anything inside a card, so it visibly scopes the block
-/// below it. Cards carry no title of their own — one that must name itself uses a
-/// small secondary caption row instead.
-///
-/// The optional accessory is for *actions* (an add button), never navigation:
-/// with no chevrons anywhere, every card is a door and the heading stays a label.
+/// below it. The optional accessory is for *actions* (an add button, a picker),
+/// never navigation — a card that leads somewhere carries its own `Chevron`.
 struct SectionHeading<Accessory: View>: View {
     private let title: String
     private let accessory: Accessory
@@ -104,6 +95,15 @@ struct SectionHeading<Accessory: View>: View {
 
 extension SectionHeading where Accessory == EmptyView {
     init(_ title: String) { self.init(title) { EmptyView() } }
+}
+
+/// The disclosure mark on anything that leads somewhere — tiles, rows, banners.
+struct Chevron: View {
+    var body: some View {
+        Image(systemName: "chevron.right")
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(.tertiary)
+    }
 }
 
 // MARK: - Screen header
@@ -136,5 +136,58 @@ struct ScreenHeader<Controls: View>: View {
             }
         }
         .frame(minHeight: Theme.Chrome.pillHeight)
+    }
+}
+
+// MARK: - Card title
+
+extension View {
+    /// A card's title above its content — one font and one gap on every card, Apple
+    /// Health's weight.
+    func cardTitle(_ title: String, systemImage: String? = nil) -> some View {
+        cardTitle(title, systemImage: systemImage) { EmptyView() }
+    }
+
+    /// The same, with an `accessory` (a picker, an Edit button) trailing the title.
+    func cardTitle(_ title: String, systemImage: String? = nil,
+                   @ViewBuilder accessory: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+            HStack(spacing: Theme.Spacing.s) {
+                Group {
+                    if let systemImage { Label(title, systemImage: systemImage) } else { Text(title) }
+                }
+                .font(.headline)
+                Spacer(minLength: 0)
+                accessory()
+            }
+            self
+        }
+    }
+}
+
+// MARK: - Segmented picker
+
+/// The compact segmented switch every heading, card and toolbar uses to change what
+/// a view shows.
+struct SegmentedPicker<Value: Hashable>: View {
+    private let title: String
+    @Binding private var selection: Value
+    private let options: [Value]
+    private let label: (Value) -> String
+
+    init(_ title: String, selection: Binding<Value>, options: [Value], label: @escaping (Value) -> String) {
+        self.title = title
+        self._selection = selection
+        self.options = options
+        self.label = label
+    }
+
+    var body: some View {
+        Picker(title, selection: $selection) {
+            ForEach(options, id: \.self) { Text(label($0)).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .fixedSize()
     }
 }

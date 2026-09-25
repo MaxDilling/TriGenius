@@ -16,7 +16,6 @@ struct PlannedStructureCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            Label(title, systemImage: "list.bullet.indent").font(.headline)
             VStack(spacing: 0) {
                 ForEach(Array(structure.steps.enumerated()), id: \.element.id) { index, step in
                     if index > 0 { Divider() }
@@ -24,6 +23,7 @@ struct PlannedStructureCard: View {
                 }
             }
         }
+        .cardTitle(title, systemImage: "list.bullet.indent")
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
     }

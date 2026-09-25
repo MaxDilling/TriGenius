@@ -59,7 +59,7 @@ struct LiveSummaryView: View {
             Text(label).font(.caption).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity)
-        .cardSurface(cornerRadius: Theme.Radius.l, padding: Theme.Spacing.l)
+        .cardSurface()
     }
 
     private var exercises: some View {
@@ -79,7 +79,7 @@ struct LiveSummaryView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .cardSurface(cornerRadius: Theme.Radius.l, padding: Theme.Spacing.l)
+        .cardSurface()
     }
 
     /// What was logged per exercise, and which planned exercise a swap replaced:
@@ -120,6 +120,6 @@ struct LiveSummaryView: View {
                     .buttonStyle(.borderless)
             }
         }
-        .cardSurface(cornerRadius: Theme.Radius.l, padding: Theme.Spacing.l)
+        .cardSurface()
     }
 }

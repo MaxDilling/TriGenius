@@ -133,7 +133,7 @@ struct LiveSetPage: View {
                     .padding(.top, Theme.Spacing.s)
             }
         }
-        .cardSurface(cornerRadius: Theme.Radius.l, padding: Theme.Spacing.l)
+        .cardSurface()
     }
 
     /// A value with − / + beside it; `step` gets −1 or +1. Without `step` it is
@@ -249,7 +249,7 @@ struct LiveSetPage: View {
             Button("Edit") { editingLast = true }
                 .buttonStyle(.bordered).buttonBorderShape(.capsule)
         }
-        .cardSurface(cornerRadius: Theme.Radius.l)
+        .cardSurface()
     }
 
     /// The logged set's number within its exercise in its unit.
@@ -338,7 +338,7 @@ struct LiveSetPage: View {
                     }
                 }
             }
-            .cardSurface(cornerRadius: Theme.Radius.l, padding: Theme.Spacing.l)
+            .cardSurface()
         }
     }
 }

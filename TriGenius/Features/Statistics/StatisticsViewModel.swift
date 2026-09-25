@@ -11,25 +11,7 @@ import Foundation
 @Observable
 final class StatisticsViewModel {
 
-    enum StatsRange: String, CaseIterable, Identifiable {
-        case oneMonth = "1M"
-        case threeMonths = "3M"
-        case sixMonths = "6M"
-        case oneYear = "1Y"
-
-        var id: String { rawValue }
-        var days: Int { weeks * 7 }
-        var weeks: Int {
-            switch self {
-            case .oneMonth: return 4
-            case .threeMonths: return 13
-            case .sixMonths: return 26
-            case .oneYear: return 52
-            }
-        }
-    }
-
-    var range: StatsRange = .threeMonths { didSet { load() } }
+    var range: TimeRange = .threeMonths { didSet { load() } }
     var shareMetric: SportShareModel.Metric = .tss { didSet { rebuildShare() } }
     var zoneSport: SportFamily = .run { didSet { rebuildZones() } }
 
@@ -43,19 +25,17 @@ final class StatisticsViewModel {
     private(set) var powerCurve: [PowerCurve.Point] = []
 
     private var records: [WorkoutRecord] = []
-
-    /// This week's fitness gain so far — the hero number.
-    var currentRampDelta: Double? { ramp.last?.delta }
+    private var weeks = 0
 
     func load() {
         let now = Date()
-        guard let windowStart = TrainingVolume.recentWeekStarts(weeks: range.weeks, today: now).first
-        else { return }
-        records = TrainingDataStore.shared.activities(from: windowStart, to: now)
-
         let result = PMCEngine.current()
         pmc = result
-        ramp = RampRate.weeklySeries(points: result.points, weeks: range.weeks, today: now)
+        weeks = range.weeks(first: result.points.first?.date)
+        guard let windowStart = TrainingVolume.recentWeekStarts(weeks: weeks, today: now).first
+        else { return }
+        records = TrainingDataStore.shared.activities(from: windowStart, to: now)
+        ramp = RampRate.weeklySeries(points: result.points, weeks: weeks, today: now)
 
         rebuildShare()
         rebuildZones()
@@ -63,7 +43,7 @@ final class StatisticsViewModel {
     }
 
     private func rebuildShare() {
-        share = SportShareModel.make(records: records, weeks: range.weeks, metric: shareMetric)
+        share = SportShareModel.make(records: records, weeks: weeks, metric: shareMetric)
     }
 
     private func rebuildZones() {

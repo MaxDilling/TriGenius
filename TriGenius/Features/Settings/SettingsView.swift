@@ -56,7 +56,6 @@ enum WriteTarget: String, CaseIterable, Identifiable {
 /// One configurable dashboard content section (the header is fixed). Declaration
 /// order is the default display order.
 enum DashboardSection: String, CaseIterable, Identifiable {
-    case planBanner = "plan_banner"
     case upNext = "up_next"
     case performance = "performance"
     case tissueLoad = "tissue_load"
@@ -66,7 +65,6 @@ enum DashboardSection: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var displayName: String {
         switch self {
-        case .planBanner: return "Plan Banner"
         case .upNext: return "Up Next"
         case .performance: return "Fitness & Form"
         case .tissueLoad: return "Tissue Load"
@@ -76,7 +74,6 @@ enum DashboardSection: String, CaseIterable, Identifiable {
     }
     var icon: String {
         switch self {
-        case .planBanner: return "flag.checkered"
         case .upNext: return "calendar.day.timeline.left"
         case .performance: return "chart.xyaxis.line"
         case .tissueLoad: return "figure.strengthtraining.traditional"

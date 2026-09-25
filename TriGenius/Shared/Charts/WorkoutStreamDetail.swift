@@ -20,10 +20,8 @@ struct WorkoutStreamCard: View {
     @State private var showDetail = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            HStack(spacing: Theme.Spacing.s) {
-                Text(title).font(.headline)
-                Spacer(minLength: 0)
+        WorkoutStreamChart(model: model, bands: bands, height: height)
+            .cardTitle(title) {
                 // The card as a whole opens the sheet; the button is the
                 // visible affordance, and the one target the plot's own scrub
                 // overlay can never swallow.
@@ -34,9 +32,7 @@ struct WorkoutStreamCard: View {
                 }
                 .buttonStyle(.plain)
             }
-            WorkoutStreamChart(model: model, bands: bands, height: height)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
         .contentShape(Rectangle())
         .onTapGesture { showDetail = true }

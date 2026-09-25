@@ -4,7 +4,7 @@
 // semantic color in the UI should resolve to one of these constants instead of
 // a magic number, so the look stays consistent and is tunable in one place.
 //
-// See DESIGN.md for the rules these tokens encode.
+// See docs/design.md for the rules these tokens encode.
 
 import SwiftUI
 
@@ -52,6 +52,11 @@ enum Theme {
 
         /// Planned / reference series, drawn behind the actual one it is compared to.
         static let plan = Color.gray
+
+        /// Marker categories without a sport: body (max HR, weight) and recovery
+        /// (resting HR, HRV, sleep). Sport markers wear their discipline's colour.
+        static let body = Color.pink
+        static let recovery = Color.indigo
 
         /// Discipline accent colors — single source for every sport-tinted UI element.
         static func sport(_ family: SportFamily) -> Color {

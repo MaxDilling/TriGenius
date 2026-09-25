@@ -147,9 +147,7 @@ extension View {
 /// Anchor it to the plot on **both** axes
 /// (`overflowResolution: .init(x: .fit(to: .plot), y: .fit(to: .plot))`): a bubble
 /// leaving the plot is clipped by `chartPlotStyle { $0.clipped() }` where a chart
-/// sets it, and one overflowing past the enclosing `.glassSurface()` card is
-/// composited *under* that card's glass rim, which then draws across it and makes
-/// the opaque background look translucent.
+/// sets it.
 struct ChartTooltip: View {
     struct Row: Identifiable {
         let color: Color?
@@ -175,7 +173,7 @@ struct ChartTooltip: View {
                 .font(.caption2)
             }
         }
-        // Content layer, never glass/material: dense data stays opaque (DESIGN.md §1).
+        // Content layer, never glass/material: dense data stays opaque (docs/design.md §1).
         .cardSurface(cornerRadius: Theme.Radius.s, padding: Theme.Spacing.s)
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.s, style: .continuous)
             .strokeBorder(.separator))

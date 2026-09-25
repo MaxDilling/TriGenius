@@ -121,7 +121,7 @@ struct LiveQueuePage: View {
                 }
             }
         }
-        .cardSurface(cornerRadius: Theme.Radius.l, padding: Theme.Spacing.l)
+        .cardSurface()
     }
 
     /// "Set 2 of 3 · 8 · BW · rest 0:45".
@@ -143,7 +143,7 @@ struct LiveQueuePage: View {
                         .dropDestination(for: String.self) { ids, _ in move(ids, onto: offset) }
                 }
             }
-            .cardSurface(cornerRadius: Theme.Radius.l, padding: Theme.Spacing.l)
+            .cardSurface()
         }
     }
 

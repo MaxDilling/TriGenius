@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - Exercise sets card
 //
 // The one strength table, for a plan and a recorded session alike
-// (`StrengthSets.Block`), under the muscle map of what its sets work: each
+// (`StrengthSets.Block`), beside (wide) or under the muscle map of what its sets work: each
 // exercise names its group and its sets line up underneath, numbered per
 // exercise within a block. A plan keeps its circuits
 // (a header, members indented) and rest steps; a recorded session paired with
@@ -13,6 +13,13 @@ import SwiftUI
 struct ExerciseSetsCard: View {
     let blocks: [StrengthSets.Block]
     let onEdit: () -> Void
+
+    private var wide = WideLayout()
+
+    init(blocks: [StrengthSets.Block], onEdit: @escaping () -> Void) {
+        self.blocks = blocks
+        self.onEdit = onEdit
+    }
 
     private struct DisplayRow: Identifiable {
         enum Kind {
@@ -65,18 +72,7 @@ struct ExerciseSetsCard: View {
         let showPlanTime = plans.contains { $0.seconds != nil }
         let showRest = sets.contains { $0.rest != nil }
         let targets = TissueSession.targets(sets)
-        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            HStack {
-                Label("Exercises", systemImage: "dumbbell").font(.headline)
-                Spacer()
-                if flagged > 0 {
-                    Label("\(flagged) to check", systemImage: "exclamationmark.triangle.fill")
-                        .font(.subheadline).foregroundStyle(.orange)
-                }
-                Button("Edit", action: onEdit)
-                    .font(.subheadline)
-                    .buttonStyle(.borderless)
-            }
+        wide.outer {
             if !targets.isEmpty {
                 MuscleMap(targets: targets)
                     .padding(.vertical, Theme.Spacing.s)
@@ -119,6 +115,15 @@ struct ExerciseSetsCard: View {
                     }
                 }
             }
+        }
+        .cardTitle("Exercises", systemImage: "dumbbell") {
+            if flagged > 0 {
+                Label("\(flagged) to check", systemImage: "exclamationmark.triangle.fill")
+                    .font(.subheadline).foregroundStyle(.orange)
+            }
+            Button("Edit", action: onEdit)
+                .font(.subheadline)
+                .buttonStyle(.borderless)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()

@@ -19,8 +19,8 @@ struct MetricChatCard: View {
         if let metric = PerformanceMetric.metric(for: key) {
             Group {
                 if !points.isEmpty || !loaded {
-                    MetricCard(metric: metric, points: points, windowMonths: months)
-                        .coachAccent(cornerRadius: Theme.Radius.l)
+                    MetricCard(metric: metric, points: points, range: .covering(months: months))
+                        .coachAccent()
                 } else {
                     ChartChatCard(title: metric.title) {
                         NoChartData(text: "No \(metric.title) data yet.")

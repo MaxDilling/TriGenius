@@ -1,7 +1,6 @@
 //  TrainingPlanBanner.swift
-//  The tappable ATP banner shown at the top of the Dashboard: current period +
-//  week-of-season on the left, next A event + countdown on the right. Tapping it
-//  switches to the Plan tab (the full season overview / ATPTabView).
+//  The plan line under the Dashboard greeting: current period, week of season, and
+//  the countdown to the next A event. Tapping it switches to the Plan tab.
 
 import SwiftUI
 
@@ -41,65 +40,24 @@ struct TrainingPlanBanner: View {
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 16) {
-            periodColumn
-            if targetEvent != nil {
-                Divider().frame(maxHeight: 44)
-                eventColumn
-            }
-            Spacer(minLength: 0)
-            Image(systemName: "chevron.right")
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(.tertiary)
-        }
-        .glassCard()
-    }
-
-    // MARK: Period (left)
-
-    @ViewBuilder private var periodColumn: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        HStack(spacing: Theme.Spacing.s) {
             if let period = currentWeek?.period {
-                HStack(spacing: 6) {
-                    Circle().fill(period.tint).frame(width: 8, height: 8)
-                    Text("\(period.label.uppercased()) PHASE")
-                        .font(.subheadline.weight(.bold))
-                        .foregroundStyle(period.tint)
-                }
-            } else {
-                Text("TRAINING PLAN")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(.secondary)
+                Circle().fill(period.tint).frame(width: 8, height: 8)
+                Text(period.label).fontWeight(.semibold).foregroundStyle(period.tint)
             }
-
             if let week = weekOfSeason {
-                HStack(spacing: 5) {
-                    Text("Week \(week)").font(.title3.bold())
-                    Text("of \(plan.weeks.count)").font(.subheadline).foregroundStyle(.secondary)
-                }
+                Text("Week \(week) of \(plan.weeks.count)")
             } else {
                 Text("Tap to set up your plan")
-                    .font(.subheadline).foregroundStyle(.secondary)
             }
+            if let event = targetEvent, let days = daysUntilEvent {
+                Label(days >= 0 ? "\(event.name.isEmpty ? event.eventType.label : event.name) in \(days) days" : "past",
+                      systemImage: "flag.fill")
+            }
+            Chevron()
         }
-    }
-
-    // MARK: Event (right)
-
-    @ViewBuilder private var eventColumn: some View {
-        VStack(alignment: .trailing, spacing: 4) {
-            if let event = targetEvent {
-                Text(event.name.isEmpty ? event.eventType.label : event.name)
-                    .font(.subheadline).foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
-            if let days = daysUntilEvent {
-                HStack(spacing: 5) {
-                    Image(systemName: "flag.fill").font(.caption)
-                    Text(days >= 0 ? "\(days) days" : "past")
-                        .font(.title3.bold())
-                }
-            }
-        }
+        .font(.subheadline)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
     }
 }

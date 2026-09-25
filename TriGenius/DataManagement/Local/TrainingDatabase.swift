@@ -408,6 +408,21 @@ nonisolated struct MetricPoint: Sendable, Identifiable {
         var points: [MetricPoint]
     }
 
+    /// Collapse daily wellness points into one mean per calendar week, labelled by the
+    /// week's start day — the trend of a signal whose day-to-day noise swamps a
+    /// first-to-last change.
+    static func weeklyMeans(_ points: [MetricPoint]) -> [MetricPoint] {
+        let cal = Calendar.current
+        var byWeek: [Date: [Double]] = [:]
+        for p in points {
+            let week = cal.dateInterval(of: .weekOfYear, for: p.date)?.start ?? p.date
+            byWeek[week, default: []].append(p.value)
+        }
+        return byWeek
+            .map { MetricPoint(date: $0.key, value: $0.value.reduce(0, +) / Double($0.value.count)) }
+            .sorted { $0.date < $1.date }
+    }
+
     /// Cut a series into stretches a chart can draw as separate lines.
     ///
     /// Needed because `lineStyle` in Swift Charts applies to a whole *series*: styling

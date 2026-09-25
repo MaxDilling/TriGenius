@@ -4,21 +4,18 @@ import Combine
 // MARK: - Dashboard View
 //
 // The athlete's home screen. A `ScreenHeader` greeting the athlete by name, with
-// Settings as its one control, then the
-// `DashboardSection` blocks in the athlete's configured order/visibility
-// (`AppSettings.dashboardLayout`, Settings → Dashboard layout):
-//   • Plan banner: current ATP period + countdown to the next A event → Plan tab.
+// Settings as its one control and the plan line (current ATP period + countdown to
+// the next A event → Plan tab) under it, then the `DashboardSection` blocks in the
+// athlete's configured order/visibility (`AppSettings.dashboardLayout`):
 //   • Up Next: today's completed + upcoming planned workouts, one row per
 //     workout → its detail screen.
-//   • Fitness & Form: CTL / ATL / TSB stat tiles over the actual-vs-planned CTL
-//     trend and this week's sport share → StatisticsView.
+//   • Fitness & Form: CTL / ATL / TSB summary tiles and fitness vs the ATP plan
+//     → StatisticsView.
+//   • Tissue Load: the structural load card → its grid / group detail.
 //   • Weekly Target (Volume): per-discipline rings, actual vs. target → Plan tab.
-//   • AI insight: the coach's one-line read on the week, in the Apple
-//     Intelligence look → chat, prefilled.
+//   • AI insight: the coach's one-line read on the week → chat, prefilled.
 //
-// Layering: a section is a page-level `sectionHeading` over its content; cards
-// never carry a title of their own, and every card has a destination — with no
-// chevrons anywhere, a dead card would be indistinguishable from a live one.
+// Everything that leads somewhere carries a `Chevron`.
 //
 // Everything reads from the local DB via DashboardViewModel (source-agnostic).
 
@@ -56,20 +53,16 @@ struct DashboardView: View {
 
     var body: some View {
         ScrollView {
-            // One GlassEffectContainer so the dashboard's glass panes blend as a
-            // single system instead of stacking independent glass layers.
-            GlassEffectContainer(spacing: Theme.Spacing.l) {
-                VStack(spacing: Theme.Spacing.xl) {
-                    if viewModel.isLoading && viewModel.pmc == nil {
-                        ProgressView("Loading…").padding(.top, 60)
-                    } else {
-                        if let error = viewModel.errorMessage {
-                            Text(error).font(.caption).foregroundStyle(Theme.Palette.danger)
-                        }
-                        header
-                        ForEach(settings.dashboardLayout.filter(\.isVisible)) { item in
-                            sectionView(item.section)
-                        }
+            VStack(spacing: Theme.Spacing.xl) {
+                if viewModel.isLoading && viewModel.pmc == nil {
+                    ProgressView("Loading…").padding(.top, 60)
+                } else {
+                    if let error = viewModel.errorMessage {
+                        Text(error).font(.caption).foregroundStyle(Theme.Palette.danger)
+                    }
+                    header
+                    ForEach(settings.dashboardLayout.filter(\.isVisible)) { item in
+                        sectionView(item.section)
                     }
                 }
             }
@@ -113,7 +106,6 @@ struct DashboardView: View {
     /// `AppSettings.dashboardLayout`; the header stays fixed above them).
     @ViewBuilder private func sectionView(_ section: DashboardSection) -> some View {
         switch section {
-        case .planBanner: planBanner
         case .upNext: upNext
         case .performance: fitnessAndForm
         case .tissueLoad: tissueLoad
@@ -143,19 +135,25 @@ struct DashboardView: View {
     // MARK: Header
 
     private var header: some View {
-        ScreenHeader(greeting) {
-            NavigationLink {
-                SettingsView(
-                    brain: brain,
-                    settings: settings,
-                    memory: memory,
-                    onBackendChanged: onBackendChanged
-                )
-            } label: {
-                Image(systemName: "gearshape").font(.title3)
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            ScreenHeader(greeting) {
+                NavigationLink {
+                    SettingsView(
+                        brain: brain,
+                        settings: settings,
+                        memory: memory,
+                        onBackendChanged: onBackendChanged
+                    )
+                } label: {
+                    Image(systemName: "gearshape").font(.title3)
+                }
+                .buttonStyle(.plain)
+                .headerPill()
             }
-            .buttonStyle(.plain)
-            .headerPill()
+            if let plan = viewModel.atpPlan, !plan.weeks.isEmpty {
+                Button { router.selectedTab = .plan } label: { TrainingPlanBanner(plan: plan) }
+                    .buttonStyle(.plain)
+            }
         }
     }
 
@@ -164,116 +162,65 @@ struct DashboardView: View {
         return "Hi there"
     }
 
-    // MARK: Plan banner
-
-    /// Current ATP period + countdown to the next A event; taps through to the
-    /// Plan tab (the full season overview). Hidden until a plan exists.
-    @ViewBuilder private var planBanner: some View {
-        if let plan = viewModel.atpPlan, !plan.weeks.isEmpty {
-            TrainingPlanBanner(plan: plan)
-                .contentShape(Rectangle())
-                .onTapGesture { router.selectedTab = .plan }
-        }
-    }
-
     // MARK: Fitness & Form
 
-    /// The PMC read of the moment: three stat tiles over the fitness-vs-plan trend
-    /// and this week's sport split. The block taps through to the statistics
-    /// screen, where these same numbers open into the full PMC chart.
     private var fitnessAndForm: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
             SectionHeading("Fitness & Form")
-
             if let result = viewModel.pmc, result.snapshot != nil {
-                NavigationLink {
-                    StatisticsView()
-                } label: {
-                    wide.outer {
-                        PMCStatTiles(result: result)
-                        if !viewModel.ctlTrend.actual.isEmpty || viewModel.currentWeek != nil {
-                            trendCard
-                        }
-                    }
-                    .contentShape(Rectangle())
+                LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide, fill: 3), spacing: Theme.Spacing.m) {
+                    PMCStatTiles(result: result, range: .oneMonth) { StatisticsView() }
                 }
-                .buttonStyle(.plain)
+                if !viewModel.ctlTrend.actual.isEmpty {
+                    NavigationLink { StatisticsView() } label: { trendCard(result) }
+                        .buttonStyle(.plain)
+                }
             } else {
                 Text("No training-load data yet. Sync your activities to see CTL / ATL / TSB.")
                     .font(.subheadline).foregroundStyle(.secondary)
-                    .glassCard()
+                    .contentCard()
             }
         }
     }
 
-    /// Fitness against plan plus the week's sport split. The caption row carries
-    /// the ramp rate, so the card names itself without a second headline.
-    private var trendCard: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            if !viewModel.ctlTrend.actual.isEmpty {
-                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                    HStack {
-                        Text("Fitness vs plan, ±15 days").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        if let delta = RampRate.weeklySeries(points: viewModel.pmc?.points ?? [], weeks: 2).last?.delta {
-                            Text(delta, format: .number.precision(.fractionLength(1)).sign(strategy: .always()))
-                                .font(.caption.bold().monospacedDigit())
-                                .foregroundStyle(RampRate.safeBand.contains(delta) ? Theme.Palette.success
-                                                 : delta > RampRate.safeBand.upperBound ? Theme.Palette.warning : .secondary)
-                            Text("CTL/wk").font(.caption2).foregroundStyle(.secondary)
-                        }
-                    }
-                    CTLTrendChart(model: viewModel.ctlTrend, fills: wide.isWide)
-                }
-            }
-            if let week = viewModel.currentWeek {
-                ProportionBar(
-                    segments: SportFamily.allCases.map { family in
-                        let tss = week.totals(for: family).tss
-                        return ProportionBar.Segment(label: family.displayName,
-                                                     color: family.color,
-                                                     value: tss,
-                                                     display: "\(Int(tss.rounded()))")
-                    },
-                    showLegend: false
-                )
-            }
+    /// Actual fitness against the ATP plan around today, headed by this week's ramp.
+    private func trendCard(_ result: PMCResult) -> some View {
+        let ramp = RampRate.weeklySeries(points: result.points, weeks: 2).last.map { week in
+            Text("\(week.delta.formatted(.number.precision(.fractionLength(1)).sign(strategy: .always()))) CTL/wk")
+                .foregroundStyle(RampRate.safeBand.contains(week.delta) ? Theme.Palette.success
+                                 : week.delta > RampRate.safeBand.upperBound ? Theme.Palette.warning : .secondary)
         }
-        .glassCard()
-        // Wide: match the PMC tile column beside it — the chart takes the extra
-        // height rather than leaving a gap under the card.
-        .frame(maxHeight: wide.rowHeight)
+        return VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+            CardHeader(title: "Fitness vs plan", color: Theme.Palette.fitness, detail: ramp)
+            CTLTrendChart(model: viewModel.ctlTrend)
+        }
+        .contentCard()
     }
 
     // MARK: Tissue Load
 
-    // Opaque card among glass neighbours on purpose: 6 pt bars and 7 pt diamonds lose
-    // contrast over refracting glass (DESIGN.md, content layer). A conflict warning opens
-    // the group it names — its detail explains the spike and links the session.
+    // A conflict warning opens the group it names — its detail explains the spike and
+    // links the session.
     @ViewBuilder private var tissueLoad: some View {
         if let model = viewModel.tissueCard {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
                 SectionHeading("Tissue Load") {
                     if viewModel.tissueChronic != nil {
-                        Picker("Window", selection: $tissueMode) {
-                            ForEach(TissueCardMode.allCases) { Text($0.label).tag($0) }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .fixedSize()
+                        SegmentedPicker("Window", selection: $tissueMode,
+                                        options: TissueCardMode.allCases, label: \.label)
                     }
                 }
                 // Wide layouts have the room for the whole grid, so they skip the
                 // card's edit down to three rows.
                 if wide.isWide, let grid = viewModel.tissueGrid, tissueMode == .sevenDays {
-                    VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                         TissueLeadRow(lead: model.lead, onResolveConflict: openConflict)
                         TissueGrid(days: grid.days, rows: grid.rows, isWide: true,
                                    onSelect: { _ in showsTissueGrid = true })
                         TissueLegend()
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .cardSurface(cornerRadius: Theme.Radius.l)
+                    .cardSurface()
                 } else {
                     TissueLoadCard(mode: tissueMode, model: model, chronic: viewModel.tissueChronic,
                                    onResolveConflict: openConflict,
@@ -304,7 +251,8 @@ struct DashboardView: View {
         if !viewModel.visibleFamilies.isEmpty {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
                 SectionHeading("Weekly Target") {
-                    VolumeMetricToggle(metric: $volumeMetric)
+                    SegmentedPicker("Metric", selection: $volumeMetric,
+                                    options: VolumeMetric.allCases, label: \.label)
                 }
 
                 HStack(alignment: wide.isWide ? .center : .top,
@@ -326,8 +274,9 @@ struct DashboardView: View {
                                    creditedTSS: projection.creditedTSS,
                                    projectedCreditTSS: projection.projectedCreditTSS)
                     }
+                    Chevron()
                 }
-                .glassCard()
+                .contentCard()
                 .contentShape(Rectangle())
                 .onTapGesture { router.selectedTab = .plan }
             }
@@ -336,67 +285,30 @@ struct DashboardView: View {
 
     // MARK: AI insight
 
-    // AI-generated insight (FEATURES.md "AI-generated dashboard insight") in its
-    // own tile, styled in the Apple Intelligence look — the `apple.intelligence`
-    // glyph and an iridescent gradient hairline around the card. A heuristic
-    // fallback is surfaced instantly while the model line is generated.
+    // The coach's read on the week (FEATURES.md "AI-generated dashboard insight"): a
+    // plain sentence marked only by the coach hairline. A heuristic line is surfaced
+    // instantly while the model line is generated. Tapping the card carries its read
+    // into the chat as a pre-filled (unsent) prompt.
     @ViewBuilder private var aiInsightCard: some View {
         if let insight = viewModel.insight, !insight.isEmpty {
             let parsed = DashboardInsight.parse(insight)
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "apple.intelligence")
-                    .font(.title2)
-                    .foregroundStyle(Self.appleIntelligenceGradient)
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(parsed.text)
-                        .font(.callout)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    // The coach's optional action link — a tappable chip that hands
-                    // its message off to the chat (unsent), so the athlete can act
-                    // on the gap the insight just named.
-                    if let action = parsed.action {
-                        insightActionChip(action)
-                    }
+            VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                CardHeader(title: "Coach", color: .accentColor)
+                Text(parsed.text).font(.body.weight(.medium))
+                // Its own button consumes the tap, so it routes the coach's specific
+                // message rather than the card's generic follow-up.
+                if let action = parsed.action {
+                    Button(action.label) { router.openChat(prefill: action.message) }
+                        .font(.footnote.weight(.semibold))
+                        .buttonStyle(.glass)
                 }
             }
-            .glassCard()
-            .overlay(
-                RoundedRectangle(cornerRadius: Theme.Radius.l, style: .continuous)
-                    .strokeBorder(Self.appleIntelligenceGradient, lineWidth: 1.5)
-                    .opacity(0.9)
-            )
-            // Tapping the card carries its read of the week into the chat as a
-            // pre-filled (unsent) prompt — same deterministic basis as the insight.
+            .contentCard()
+            .coachAccent()
             .contentShape(Rectangle())
             .onTapGesture { router.openChat(prefill: viewModel.insightFollowUpPrompt) }
         }
     }
-
-    /// Tappable chip for the insight's action link. Its own button consumes the tap
-    /// so it routes the coach's specific message rather than the card's generic
-    /// follow-up.
-    private func insightActionChip(_ action: DashboardInsight.Action) -> some View {
-        Button {
-            router.openChat(prefill: action.message)
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "wand.and.stars")
-                Text(action.label)
-            }
-            .font(.footnote.weight(.semibold))
-            .padding(.horizontal, Theme.Spacing.m)
-            .padding(.vertical, Theme.Spacing.s)
-            .glassSurface(cornerRadius: Theme.Radius.l, tint: .accentColor)
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// Apple Intelligence's signature iridescent gradient, reused for the glyph
-    /// and the card's hairline border.
-    private static let appleIntelligenceGradient = AngularGradient(
-        colors: [.pink, .purple, .blue, .cyan, .orange, .pink],
-        center: .center
-    )
 
     // MARK: Up Next
 
@@ -423,7 +335,7 @@ struct DashboardView: View {
             if items.isEmpty {
                 Text("No workouts logged or planned.")
                     .font(.subheadline).foregroundStyle(.secondary)
-                    .glassCard()
+                    .contentCard()
             } else if wide.isWide, items.count > 3 {
                 // Split in halves rather than interleaved: the agenda is date-sorted,
                 // so each column stays chronological on its own.
@@ -433,9 +345,9 @@ struct DashboardView: View {
                     Divider()
                     upNextColumn(Array(items.dropFirst(split)))
                 }
-                .glassCard(padding: 0)
+                .contentCard(padding: 0)
             } else {
-                upNextColumn(items).glassCard(padding: 0)
+                upNextColumn(items).contentCard(padding: 0)
             }
         }
     }
@@ -444,7 +356,7 @@ struct DashboardView: View {
         VStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                 if index > 0 {
-                    Divider().padding(.leading, 64).padding(.trailing, Theme.Spacing.m)
+                    Divider().padding(.leading, 62).padding(.trailing, Theme.Spacing.m)
                 }
                 upNextRow(item)
             }
@@ -461,7 +373,7 @@ struct DashboardView: View {
                 PlannedWorkoutDetailView(workout: planned)
             }
         } label: {
-            HStack(spacing: 14) {
+            HStack(spacing: Theme.Spacing.m) {
                 dateColumn(item.date)
 
                 ZStack {
@@ -482,9 +394,10 @@ struct DashboardView: View {
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundStyle(Theme.Palette.success)
                 }
+                Chevron()
             }
-            .padding(.vertical, 12)
-            .padding(.horizontal, 16)
+            .padding(.vertical, Theme.Spacing.m)
+            .padding(.horizontal, Theme.Spacing.l)
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -550,45 +463,7 @@ private struct UpNextItem: Identifiable {
 enum VolumeMetric: CaseIterable {
     case tss, distance
 
-    var icon: String {
-        switch self {
-        case .tss:      return "bolt.fill"
-        case .distance: return "ruler.fill"
-        }
-    }
-}
-
-/// The swap toggle in the Weekly Target header: two metric icons flanking a
-/// swap glyph, the active one highlighted. Tapping flips the primary metric.
-private struct VolumeMetricToggle: View {
-    @Binding var metric: VolumeMetric
-
-    var body: some View {
-        Button {
-            withAnimation(.snappy(duration: 0.2)) {
-                metric = metric == .tss ? .distance : .tss
-            }
-        } label: {
-            HStack(spacing: 6) {
-                segment(.tss)
-                Image(systemName: "arrow.left.arrow.right")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                segment(.distance)
-            }
-            .contentShape(.rect)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func segment(_ m: VolumeMetric) -> some View {
-        let active = metric == m
-        return Image(systemName: m.icon)
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(active ? Color.white : Color.secondary)
-            .frame(width: 26, height: 26)
-            .background(Circle().fill(active ? Color.accentColor : Color.clear))
-    }
+    var label: String { self == .tss ? "TSS" : "km" }
 }
 
 // MARK: - Volume Ring

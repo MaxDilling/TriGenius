@@ -154,7 +154,7 @@ The `WorkoutRecord` display bridge (`PlannedWorkoutStructure.swift`) is `@MainAc
 
 ## `Shared/Charts/` — the reusable chart layer
 
-`ProportionBar`, `ZoneDistributionBar`, `PMCStatCard`, `SportShareChart`, `RampRateChart`, `CLTrendChart`, plus `ChartScrubbing.swift`.
+`ProportionBar`, `ZoneDistributionBar`, `SummaryTile` (with `PMCStatTiles`), `SportShareChart`, `RampRateChart`, `CLTrendChart`, plus `ChartScrubbing.swift`.
 
 **`ChartScrubbing.swift`** provides the shared `chartDateScrubbing(_:snap:)` hover/touch modifier — `chartXSelection` on iOS, pointer hover via `chartOverlay` on macOS. Each chart passes a `snap` quantizing the raw location to its data grid, and the binding is written only on change, so a hover event re-collects the chart's marks once per data point crossed instead of per pixel. `ChartTooltip` is the readout every chart renders at the scrubbed date.
 
@@ -173,4 +173,4 @@ Data comes from the pure Analytics layer:
 
 ## Statistics screen (`Features/Statistics/`)
 
-The single analysis screen, pushed from the dashboard's Statistics card (which shows this week's ΔCL, the ±15-day actual-vs-ATP-`planCurve` CL trend, and a mini sport-share bar; the whole card is the tap target). Contents: PMC stat cards + chart (`PMCInsightsSection`), ramp rate, sport share, time in zone, and the physiological-marker grid (`PerformanceMetricsSection`).
+The single analysis screen, pushed from the dashboard's Fitness & Form tiles. One `TimeRange` in the navigation bar governs every card and opens each detail page at the same window. Contents: CTL / ATL / TSB + ramp-rate `SummaryTile`s (→ `PMCDetailView`: Fitness/Fatigue lines, Form bars and ramp bars as small multiples on one time axis, each on its own scale), sport share, time in zone, power curve, and the physiological-marker tiles (`PerformanceMetricsSection` → `MetricDetailView`). Drilling into data pushes a page; only creating or editing (a manual value) opens a sheet.

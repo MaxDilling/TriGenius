@@ -2,42 +2,40 @@ import SwiftUI
 
 // MARK: - Statistics
 //
-// The analysis screen behind the dashboard's Fitness & Form section, grouped by
-// the question it answers: Fitness & Form (am I fit and fresh), Training Mix (is
-// my training balanced), Power Curve and Performance / Recovery (am I actually
-// faster). One range control in the navigation bar governs every card below it. All charts
-// render shared `Shared/Charts/` components from plain value models; missing data
-// shows as absence, never a fabricated distribution.
-//
-// Layering follows the dashboard: a `SectionHeading` over title-less `glassCard`s,
-// each naming itself with a small secondary caption where its siblings make that
-// ambiguous.
+// The analysis screen behind the dashboard's Fitness & Form tiles, grouped by the
+// question it answers: Fitness & Form (am I fit and fresh), Training Mix (is my
+// training balanced), Power Curve and Performance / Recovery (am I actually
+// faster). One range control in the navigation bar governs every card below it and
+// opens each detail page at the same window. All charts render shared
+// `Shared/Charts/` components from plain value models; missing data shows as
+// absence, never a fabricated distribution.
 
 struct StatisticsView: View {
     @State private var viewModel = StatisticsViewModel()
+    private var wide = WideLayout()
 
     var body: some View {
         ScrollView {
-            // One GlassEffectContainer so the PMC panes and cards blend as a
-            // single glass system instead of stacking independent glass layers.
-            GlassEffectContainer(spacing: Theme.Spacing.l) {
-                VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
-                    if let pmc = viewModel.pmc {
-                        section("Fitness & Form") {
-                            PMCInsightsSection(result: pmc, days: viewModel.range.days)
-                            rampCard
+            VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
+                if let pmc = viewModel.pmc {
+                    section("Fitness & Form") {
+                        LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide, fill: 4), spacing: Theme.Spacing.m) {
+                            PMCStatTiles(result: pmc, range: viewModel.range) { detail(pmc) }
+                            if let week = viewModel.ramp.last {
+                                rampTile(week, pmc: pmc)
+                            }
                         }
                     }
-
-                    section("Training Mix") {
-                        shareCard
-                        zonesCard
-                    }
-
-                    section("Power Curve") { powerCurveCard }
-
-                    PerformanceMetricsSection()
                 }
+
+                section("Training Mix") {
+                    shareCard
+                    zonesCard
+                }
+
+                powerCurveCard
+
+                PerformanceMetricsSection(range: viewModel.range)
             }
             .padding(Theme.Spacing.l)
         }
@@ -46,30 +44,15 @@ struct StatisticsView: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
-        .toolbar {
-            // The segmented control brings its own capsule; without this the toolbar
-            // wraps it in a second one and the glass stacks.
-            ToolbarItem(placement: .primaryAction) { rangePicker }
-                .sharedBackgroundVisibility(.hidden)
-        }
+        .rangeToolbar($viewModel.range)
         .task { viewModel.load() }
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
             viewModel.load()
         }
     }
 
-    /// The screen-wide range, in the navigation bar beside the title: it governs
-    /// every card below, and those run far enough that a control scrolling out of
-    /// reach is friction.
-    private var rangePicker: some View {
-        Picker("Range", selection: $viewModel.range) {
-            ForEach(StatisticsViewModel.StatsRange.allCases) { range in
-                Text(range.rawValue).tag(range)
-            }
-        }
-        .pickerStyle(.segmented)
-        .labelsHidden()
-        .fixedSize()
+    private func detail(_ pmc: PMCResult) -> PMCDetailView {
+        PMCDetailView(result: pmc, range: viewModel.range)
     }
 
     private func section<Content: View>(_ title: String,
@@ -80,56 +63,25 @@ struct StatisticsView: View {
         }
     }
 
-    /// A card's own name, for sections holding more than one — deliberately a
-    /// small secondary line, never a second headline competing with the section.
-    private func caption(_ text: String) -> some View {
-        Text(text).font(.caption).foregroundStyle(.secondary)
-    }
-
     // MARK: Fitness ramp rate
 
-    private var rampCard: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            caption("Ramp rate")
-            if viewModel.ramp.isEmpty {
-                Text("Not enough training history for a ramp rate.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            } else {
-                if let delta = viewModel.currentRampDelta {
-                    HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.xs) {
-                        Text(delta, format: .number.precision(.fractionLength(1)).sign(strategy: .always()))
-                            .font(.title2.bold().monospacedDigit())
-                            .foregroundStyle(rampTint(delta))
-                        Text("CTL/wk this week").font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                RampRateChart(model: RampRateModel(weeks: viewModel.ramp, safeBand: RampRate.safeBand))
-            }
+    private func rampTile(_ week: RampWeek, pmc: PMCResult) -> some View {
+        let band = RampRate.safeBand
+        return NavigationLink { detail(pmc) } label: {
+            SummaryTile(title: "Ramp rate", color: Theme.Palette.info,
+                        value: week.delta.formatted(.number.precision(.fractionLength(1)).sign(strategy: .always())),
+                        unit: "CTL/wk",
+                        status: band.contains(week.delta) ? "Sustainable build"
+                            : week.delta > band.upperBound ? "Above the safe ramp" : "Below build range",
+                        series: viewModel.ramp.map { MetricPoint(date: $0.weekStart, value: $0.delta) })
         }
-        .glassCard()
-    }
-
-    private func rampTint(_ delta: Double) -> Color {
-        if RampRate.safeBand.contains(delta) { return Theme.Palette.success }
-        return delta > RampRate.safeBand.upperBound ? Theme.Palette.warning : .secondary
+        .buttonStyle(.plain)
     }
 
     // MARK: Sport share
 
     private var shareCard: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            HStack {
-                caption("Sport share")
-                Spacer()
-                Picker("Metric", selection: $viewModel.shareMetric) {
-                    ForEach(SportShareModel.Metric.allCases, id: \.self) { metric in
-                        Text(metric.label).tag(metric)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-            }
+        Group {
             if viewModel.share.weeks.allSatisfy(\.slices.isEmpty) {
                 Text("No completed workouts in this range.")
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -137,21 +89,17 @@ struct StatisticsView: View {
                 SportShareChart(model: viewModel.share)
             }
         }
-        .glassCard()
+        .cardTitle("Sport share") {
+            SegmentedPicker("Metric", selection: $viewModel.shareMetric,
+                            options: SportShareModel.Metric.allCases, label: \.label)
+        }
+        .contentCard()
     }
 
     // MARK: Time in zone
 
     private var zonesCard: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            caption("Time in zone")
-            Picker("Sport", selection: $viewModel.zoneSport) {
-                ForEach(SportFamily.triathlon) { family in
-                    Text(family.displayName).tag(family)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
+        Group {
             if ZoneDistributionStack.isEmpty(viewModel.zones) {
                 Text("No zone data recorded in this range.")
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -160,13 +108,17 @@ struct StatisticsView: View {
                                       boundsNote: "current thresholds")
             }
         }
-        .glassCard()
+        .cardTitle("Time in zone") {
+            SegmentedPicker("Sport", selection: $viewModel.zoneSport,
+                            options: SportFamily.triathlon, label: \.displayName)
+        }
+        .contentCard()
     }
 
     // MARK: Power curve
 
     private var powerCurveCard: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+        Group {
             if viewModel.powerCurve.isEmpty {
                 Text("No cycling power data in this range.")
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -174,6 +126,7 @@ struct StatisticsView: View {
                 PowerCurveChart(model: PowerCurveModel(points: viewModel.powerCurve))
             }
         }
-        .glassCard()
+        .cardTitle("Power curve")
+        .contentCard()
     }
 }

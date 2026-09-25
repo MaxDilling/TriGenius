@@ -101,7 +101,7 @@ struct TissueGroupDetail: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .cardSurface(cornerRadius: Theme.Radius.l)
+        .cardSurface()
     }
 
     private func laneRow<Content: View>(label: String?,
@@ -137,7 +137,7 @@ struct TissueGroupDetail: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .cardSurface(cornerRadius: Theme.Radius.l)
+        .cardSurface()
     }
 
     private func sessionRow(_ row: TissueGroupDetailModel.Row, opens: Bool) -> some View {

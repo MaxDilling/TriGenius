@@ -800,7 +800,7 @@ private struct InputBar: View {
 private extension View {
     /// Coach replies use a translucent Liquid Glass bubble; the athlete's own
     /// messages use a solid, flat color. The material difference is what
-    /// separates AI insight from user input (DESIGN.md §3, "Silent AI").
+    /// separates AI insight from user input (docs/design.md §3, "Silent AI").
     @ViewBuilder
     func chatBubbleSurface(isUser: Bool) -> some View {
         if isUser {

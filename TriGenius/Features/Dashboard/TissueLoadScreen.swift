@@ -39,7 +39,7 @@ struct TissueLoadScreen: View {
                 TissueLegend()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .cardSurface(cornerRadius: Theme.Radius.l)
+            .cardSurface()
             .padding(Theme.Spacing.l)
         }
         .background(Color.appBackground)

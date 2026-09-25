@@ -53,11 +53,7 @@ struct PlannedWorkoutDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                 header
-                heroCapsule
-                tssBasisNote
-                if family == .strength, !workout.isCompleted, !exerciseBlocks.isEmpty {
-                    startButton
-                }
+                HeroMetricsCard(metrics: heroMetrics)
                 if let structure, !structure.steps.isEmpty {
                     PlannedStructureCard(structure: structure, accent: family.color)
                 } else if !exerciseBlocks.isEmpty {
@@ -66,28 +62,35 @@ struct PlannedWorkoutDetailView: View {
                 if family == .strength, AppSettings.storedWriteTarget() == .appleWatch {
                     appleWatchCard
                 }
-                if !detailRowList.isEmpty {
-                    detailRows
-                }
                 if !workout.notes.isEmpty {
                     notesCard
+                }
+                if !detailRowList.isEmpty {
+                    detailRows
                 }
             }
             .padding()
         }
-        .navigationTitle(family.displayName)
+        .navigationTitle(workout.name)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
+            if family == .strength, !workout.isCompleted, !exerciseBlocks.isEmpty {
+                ToolbarItem(placement: .primaryAction) { startButton }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button() { editor = .edit(workout) } label: {
                     Image(systemName: "pencil")
                 }
             }
             ToolbarItem {
-                Button(role: .destructive) { confirmDelete = true } label: {
-                    Image(systemName: "trash")
+                Menu {
+                    Button(role: .destructive) { confirmDelete = true } label: {
+                        Label("Delete workout", systemImage: "trash")
+                    }
+                } label: {
+                    Label("More", systemImage: "ellipsis.circle")
                 }
             }
         }
@@ -128,7 +131,7 @@ struct PlannedWorkoutDetailView: View {
                 .background(family.color.opacity(0.15))
                 .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.m))
             VStack(alignment: .leading, spacing: 3) {
-                Text(workout.name).font(.headline)
+                Text(family.displayName).font(.headline)
                 HStack(spacing: 4) {
                     Text("Planned")
                     Text("·")
@@ -137,7 +140,9 @@ struct PlannedWorkoutDetailView: View {
                 .font(.subheadline).foregroundStyle(.secondary)
             }
             Spacer()
-            if let intensity = workout.intensity {
+            // A strength session's intensity category ("Endurance", "Threshold") names
+            // an aerobic zone that says nothing about lifting.
+            if family != .strength, let intensity = workout.intensity {
                 intensityBadge(intensity)
             }
         }
@@ -153,12 +158,6 @@ struct PlannedWorkoutDetailView: View {
     }
 
     // MARK: Hero metrics — the planned duration + TSS target
-
-    private struct HeroMetric: Identifiable {
-        let id = UUID()
-        let value: String
-        let label: String
-    }
 
     private var heroMetrics: [HeroMetric] {
         var metrics: [HeroMetric] = []
@@ -179,35 +178,19 @@ struct PlannedWorkoutDetailView: View {
         if let distanceText {
             metrics.append(HeroMetric(value: distanceText, label: "Distance"))
         }
+        // Where the planned TSS came from: a structured session is estimated from
+        // its steps' intensity, otherwise from duration × typical intensity (`PlannedTSS`).
         if targetTSS > 0 {
-            metrics.append(HeroMetric(value: "\(Int(targetTSS.rounded()))", label: "TSS target"))
+            let basis = isEstimatedTSS
+                ? "estimated from duration × typical intensity"
+                : "computed from the planned structure & intensity targets"
+            metrics.append(HeroMetric(value: "\(Int(targetTSS.rounded()))", label: "TSS target",
+                                      note: "TSS target \(basis)"))
         }
         if metrics.isEmpty {
             metrics.append(HeroMetric(value: "—", label: "No target set"))
         }
         return metrics
-    }
-
-    private var heroCapsule: some View {
-        HStack(spacing: 0) {
-            ForEach(Array(heroMetrics.enumerated()), id: \.element.id) { index, metric in
-                if index > 0 {
-                    Divider().frame(height: 34)
-                }
-                VStack(spacing: Theme.Spacing.xs) {
-                    Text(metric.value)
-                        .font(.title2.weight(.semibold))
-                        .monospacedDigit()
-                        .lineLimit(1).minimumScaleFactor(0.6)
-                    Text(metric.label)
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-            }
-        }
-        .padding(.vertical, Theme.Spacing.l)
-        .padding(.horizontal, Theme.Spacing.m)
-        .glassSurface(cornerRadius: Theme.Radius.l)
     }
 
     // MARK: Live workout (strength)
@@ -219,29 +202,9 @@ struct PlannedWorkoutDetailView: View {
         let running = LiveStrengthController.shared.session
         let title = running == nil ? "Start workout" : running?.planId == workout.id ? "Resume workout" : "Resume running workout"
         return Button { LiveStrengthController.shared.start(workout) } label: {
-            Label(title, systemImage: "play.fill").font(.headline).frame(maxWidth: .infinity)
+            Label(title, systemImage: "play.fill")
         }
         .buttonStyle(.glassProminent)
-        .controlSize(.large)
-    }
-
-    // MARK: TSS provenance
-    //
-    // BUGS.md: surface where the planned TSS came from. A structured session gets
-    // an intensity-based estimate from its steps; otherwise it's estimated from
-    // duration × the discipline's typical intensity (see `PlannedTSS`).
-
-    @ViewBuilder
-    private var tssBasisNote: some View {
-        if targetTSS > 0 {
-            let basis = isEstimatedTSS
-                ? "estimated from duration × typical intensity"
-                : "computed from the planned structure & intensity targets"
-            Label("TSS target \(basis)", systemImage: "function")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, Theme.Spacing.xs)
-        }
     }
 
     // MARK: Detail rows
@@ -316,12 +279,12 @@ struct PlannedWorkoutDetailView: View {
 
     private var appleWatchCard: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            Label("Apple Watch", systemImage: "applewatch").font(.headline)
             Text("Start a Strength workout on the watch. It can't show sets or weights, so read the plan from here.")
                 .font(.subheadline).foregroundStyle(.secondary)
             Toggle("Keep plan on screen", isOn: $keepAwake)
                 .font(.subheadline)
         }
+        .cardTitle("Apple Watch", systemImage: "applewatch")
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
     }
@@ -330,11 +293,11 @@ struct PlannedWorkoutDetailView: View {
 
     private var notesCard: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            Label("Notes", systemImage: "text.alignleft").font(.headline)
             Text(workout.notes)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
+        .cardTitle("Notes", systemImage: "text.alignleft")
         .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
     }
