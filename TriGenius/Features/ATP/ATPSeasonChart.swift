@@ -33,11 +33,20 @@ extension ATPPeriod {
     }
 }
 
-/// Pointer location in an observable box so per-pixel hover moves invalidate only
-/// `HoverReadoutLayer` — never the Chart body, whose content re-collection costs
-/// ~28 ms across the season's per-day marks (a guaranteed stutter at pointer rates).
-@Observable private final class HoverState {
+/// Pointer location + scroll position in an observable box so per-frame hover/scroll
+/// moves invalidate only the overlay layers that read them — never the Chart body,
+/// whose content re-collection across the season's per-day marks would run every frame.
+@Observable private final class ChartLiveState {
     var loc: CGPoint?
+    var scrollX = Calendar.current.date(byAdding: .day, value: -14, to: Date()) ?? Date()
+}
+
+/// Reads the live scroll position in its own body, so a scroll frame re-evaluates only
+/// the window-clamped overlays.
+private struct ScrollWindowLayer<Content: View>: View {
+    let live: ChartLiveState
+    @ViewBuilder let content: (Date) -> Content
+    var body: some View { content(live.scrollX) }
 }
 
 private func weekEnd(_ weekStart: Date) -> Date {
@@ -60,19 +69,18 @@ private struct DayReadout: Equatable {
 struct ATPSeasonChart: View {
     let plan: ATPPlan
     /// Commit a manual weekly-TSS pin (drag a bar up/down). Nil ⇒ read-only chart.
-    var onPinWeek: ((Date, Double) -> Void)?
+    let onPinWeek: ((Date, Double) -> Void)?
     /// Clear a week's pin (tap its orange bar). Nil ⇒ read-only chart.
-    var onUnpinWeek: ((Date) -> Void)?
+    let onUnpinWeek: ((Date) -> Void)?
     /// Bleed the plot this far past its trailing edge so the chart reaches the card's
     /// right edge (cancels the enclosing card padding). 0 ⇒ no bleed.
-    var edgeBleed: CGFloat = 0
+    let edgeBleed: CGFloat
 
-    // Pointer location (chart-frame coords) driving the hover tooltip; pointer-only.
-    @State private var hover = HoverState()
-    // Live leading-edge date of the visible (scrolled) window — lets overlays clamp to
-    // the on-screen domain in date space, the only way to keep them inside the plot when
-    // scrolling (the proxy reports full-content pixel coords, not the visible viewport).
-    @State private var scrollX = Calendar.current.date(byAdding: .day, value: -14, to: Date()) ?? Date()
+    // Pointer location (chart-frame coords) driving the hover tooltip, and the live
+    // leading-edge date of the scrolled window — lets overlays clamp to the on-screen
+    // domain in date space, the only way to keep them inside the plot when scrolling
+    // (the proxy reports full-content pixel coords, not the visible viewport).
+    @State private var live = ChartLiveState()
     // Live drag preview: the dragged week's Monday + its in-flight TSS (committed on release).
     @State private var dragWeek: Date?
     @State private var dragTSS: Double = 0
@@ -80,32 +88,63 @@ struct ATPSeasonChart: View {
 
     private let cal = Calendar.current
 
-    private var seasonStart: Date { plan.weeks.first?.weekStart ?? Date() }
-    private var seasonEnd: Date { plan.planCurve.last?.date ?? seasonStart }
-
+    // Derived once per plan: every mark reads the scales, so recomputing them per
+    // point makes a content collection quadratic in the season's day count.
+    private let seasonStart: Date
+    private let seasonEnd: Date
+    /// End of the X span — the later of the last week's end and the last curve point.
+    private let xDomainEnd: Date
     /// Actual CTL clipped to the season window (history can reach back much further).
-    private var actual: [PMCPoint] {
-        plan.actualCurve.filter { $0.date >= seasonStart && $0.date <= seasonEnd }
-    }
+    private let actual: [PMCPoint]
+    private let completedBars: [(week: Date, tss: Double)]
+    private let tssMax: Double
+    private let ctlMax: Double
+    /// Largest |TSB| across both curves (floored so a near-flat curve isn't blown up).
+    private let tsbAbsMax: Double
+    /// Contiguous runs of equal period (recovery weeks share their block's period; a
+    /// period can recur across multiple events, so group by adjacency, not value).
+    private let periodSegments: [(period: ATPPeriod, start: Date, end: Date)]
 
-    private var completedBars: [(week: Date, tss: Double)] {
-        plan.completedTSSByWeek
-            .filter { $0.key >= seasonStart && $0.key <= seasonEnd && $0.value > 0 }
+    init(plan: ATPPlan, onPinWeek: ((Date, Double) -> Void)? = nil,
+         onUnpinWeek: ((Date) -> Void)? = nil, edgeBleed: CGFloat = 0) {
+        self.plan = plan
+        self.onPinWeek = onPinWeek
+        self.onUnpinWeek = onUnpinWeek
+        self.edgeBleed = edgeBleed
+
+        let start = plan.weeks.first?.weekStart ?? Date()
+        let end = plan.planCurve.last?.date ?? start
+        seasonStart = start
+        seasonEnd = end
+        xDomainEnd = max(end, plan.weeks.last.map { weekEnd($0.weekStart) } ?? end)
+        let actual = plan.actualCurve.filter { $0.date >= start && $0.date <= end }
+        self.actual = actual
+        let bars = plan.completedTSSByWeek
+            .filter { $0.key >= start && $0.key <= end && $0.value > 0 }
             .map { (week: $0.key, tss: $0.value) }
             .sorted { $0.week < $1.week }
+        completedBars = bars
+
+        let planned = plan.weeks.map(\.plannedTSS).max() ?? 0
+        let done = bars.map(\.tss).max() ?? 0
+        tssMax = max((max(planned, done) * 1.15 / 100).rounded(.up) * 100, 100)
+        let m = (plan.planCurve + actual + plan.detrainingCurve).map(\.ctl).max() ?? 1
+        ctlMax = max((m * 1.15 / 10).rounded(.up) * 10, 10)
+        tsbAbsMax = max(20, (plan.planCurve + actual).map { abs($0.tsb) }.max() ?? 20)
+
+        var segs: [(period: ATPPeriod, start: Date, end: Date)] = []
+        for w in plan.weeks {
+            if let last = segs.last, last.period == w.period {
+                segs[segs.count - 1].end = weekEnd(w.weekStart)
+            } else {
+                segs.append((w.period, w.weekStart, weekEnd(w.weekStart)))
+            }
+        }
+        periodSegments = segs
     }
 
     // MARK: Dual-axis scaling
 
-    private var tssMax: Double {
-        let planned = plan.weeks.map(\.plannedTSS).max() ?? 0
-        let done = completedBars.map(\.tss).max() ?? 0
-        return max((max(planned, done) * 1.15 / 100).rounded(.up) * 100, 100)
-    }
-    private var ctlMax: Double {
-        let m = (plan.planCurve + actual + plan.detrainingCurve).map(\.ctl).max() ?? 1
-        return max((m * 1.15 / 10).rounded(.up) * 10, 10)
-    }
     private func scaleCTL(_ ctl: Double) -> Double { ctl / ctlMax * tssMax }
     private var ctlTicks: [Double] {
         let step = max(10, (ctlMax / 5 / 10).rounded() * 10)
@@ -120,10 +159,6 @@ struct ATPSeasonChart: View {
     // vertical middle of the plot and the curve swings symmetrically up/down (TSB is
     // signed, so the shared CTL scale would clip the negatives below the baseline).
 
-    /// Largest |TSB| across both curves (floored so a near-flat curve isn't blown up).
-    private var tsbAbsMax: Double {
-        max(20, (plan.planCurve + actual).map { abs($0.tsb) }.max() ?? 20)
-    }
     private var formCenter: Double { tssMax * 0.5 }
     private func scaleTSB(_ tsb: Double) -> Double { formCenter + tsb / tsbAbsMax * tssMax * 0.42 }
 
@@ -132,20 +167,6 @@ struct ATPSeasonChart: View {
 
     private var bandTop: Double { -tssMax * 0.02 }
     private var bandBottom: Double { -tssMax * 0.10 }
-
-    /// Contiguous runs of equal period (recovery weeks share their block's period; a
-    /// period can recur across multiple events, so group by adjacency, not value).
-    private var periodSegments: [(period: ATPPeriod, start: Date, end: Date)] {
-        var segs: [(ATPPeriod, Date, Date)] = []
-        for w in plan.weeks {
-            if let last = segs.last, last.0 == w.period {
-                segs[segs.count - 1].2 = weekEnd(w.weekStart)
-            } else {
-                segs.append((w.period, w.weekStart, weekEnd(w.weekStart)))
-            }
-        }
-        return segs.map { (period: $0.0, start: $0.1, end: $0.2) }
-    }
 
     // MARK: Marks
 
@@ -257,7 +278,7 @@ struct ATPSeasonChart: View {
 
     /// Visible (scrolled) date window — the whole season when it all fits. Overlays clamp
     /// to this in date space so a placed mark can only land inside the plot.
-    private func visibleWindow(in width: CGFloat) -> (start: Date, end: Date) {
+    private func visibleWindow(in width: CGFloat, scrollX: Date) -> (start: Date, end: Date) {
         let visible = visibleWeeks(in: width)
         guard visible < plan.weeks.count else { return (seasonStart, xDomainEnd) }
         return (scrollX, scrollX.addingTimeInterval(Double(visible) * 7 * 86400))
@@ -267,11 +288,11 @@ struct ATPSeasonChart: View {
     // An overlay (a mark annotation doesn't render here); each triangle is clamped in date
     // space to the visible window so it stays inside the plot instead of bleeding into the
     // pinned axes when scrolling.
-    private func rampWarningLayer(_ proxy: ChartProxy) -> some View {
+    private func rampWarningLayer(_ proxy: ChartProxy, scrollX: Date) -> some View {
         GeometryReader { geo in
             if let frame = proxy.plotFrame {
                 let f = geo[frame]
-                let win = visibleWindow(in: geo.size.width)
+                let win = visibleWindow(in: geo.size.width, scrollX: scrollX)
                 ZStack(alignment: .topLeading) {
                     ForEach(plan.weeks.filter(\.rampExceeded)) { w in
                         let mid = weekMid(w.weekStart)
@@ -299,11 +320,6 @@ struct ATPSeasonChart: View {
         let total = max(plan.weeks.count, 1)
         guard width > 0 else { return total }
         return min(max(1, Int(width / minWeekWidth)), total)
-    }
-
-    /// End of the X span — the later of the last week's end and the last curve point.
-    private var xDomainEnd: Date {
-        max(seasonEnd, plan.weeks.last.map { weekEnd($0.weekStart) } ?? seasonEnd)
     }
 
     /// Initial scroll lands ~2 weeks before today so the current state is in view.
@@ -343,8 +359,8 @@ struct ATPSeasonChart: View {
                 // Scroll horizontally (axes stay pinned) only when the weeks don't fit.
                 .chartScrollableAxes(scrollable ? .horizontal : [])
                 .chartXVisibleDomain(length: Double(visible) * 7 * 86400)
-                .chartScrollPosition(x: $scrollX)
-                .onAppear { scrollX = scrollAnchor }
+                .chartScrollPosition(x: $live.scrollX)
+                .onAppear { live.scrollX = scrollAnchor }
                 // Pin/unpin live on the plot itself (not a covering overlay) so they
                 // arbitrate with the chart's scroll: a tap removes a pin, a long-press
                 // then drag sets one, and a plain swipe falls through to scrolling.
@@ -353,12 +369,16 @@ struct ATPSeasonChart: View {
                 // covering overlay — so it never intercepts the pin/unpin gestures below.
                 // (A hit-testable overlay above `chartGesture` swallowed every click.)
                 .onContinuousHover { phase in
-                    if case .active(let loc) = phase { hover.loc = loc } else { hover.loc = nil }
+                    if case .active(let loc) = phase { live.loc = loc } else { live.loc = nil }
                 }
-                .chartOverlay { proxy in periodLabelLayer(proxy) }
-                .chartOverlay { proxy in rampWarningLayer(proxy) }
+                .chartOverlay { proxy in
+                    ScrollWindowLayer(live: live) { x in
+                        periodLabelLayer(proxy, scrollX: x)
+                        rampWarningLayer(proxy, scrollX: x)
+                    }
+                }
                 .chartOverlay { proxy in dragLabelLayer(proxy) }
-                .chartOverlay { proxy in HoverReadoutLayer(hover: hover, plan: plan, proxy: proxy) }
+                .chartOverlay { proxy in HoverReadoutLayer(live: live, plan: plan, proxy: proxy) }
             }
             .frame(height: 280)
             // Bleed the plot to the card's right edge (cancels the card's trailing padding).
@@ -398,11 +418,11 @@ struct ATPSeasonChart: View {
     /// Each block is clamped in *date* space to the visible window before it's placed,
     /// so its label always maps inside the plot and never bleeds into the pinned axes
     /// when scrolling (where the proxy reports full-content, not viewport, pixels).
-    private func periodLabelLayer(_ proxy: ChartProxy) -> some View {
+    private func periodLabelLayer(_ proxy: ChartProxy, scrollX: Date) -> some View {
         GeometryReader { geo in
             if let frame = proxy.plotFrame {
                 let f = geo[frame]
-                let win = visibleWindow(in: geo.size.width)
+                let win = visibleWindow(in: geo.size.width, scrollX: scrollX)
                 ZStack(alignment: .topLeading) {
                     ForEach(periodSegments, id: \.start) { seg in
                         let cs = max(seg.start, win.start), ce = min(seg.end, win.end)
@@ -508,9 +528,9 @@ struct ATPSeasonChart: View {
 
 // Pure draw layer for the pointer tooltip + its hover rule (never hit-tested, so it
 // can't block the chart's gestures). A separate view so only it re-evaluates when
-// `hover.loc` moves.
+// `live.loc` moves.
 private struct HoverReadoutLayer: View {
-    let hover: HoverState
+    let live: ChartLiveState
     let plan: ATPPlan
     let proxy: ChartProxy
 
@@ -520,7 +540,7 @@ private struct HoverReadoutLayer: View {
 
     var body: some View {
         GeometryReader { geo in
-            if let frame = proxy.plotFrame, let loc = hover.loc {
+            if let frame = proxy.plotFrame, let loc = live.loc {
                 let f = geo[frame]
                 if let day = hoverDay(at: loc.x - f.minX) {
                     ZStack(alignment: .topLeading) {
