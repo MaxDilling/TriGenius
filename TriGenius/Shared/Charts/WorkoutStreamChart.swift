@@ -37,7 +37,29 @@ struct WorkoutStreamModel: Codable, Equatable, Identifiable {
     var spanSeconds: Double { Double(values.count * binSeconds) }
     /// What `StreamPlot` needs to lay this metric out.
     var plotMetric: StreamPlot.Metric {
-        .init(axis: kind.axis, framing: kind.framing, zones: zones, bridgesGaps: kind == .elevation)
+        .init(axis: kind.axis, framing: kind.framing, zones: zones, bridgesGaps: kind == .elevation,
+              minSpan: kind.minSpan)
+    }
+
+    /// The stored bins overlapping an elapsed-time window.
+    func bins(in window: ClosedRange<Double>) -> ArraySlice<Double?> {
+        let bin = Double(binSeconds)
+        let lo = max(Int(window.lowerBound / bin), 0)
+        let hi = min(Int((window.upperBound / bin).rounded(.up)), values.count)
+        return lo < hi ? values[lo..<hi] : []
+    }
+
+    /// The recorded samples in a window, as the trace draws them.
+    func samples(in window: ClosedRange<Double>) -> [Double] {
+        StreamPlot.samples(values: values, binSeconds: binSeconds, metric: plotMetric, in: window)
+    }
+
+    /// Elapsed time in one format for the whole workout — `h:mm` once it runs an
+    /// hour, `m:ss` below — so two labels side by side never mix the two.
+    func timeLabel(_ seconds: Double) -> String {
+        let s = Int(seconds)
+        return spanSeconds >= 3600 ? String(format: "%d:%02d", s / 3600, (s % 3600) / 60)
+                                   : String(format: "%d:%02d", s / 60, s % 60)
     }
 
     /// Chart models for a workout's stored streams, in the sport's display order;
@@ -177,6 +199,23 @@ extension WorkoutStreamModel.Kind {
         }
     }
 
+    /// Whether the stream is speed in m/s — pace kinds store speed too — and so
+    /// integrates to a distance.
+    var isSpeed: Bool { [.speed, .runPace, .hikePace, .swimPace].contains(self) }
+
+    /// The narrowest span the axis frames, in plot units — a steady stretch
+    /// stays a steady line instead of filling the plot.
+    var minSpan: Double {
+        switch self {
+        case .heartRate: 30
+        case .elevation: 50
+        case .runPace: 60
+        case .hikePace: 120
+        case .swimPace: 20
+        default: 0
+        }
+    }
+
     /// Rates and efforts are read against zero; levels the athlete is always at
     /// (heart rate, altitude) would waste the plot on the empty space below.
     var framing: StreamPlot.Framing {
@@ -207,13 +246,15 @@ extension WorkoutStreamModel.Kind {
         }
     }
 
-    /// Tooltip formatting from the natural-unit value — the number the axis
-    /// shows plus its unit, with a decimal for speed, where whole km/h is coarse.
-    func format(_ value: Double) -> String {
+    /// The number the axis shows for a natural-unit value, with a decimal for
+    /// speed, where whole km/h is coarse.
+    func number(_ value: Double) -> String {
         let plotted = axis.display(value)
-        let number = self == .speed ? String(format: "%.1f", plotted) : axisLabel(plotted)
-        return number + " " + unit
+        return self == .speed ? String(format: "%.1f", plotted) : axisLabel(plotted)
     }
+
+    /// Tooltip formatting: the number plus its unit.
+    func format(_ value: Double) -> String { number(value) + " " + unit }
 
     /// "42–310 W" — two natural-unit values ordered by plot position (a pace
     /// axis inverts them), with the unit stated once at the end.
@@ -260,9 +301,13 @@ struct WorkoutStreamChart: View {
         var isFit: Bool { span >= full }
         var canZoomIn: Bool { span > minSpan }
 
-        /// Re-centre on the midpoint, so a zoom keeps what you were looking at.
-        mutating func zoom(to span: Double) {
-            let centre = start + self.span / 2
+        /// One step of the zoom buttons, shortcuts and double-click.
+        static let step = 1.8
+
+        /// Re-centre on `centre` — the pointer on a double-click, otherwise the
+        /// midpoint, so a zoom keeps what you were looking at.
+        mutating func zoom(to span: Double, around centre: Double? = nil) {
+            let centre = centre ?? start + self.span / 2
             self.span = min(max(span, minSpan), full)
             start = clamp(centre - self.span / 2)
         }
@@ -276,6 +321,14 @@ struct WorkoutStreamChart: View {
         private func clamp(_ start: Double) -> Double { min(max(start, 0), full - span) }
     }
 
+    /// What the pointer reads on the trace, for a host that shows it in its own
+    /// readout — the chart then draws the rule without its tooltip.
+    struct Reading: Equatable {
+        let vertex: StreamPlot.Vertex
+        /// The overlay's value at the same moment, natural units.
+        let overlay: Double?
+    }
+
     let model: WorkoutStreamModel
     /// A second metric of the same workout, drawn as a silhouette behind the
     /// trace for context (heart rate against the climb it was earned on).
@@ -287,6 +340,7 @@ struct WorkoutStreamChart: View {
     /// The zone the pointer is resting on in the ribbon, reported up so a host
     /// can spell it out. Nil whenever the trace itself is being scrubbed.
     let highlight: Binding<Int?>?
+    let reading: Binding<Reading?>?
 
     @State private var scrubOffset: Double?
     /// The plot rectangle itself: its width sets the smoothing bucket, its
@@ -297,9 +351,11 @@ struct WorkoutStreamChart: View {
     /// start, not against the window it last produced.
     @State private var panStart: Double?
     @State private var pinchStart: Double?
+    /// The axis held still while a gesture runs, so it does not twitch under the
+    /// finger; it eases onto the new window once the gesture ends.
+    @State private var heldDomain: StreamPlot.Domain?
     /// Whether the pointer is down on the zone ribbon rather than the trace.
     @State private var onRibbon = false
-    private let yDomain: StreamPlot.Domain
 
     /// The zone ribbon's thickness in points — constant, so a tall plot does not
     /// hand it more of the chart than it needs — and the taller strip that counts
@@ -309,20 +365,37 @@ struct WorkoutStreamChart: View {
 
     init(model: WorkoutStreamModel, overlay: WorkoutStreamModel? = nil, bands: [Band] = [],
          height: CGFloat? = 140, zoom: Binding<Zoom>? = nil,
-         highlight: Binding<Int?>? = nil) {
+         highlight: Binding<Int?>? = nil, reading: Binding<Reading?>? = nil) {
         self.model = model
         self.overlay = overlay
         self.bands = bands
         self.height = height
         self.zoom = zoom
         self.highlight = highlight
-        self.yDomain = StreamPlot.domain(values: model.values, metric: model.plotMetric)
+        self.reading = reading
     }
 
     var body: some View {
         Group {
-            if zoom != nil {
-                chart.gesture(panAndZoom)
+            if let zoom {
+                chart
+                    #if os(iOS)
+                    .gesture(HorizontalPan(onChange: pan))
+                    .simultaneousGesture(pinch)
+                    #else
+                    .gesture(DragGesture(minimumDistance: 10)
+                        .onChanged { pan($0.translation.width) }
+                        .onEnded { _ in pan(nil) }
+                        .simultaneously(with: pinch))
+                    #endif
+                    #if os(macOS)
+                    .overlay { HorizontalScroll(onChange: pan) }
+                    #endif
+                    .onTapGesture(count: 2) {
+                        withAnimation(.snappy) {
+                            zoom.wrappedValue.zoom(to: zoom.wrappedValue.span / Zoom.step, around: scrubOffset)
+                        }
+                    }
             } else {
                 chart
             }
@@ -330,14 +403,46 @@ struct WorkoutStreamChart: View {
         // After the update, never during it: the zone is derived from the same
         // bucketing the marks are drawn from.
         .onChange(of: highlightedZone) { _, zone in highlight?.wrappedValue = zone }
+        .onChange(of: onRibbon ? nil : scrubOffset) { _, offset in
+            reading?.wrappedValue = offset.flatMap(read(at:))
+        }
+    }
+
+    private var window: ClosedRange<Double> { zoom?.wrappedValue.window ?? 0...model.spanSeconds }
+    private var visibleSpan: Double { zoom?.wrappedValue.span ?? model.spanSeconds }
+    /// The axis follows the visible stretch, never narrower than the kind's
+    /// `minSpan`.
+    private var yDomain: StreamPlot.Domain {
+        heldDomain ?? StreamPlot.domain(values: model.bins(in: window), metric: model.plotMetric)
+    }
+
+    private func hold(_ holding: Bool) {
+        if holding {
+            if heldDomain == nil { heldDomain = yDomain }
+        } else if panStart == nil, pinchStart == nil {
+            withAnimation(.snappy) { heldDomain = nil }
+        }
+    }
+    /// Before the first geometry pass a phone-ish width stands in, so the first
+    /// frame draws a sane trace instead of an empty plot.
+    private var plotWidth: Double { plotSize.width > 0 ? plotSize.width : 320 }
+
+    private func overlaid(into domain: StreamPlot.Domain) -> Overlaid? {
+        overlay.map { Overlaid($0, window: window, plotWidth: plotWidth, into: domain) }
+    }
+
+    private func read(at offset: Double) -> Reading? {
+        guard let vertex = StreamPlot.nearest(to: offset, in: plot.segments) else { return nil }
+        return Reading(vertex: vertex, overlay: overlaid(into: yDomain).flatMap {
+            StreamPlot.nearest(to: vertex.offset, in: $0.segments)?.mean
+        })
     }
 
     /// The bucketing this pass renders, and the zone stretches over it.
     private var plot: (segments: [StreamPlot.Segment], runs: [StreamPlot.Run]) {
         let segments = StreamPlot.segments(
             values: model.values, binSeconds: model.binSeconds, metric: model.plotMetric,
-            visibleSpan: zoom?.wrappedValue.span ?? model.spanSeconds,
-            plotWidth: plotSize.width > 0 ? plotSize.width : 320)
+            visibleSpan: visibleSpan, plotWidth: plotWidth)
         return (segments, StreamPlot.zoneRuns(of: segments))
     }
 
@@ -348,43 +453,41 @@ struct WorkoutStreamChart: View {
         return plot.runs.first { offset >= $0.start && offset <= $0.end }?.zone
     }
 
-    /// Drag to pan, pinch to zoom. A scrollable chart would be the framework's
-    /// own answer, but it only pans on a *horizontal* scroll event — which a
-    /// plain mouse never sends. Converting the drag through the measured plot
-    /// width instead means the trace follows the cursor one-to-one everywhere.
-    private var panAndZoom: some Gesture {
-        DragGesture(minimumDistance: 10)
+    /// Drag to pan. A scrollable chart would be the framework's own answer, but
+    /// it only pans on a *horizontal* scroll event — which a plain mouse never
+    /// sends. Converting the drag through the measured plot width instead means
+    /// the trace follows the finger or cursor one-to-one everywhere. Nil ends it.
+    private func pan(_ translation: CGFloat?) {
+        guard let zoom else { return }
+        guard let translation else { panStart = nil; hold(false); return }
+        #if os(iOS)
+        // A long press that is already scrubbing owns the finger. macOS scrubs
+        // on hover, which is never a drag, so it never competes.
+        guard scrubOffset == nil || panStart != nil else { return }
+        #endif
+        hold(true)
+        let from = panStart ?? zoom.wrappedValue.start
+        panStart = from
+        zoom.wrappedValue.pan(from: from,
+                              bySeconds: -translation / max(plotSize.width, 1) * zoom.wrappedValue.span)
+    }
+
+    private var pinch: some Gesture {
+        MagnifyGesture()
             .onChanged { value in
                 guard let zoom else { return }
-                #if os(iOS)
-                // A long press that is already scrubbing owns the finger. macOS
-                // scrubs on hover, which is never a drag, so it never competes.
-                guard scrubOffset == nil || panStart != nil else { return }
-                #endif
-                let from = panStart ?? zoom.wrappedValue.start
-                panStart = from
-                let seconds = -value.translation.width / max(plotSize.width, 1) * zoom.wrappedValue.span
-                zoom.wrappedValue.pan(from: from, bySeconds: seconds)
+                hold(true)
+                let base = pinchStart ?? zoom.wrappedValue.span
+                pinchStart = base
+                zoom.wrappedValue.zoom(to: base / value.magnification)
             }
-            .onEnded { _ in panStart = nil }
-            .simultaneously(with: MagnifyGesture()
-                .onChanged { value in
-                    guard let zoom else { return }
-                    let base = pinchStart ?? zoom.wrappedValue.span
-                    pinchStart = base
-                    zoom.wrappedValue.zoom(to: base / value.magnification)
-                }
-                .onEnded { _ in pinchStart = nil })
+            .onEnded { _ in pinchStart = nil; hold(false) }
     }
 
     private var chart: some View {
-        // Before the first geometry pass a phone-ish width stands in, so the
-        // first frame draws a sane trace instead of an empty plot.
-        let visible = zoom?.wrappedValue.span ?? model.spanSeconds
-        let width = plotSize.width > 0 ? plotSize.width : 320
         let (segments, runs) = plot
-        let overlaid = overlay.map { Overlaid($0, visibleSpan: visible, plotWidth: width,
-                                              into: yDomain) }
+        let yDomain = self.yDomain
+        let overlaid = self.overlaid(into: yDomain)
         return Chart {
             if let overlaid {
                 ForEach(overlaid.segments) { segment in
@@ -393,7 +496,10 @@ struct WorkoutStreamChart: View {
                                  yStart: .value(overlaid.model.kind.label, overlaid.base),
                                  yEnd: .value(overlaid.model.kind.label, overlaid.scale(vertex.plot)),
                                  series: .value("Overlay", "o\(segment.id)"))
-                            .foregroundStyle(overlaid.model.kind.color.opacity(0.20))
+                            .foregroundStyle(.linearGradient(
+                                colors: [overlaid.model.kind.color.opacity(0.35),
+                                         overlaid.model.kind.color.opacity(0.06)],
+                                startPoint: .top, endPoint: .bottom))
                     }
                 }
             }
@@ -424,9 +530,9 @@ struct WorkoutStreamChart: View {
                     .lineStyle(StrokeStyle(lineWidth: 1.4, lineJoin: .round))
                 }
             }
-            zoneMarks(runs)
+            zoneMarks(runs, in: yDomain)
             referenceMark
-            scrubMarks(in: segments, overlaid: overlaid)
+            scrubMarks(in: segments)
         }
         .chartYScale(domain: yDomain.bounds)
         .chartYAxis {
@@ -442,7 +548,7 @@ struct WorkoutStreamChart: View {
             AxisMarks(values: .automatic(desiredCount: 5)) { value in
                 AxisGridLine()
                 AxisValueLabel {
-                    if let seconds = value.as(Double.self) { Text(Self.timeLabel(seconds)) }
+                    if let seconds = value.as(Double.self) { Text(model.timeLabel(seconds)) }
                 }
             }
         }
@@ -463,7 +569,8 @@ struct WorkoutStreamChart: View {
     /// the pointer rests on one of its colours — every *other* stretch of that
     /// same zone shaded full height, so a glance answers "where else did I ride
     /// this hard?".
-    @ChartContentBuilder private func zoneMarks(_ runs: [StreamPlot.Run]) -> some ChartContent {
+    @ChartContentBuilder private func zoneMarks(_ runs: [StreamPlot.Run],
+                                                in yDomain: StreamPlot.Domain) -> some ChartContent {
         let highlight = highlightedZone
         ForEach(runs) { run in
             if let zone = run.zone {
@@ -503,64 +610,140 @@ struct WorkoutStreamChart: View {
     }
 
     @ChartContentBuilder
-    private func scrubMarks(in segments: [StreamPlot.Segment],
-                            overlaid: Overlaid?) -> some ChartContent {
+    private func scrubMarks(in segments: [StreamPlot.Segment]) -> some ChartContent {
         if let offset = scrubOffset, highlightedZone == nil,
            let vertex = StreamPlot.nearest(to: offset, in: segments) {
-            RuleMark(x: .value("Scrub", vertex.offset))
+            let rule = RuleMark(x: .value("Scrub", vertex.offset))
                 .foregroundStyle(.secondary.opacity(0.6))
                 .lineStyle(StrokeStyle(lineWidth: 1))
-                .annotation(position: .top, spacing: 0,
+            if reading != nil {
+                rule
+            } else {
+                rule.annotation(position: .top, spacing: 0,
                             overflowResolution: .init(x: .fit(to: .plot), y: .fit(to: .plot))) {
-                    ChartTooltip(title: Self.timeLabel(vertex.offset),
-                                 rows: tooltipRows(vertex, overlaid: overlaid))
+                    ChartTooltip(title: model.timeLabel(vertex.offset),
+                                 rows: tooltipRows(vertex))
                 }
+            }
         }
     }
 
-    /// The bucket's mean, the raw spread it averaged away, and the overlay's
-    /// own value at the same moment — the overlay shares the plot but not the
-    /// axis, so the tooltip is where its real numbers are read.
-    private func tooltipRows(_ vertex: StreamPlot.Vertex, overlaid: Overlaid?) -> [ChartTooltip.Row] {
+    /// The bucket's mean and the raw spread it averaged away.
+    private func tooltipRows(_ vertex: StreamPlot.Vertex) -> [ChartTooltip.Row] {
         var rows = [ChartTooltip.Row(color: model.kind.color, label: model.kind.label,
                                      value: model.kind.format(vertex.mean))]
         if vertex.plotLow < vertex.plotHigh {
             rows.append(.init(color: nil, label: "Range",
                               value: model.kind.rangeText(vertex.low, vertex.high)))
         }
-        if let overlaid, let at = StreamPlot.nearest(to: vertex.offset, in: overlaid.segments) {
-            rows.append(.init(color: overlaid.model.kind.color, label: overlaid.model.kind.label,
-                              value: overlaid.model.kind.format(at.mean)))
-        }
         return rows
     }
 
     /// The overlay, bucketed on the same grid as the trace and mapped from its
-    /// own domain onto the primary's. Deliberately no second Y axis: two metrics
-    /// on one plot are not comparable, and an axis would imply they are.
+    /// own domain into the bottom band of the primary's — terrain under the
+    /// trace, not a second trace competing with it. Deliberately no second Y
+    /// axis: two metrics on one plot are not comparable, and an axis would
+    /// imply they are.
     private struct Overlaid {
         let model: WorkoutStreamModel
         let segments: [StreamPlot.Segment]
         let scale: StreamPlot.Rescale
         /// The floor the silhouette fills from.
-        var base: Double { scale.target.lo }
+        let base: Double
+        /// The share of the plot's height the silhouette rises to.
+        private static let band = 0.55
 
-        init(_ model: WorkoutStreamModel, visibleSpan: Double, plotWidth: Double,
+        init(_ model: WorkoutStreamModel, window: ClosedRange<Double>, plotWidth: Double,
              into target: StreamPlot.Domain) {
             self.model = model
             self.segments = StreamPlot.segments(values: model.values, binSeconds: model.binSeconds,
                                                 metric: model.plotMetric,
-                                                visibleSpan: visibleSpan, plotWidth: plotWidth)
+                                                visibleSpan: window.upperBound - window.lowerBound,
+                                                plotWidth: plotWidth)
+            let source = StreamPlot.domain(values: model.bins(in: window), metric: model.plotMetric)
+            let top = target.fromFloor(Self.band)
+            self.base = target.floor
+            // A pace overlay keeps its fastest at the top, as on its own axis.
             self.scale = StreamPlot.Rescale(
-                source: StreamPlot.domain(values: model.values, metric: model.plotMetric),
-                target: target)
+                source: source,
+                target: source.reversed ? .init(lo: top, hi: base, reversed: false)
+                                        : .init(lo: base, hi: top, reversed: false))
+        }
+    }
+}
+
+#if os(iOS)
+/// A pan that only begins on a mostly horizontal drag. A SwiftUI drag claims
+/// every touch ahead of an enclosing ScrollView, so a vertical swipe over the
+/// plot could not scroll the page; a UIKit recognizer that declines to begin
+/// leaves it to the scroll view. Reports the horizontal translation, nil on end.
+private struct HorizontalPan: UIGestureRecognizerRepresentable {
+    let onChange: (CGFloat?) -> Void
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let pan = UIPanGestureRecognizer()
+        pan.delegate = context.coordinator
+        return pan
+    }
+
+    func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        switch recognizer.state {
+        case .began, .changed: onChange(recognizer.translation(in: recognizer.view).x)
+        default: onChange(nil)
         }
     }
 
-    /// Elapsed-time axis/tooltip label: `m:ss` under an hour, `h:mm` above.
-    private static func timeLabel(_ seconds: Double) -> String {
-        let s = Int(seconds)
-        return s >= 3600 ? String(format: "%d:%02d", s / 3600, (s % 3600) / 60)
-                         : String(format: "%d:%02d", s / 60, s % 60)
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = recognizer as? UIPanGestureRecognizer else { return true }
+            let velocity = pan.velocity(in: pan.view)
+            return abs(velocity.x) > abs(velocity.y)
+        }
     }
 }
+#endif
+
+#if os(macOS)
+/// Horizontal trackpad or wheel scrolling over the plot, reported like a drag:
+/// the translation so far, nil on end. SwiftUI surfaces no scroll-wheel event,
+/// so an AppKit view takes it — hit-testable for scroll events only, so hover
+/// and clicks fall through to the chart, and a vertical scroll passes on to the
+/// page. The direction is locked per gesture so one swipe never does both.
+private struct HorizontalScroll: NSViewRepresentable {
+    let onChange: (CGFloat?) -> Void
+
+    func makeNSView(context: Context) -> ScrollCatcher { ScrollCatcher() }
+    func updateNSView(_ view: ScrollCatcher, context: Context) { view.onChange = onChange }
+
+    final class ScrollCatcher: NSView {
+        var onChange: (CGFloat?) -> Void = { _ in }
+        private var horizontal: Bool?
+        private var total: CGFloat = 0
+
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            NSApp.currentEvent?.type == .scrollWheel ? super.hitTest(point) : nil
+        }
+
+        override func scrollWheel(with event: NSEvent) {
+            // A plain mouse wheel sends phase-less ticks, each its own gesture.
+            let tick = event.phase.isEmpty && event.momentumPhase.isEmpty
+            if tick || event.phase == .began || event.momentumPhase == .began {
+                horizontal = nil
+                total = 0
+            }
+            if horizontal == nil, event.scrollingDeltaX != 0 || event.scrollingDeltaY != 0 {
+                horizontal = abs(event.scrollingDeltaX) > abs(event.scrollingDeltaY)
+            }
+            guard horizontal == true else { return super.scrollWheel(with: event) }
+            total += event.scrollingDeltaX
+            onChange(total)
+            if tick || [.ended, .cancelled].contains(event.phase)
+                || [.ended, .cancelled].contains(event.momentumPhase) {
+                onChange(nil)
+            }
+        }
+    }
+}
+#endif

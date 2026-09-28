@@ -481,23 +481,9 @@ struct MetricDetailView: View {
         let values = visiblePoints.map(\.value)
         if let lo = values.min(), let hi = values.max() {
             let mean = values.reduce(0, +) / Double(values.count)
-            HStack(spacing: Theme.Spacing.m) {
-                stat("Low / High", "\(metric.format(lo)) – \(metric.format(hi))")
-                Divider()
-                stat("Mean", metric.format(mean))
-                Divider()
-                stat("Points", "\(visiblePoints.count)")
-            }
-            .fixedSize(horizontal: false, vertical: true)
-            .cardSurface()
+            StatStrip(stats: [("Low / High", "\(metric.format(lo)) – \(metric.format(hi))"),
+                              ("Mean", metric.format(mean)),
+                              ("Points", "\(visiblePoints.count)")])
         }
-    }
-
-    private func stat(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label).font(.caption2).foregroundStyle(.secondary)
-            Text(value).font(.subheadline.weight(.semibold))
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }

@@ -50,6 +50,9 @@ nonisolated enum StreamPlot {
         /// Whether an unrecorded stretch is held across without limit, rather
         /// than breaking the trace once it outlasts `holdSeconds`.
         let bridgesGaps: Bool
+        /// The narrowest span a tight or inverting axis may frame, in plot units,
+        /// so a near-flat stretch is not blown up across the whole plot.
+        var minSpan: Double = 0
     }
 
     /// The value range an axis spans, in plot units.
@@ -162,15 +165,23 @@ nonisolated enum StreamPlot {
                          visibleSpan: Double, plotWidth: Double) -> [Segment] {
         let bin = Double(binSeconds)
         let bucket = max(1, Int((visibleSpan * bucketPoints / max(plotWidth, 1) / bin).rounded()))
+        return runs(values: values, binSeconds: binSeconds, metric: metric).enumerated().map {
+            Segment(id: $0.offset, vertices: vertices(of: $0.element, bucket: bucket, bin: bin,
+                                                      metric: metric))
+        }
+    }
 
-        var segments: [Segment] = []
-        var run: [(offset: Double, value: Double)] = []
+    typealias Sample = (offset: Double, value: Double)
+
+    /// The stream as recorded, one sample per bin at its centre: every reading,
+    /// held across the empty bins after it, and broken into runs by a real gap.
+    static func runs(values: [Double?], binSeconds: Int, metric: Metric) -> [[Sample]] {
+        let bin = Double(binSeconds)
+        var runs: [[Sample]] = []
+        var run: [Sample] = []
         var held = 0   // bins without a reading since the last sample
         func close() {
-            guard !run.isEmpty else { return }
-            segments.append(Segment(id: segments.count,
-                                    vertices: vertices(of: run, bucket: bucket, bin: bin,
-                                                       metric: metric)))
+            if !run.isEmpty { runs.append(run) }
             run = []
         }
         func sample(_ index: Int, _ value: Double) {
@@ -192,7 +203,25 @@ nonisolated enum StreamPlot {
             sample(i, value)
         }
         close()
-        return segments
+        return runs
+    }
+
+    /// The recorded samples whose bin centre lies in `window`. Each stands for
+    /// one equal slice of time, so their plain mean is the window's
+    /// time-weighted average.
+    static func samples(values: [Double?], binSeconds: Int, metric: Metric,
+                        in window: ClosedRange<Double>) -> [Double] {
+        runs(values: values, binSeconds: binSeconds, metric: metric)
+            .joined().filter { window.contains($0.offset) }.map(\.value)
+    }
+
+    /// Metres covered in `window`: every recorded speed (m/s) times the bin it
+    /// stands for. Slow shuffles count here, unlike on a pace axis, where they
+    /// read as standing still.
+    static func distance(speeds: [Double?], binSeconds: Int, in window: ClosedRange<Double>) -> Double {
+        let metric = Metric(axis: .linear(1), framing: .fromZero, zones: nil, bridgesGaps: false)
+        return samples(values: speeds, binSeconds: binSeconds, metric: metric, in: window)
+            .reduce(0, +) * Double(binSeconds)
     }
 
     private static func vertices(of run: [(offset: Double, value: Double)], bucket: Int,
@@ -240,26 +269,23 @@ nonisolated enum StreamPlot {
 
     /// Rate/effort metrics anchor at zero; level metrics tighten to the data; an
     /// inverting axis reverses and scales to the 98th percentile so a lone
-    /// walk/stop spike clips instead of squashing the run. Read from the raw
-    /// bins, so resizing or zooming the plot never moves the axis.
-    static func domain(values: [Double?], metric: Metric) -> Domain {
+    /// walk/stop spike clips instead of squashing the run. A tight or inverting
+    /// frame is widened to `minSpan` around its centre. Read from the raw bins
+    /// of whatever stretch is passed, so resizing the plot never moves the axis.
+    static func domain(values: some Collection<Double?>, metric: Metric) -> Domain {
         let plots = values.compactMap { $0 }
             .filter(metric.axis.isMoving).map(metric.axis.display).sorted()
-        guard let lo = plots.first, let hi = plots.last, hi > 0 else {
+        guard let first = plots.first, let last = plots.last, last > 0 else {
             return Domain(lo: 0, hi: 1, reversed: false)
         }
-        if metric.axis.isInverting {
-            let p98 = plots[Int(0.98 * Double(plots.count - 1))]
-            let pad = max((p98 - lo) * 0.15, p98 * 0.02)
-            return Domain(lo: max(lo - pad, 0), hi: p98 + pad, reversed: true)
+        if case .fromZero = metric.framing, !metric.axis.isInverting {
+            return Domain(lo: 0, hi: last * 1.1, reversed: false)
         }
-        switch metric.framing {
-        case .fromZero:
-            return Domain(lo: 0, hi: hi * 1.1, reversed: false)
-        case .tight:
-            let pad = max((hi - lo) * 0.15, hi * 0.02)
-            return Domain(lo: max(lo - pad, 0), hi: hi + pad, reversed: false)
-        }
+        let top = metric.axis.isInverting ? plots[Int(0.98 * Double(plots.count - 1))] : last
+        let widen = max(metric.minSpan - (top - first), 0) / 2
+        let (lo, hi) = (first - widen, top + widen)
+        let pad = max((hi - lo) * 0.15, hi * 0.02)
+        return Domain(lo: max(lo - pad, 0), hi: hi + pad, reversed: metric.axis.isInverting)
     }
 
     /// The vertex nearest an elapsed-time offset — what a scrub snaps to.

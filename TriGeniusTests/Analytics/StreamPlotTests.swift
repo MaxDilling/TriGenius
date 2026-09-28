@@ -161,6 +161,30 @@ struct StreamPlotZoneRunTests {
     }
 }
 
+@Suite("StreamPlot window samples")
+struct StreamPlotSamplesTests {
+
+    /// 10 s bins centred at 5, 15, 25: the empty middle bin holds the 100 before
+    /// it, and a 0…15 window takes the first two centres.
+    @Test func aWindowTakesTheHeldSamplesInside() {
+        #expect(StreamPlot.samples(values: [100, nil, 200], binSeconds: 10, metric: power,
+                                   in: 0...15) == [100, 100])
+    }
+
+    /// A stop on a pace axis is no sample — it would drag the average pace
+    /// toward standing still.
+    @Test func aStoppedPaceBinIsNoSample() {
+        #expect(StreamPlot.samples(values: [2, 0.1, 4], binSeconds: 10, metric: runPace,
+                                   in: 0...30) == [2, 4])
+    }
+
+    /// Speeds 2, held 2, 3 and a 0.2 m/s shuffle — which counts here though a
+    /// pace axis drops it — over 10 s bins: (2 + 2 + 3 + 0.2) × 10 = 72 m.
+    @Test func distanceIntegratesEveryRecordedSpeed() {
+        #expect(StreamPlot.distance(speeds: [2, nil, 3, 0.2], binSeconds: 10, in: 0...40) == 72)
+    }
+}
+
 @Suite("StreamPlot domain geometry")
 struct StreamPlotDomainGeometryTests {
 
@@ -199,6 +223,16 @@ struct StreamPlotDomainTests {
         #expect(domain.reversed)
         #expect(domain.hi == 400 + 0.15 * (400 - 200))
         #expect(domain.bounds == [430, 170])
+    }
+
+    /// A near-flat stretch widens to `minSpan` around its centre before the
+    /// padding: 140…150 is 10 wide, so 10 is added each side → 130…160, then
+    /// padded by max(0.15 × 30, 0.02 × 160) = 4.5.
+    @Test func aFlatStretchWidensToTheMinimumSpan() {
+        let hr = StreamPlot.Metric(axis: .linear(1), framing: .tight,
+                                   zones: nil, bridgesGaps: false, minSpan: 30)
+        let domain = StreamPlot.domain(values: [140, 150], metric: hr)
+        #expect(domain == StreamPlot.Domain(lo: 125.5, hi: 164.5, reversed: false))
     }
 
     /// No usable samples must not produce an empty or infinite scale.
