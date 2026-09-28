@@ -11,11 +11,14 @@
 import SwiftUI
 
 extension Color {
+    /// The page behind the cards. iOS uses the *grouped* pair (grey page, white cards
+    /// in light mode, as in Health/Fitness), so every screen that hosts cards must set
+    /// it — the default hosting background is plain white.
     static var appBackground: Color {
         #if os(macOS)
         Color(nsColor: .windowBackgroundColor)
         #else
-        Color(uiColor: .systemBackground)
+        Color(uiColor: .systemGroupedBackground)
         #endif
     }
 
@@ -26,15 +29,17 @@ extension Color {
         #if os(macOS)
         appAdaptive(light: 0xFFFFFF, dark: 0x363638)
         #else
-        Color(uiColor: .secondarySystemBackground)
+        Color(uiColor: .secondarySystemGroupedBackground)
         #endif
     }
 
+    /// A track, field or unselected chip. On iOS a translucent fill, so it stands off
+    /// the page and the card alike.
     static var appTertiaryBackground: Color {
         #if os(macOS)
         Color(nsColor: .controlBackgroundColor)
         #else
-        Color(uiColor: .tertiarySystemBackground)
+        Color(uiColor: .tertiarySystemFill)
         #endif
     }
 

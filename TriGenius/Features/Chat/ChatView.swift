@@ -339,25 +339,6 @@ struct CoachChatView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScreenHeader("Coach") {
-                HStack(spacing: Theme.Spacing.l) {
-                    Button { showReport = true } label: {
-                        Image(systemName: "exclamationmark.bubble")
-                    }
-                    .buttonStyle(.plain)
-                    .help("Report an issue")
-                    Button { viewModel.reset() } label: {
-                        Image(systemName: "arrow.counterclockwise")
-                    }
-                    .buttonStyle(.plain)
-                    .help("Reset session")
-                }
-                .headerPill()
-            }
-            .padding(.horizontal)
-            .padding(.top, Theme.Spacing.s)
-            .padding(.bottom, Theme.Spacing.s)
-
             // Message list
             ScrollViewReader { proxy in
                 ScrollView {
@@ -395,6 +376,25 @@ struct CoachChatView: View {
                     }
                     .padding(.horizontal)
                     .padding(.bottom, 8)
+                }
+                .safeAreaBar(edge: .top) {
+                    ScreenHeader("Coach") {
+                        HStack(spacing: Theme.Spacing.l) {
+                            Button { showReport = true } label: {
+                                Image(systemName: "exclamationmark.bubble")
+                            }
+                            .buttonStyle(.plain)
+                            .help("Report an issue")
+                            Button { viewModel.reset() } label: {
+                                Image(systemName: "arrow.counterclockwise")
+                            }
+                            .buttonStyle(.plain)
+                            .help("Reset session")
+                        }
+                        .headerPill()
+                    }
+                    .padding(.horizontal)
+                    .padding(.vertical, Theme.Spacing.s)
                 }
                 // Dismiss the keyboard by dragging the message list, so it never
                 // gets stuck covering the tab bar with no way back out.
@@ -442,6 +442,7 @@ struct CoachChatView: View {
         }
         .onChange(of: router.pendingPrompt) { _, _ in consumePendingPrompt() }
         .task { viewModel.prewarm() }
+        .background(Color.appBackground)
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
         #endif

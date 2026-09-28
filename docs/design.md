@@ -23,7 +23,7 @@ Rules:
 - **Never put a card on glass** and never stack glass on glass — over the plain app background glass has nothing to refract, reads as muddy grey, and costs the most to render. Glass is the floating control layer, not the content layer.
 - Prefer **one** glass container over many glass cards (e.g. a whole day column as a single `GlassEffectContainer`, not N glass boxes).
 - **No manual ambient blobs / `.blur(radius: 100)` behind glass.** System glass refracts the real content behind it; use `backgroundExtensionEffect()` if you need bleed.
-- App background is the **adaptive system background** (`Color.appBackground`), not forced `Color.black`.
+- App background is the **grouped system background** (`Color.appBackground`): grey page, white cards in light mode, as in Apple Health — never forced `Color.black`. Every screen hosting cards sets `.background(Color.appBackground)` on its root; the default page is plain white and swallows the cards.
 
 ## 2. Typography & contrast
 

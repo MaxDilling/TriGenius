@@ -24,7 +24,18 @@ struct ATPTabView: View {
     @State private var loaded = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+        ScrollView {
+            VStack(alignment: .leading, spacing: Theme.Spacing.l) {
+                if let plan {
+                    chartCard(plan)
+                } else {
+                    emptyHint
+                }
+                eventsCard
+            }
+            .padding()
+        }
+        .safeAreaBar(edge: .top) {
             // Pencil, not a gear: the sheet edits *this plan*, and a gear here reads
             // as app settings. The bare glyph, not `square.and.pencil` — that one's
             // nib overshoots the square and sits visibly high in a round pill.
@@ -35,20 +46,9 @@ struct ATPTabView: View {
                     .accessibilityLabel("Edit plan")
             }
             .padding(.horizontal)
-            .padding(.top, Theme.Spacing.s)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: Theme.Spacing.l) {
-                    if let plan {
-                        chartCard(plan)
-                    } else {
-                        emptyHint
-                    }
-                    eventsCard
-                }
-                .padding()
-            }
+            .padding(.vertical, Theme.Spacing.s)
         }
+        .background(Color.appBackground)
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
         #endif
@@ -79,6 +79,7 @@ struct ATPTabView: View {
     private var setupSheet: some View {
         NavigationStack {
             ScrollView { setupCard.padding() }
+                .background(Color.appBackground)
                 .navigationTitle("Plan Setup")
                 #if os(iOS)
                 .navigationBarTitleDisplayMode(.inline)

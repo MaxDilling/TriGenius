@@ -63,6 +63,7 @@ struct CalendarView: View {
             content
                 .frame(maxHeight: .infinity)
         }
+        .background(Color.appBackground)
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
         #endif

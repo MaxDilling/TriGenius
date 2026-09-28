@@ -71,6 +71,7 @@ struct PlannedWorkoutDetailView: View {
             }
             .padding()
         }
+        .background(Color.appBackground)
         .navigationTitle(family.displayName)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

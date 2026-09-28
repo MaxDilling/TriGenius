@@ -67,6 +67,7 @@ struct DashboardView: View {
             }
             .padding(Theme.Spacing.l)
         }
+        .background(Color.appBackground)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .navigationBar)

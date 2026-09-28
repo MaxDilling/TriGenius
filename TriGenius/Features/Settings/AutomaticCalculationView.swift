@@ -124,6 +124,7 @@ struct AutomaticCalculationView: View {
             }
             .padding(Theme.Spacing.l)
         }
+        .background(Color.appBackground)
         .navigationTitle("Automatic calculation")
         .task { reload() }
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in

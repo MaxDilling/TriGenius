@@ -105,6 +105,7 @@ struct TrainingDetailView: View {
             .padding()
         }
         .onGeometryChange(for: Bool.self) { $0.size.width >= 1000 } action: { isWide = $0 }
+        .background(Color.appBackground)
         .navigationTitle(family.displayName)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)

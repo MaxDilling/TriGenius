@@ -11,7 +11,7 @@ import Charts
 
 struct WorkoutStreamModel: Codable, Equatable, Identifiable {
     enum Kind: String, Codable {
-        case speed, power, heartRate, runPace, swimPace, bikeCadence, runCadence, elevation
+        case speed, power, heartRate, runPace, hikePace, swimPace, bikeCadence, runCadence, elevation
     }
     /// A *measured* level drawn as a rule across the plot — normalized power on
     /// a bike power trace. Never an average standing in for one that is missing.
@@ -55,8 +55,12 @@ struct WorkoutStreamModel: Codable, Equatable, Identifiable {
              (.cadence, .runCadence), (.elevation, .elevation)]
         case .swim:
             [(.speed, .swimPace), (.heartRate, .heartRate)]
-        case .strength, .other:
+        case .strength:
             [(.heartRate, .heartRate)]
+        case .other:
+            (SportFamily.matches(storedSport: details["sport"] as? String ?? "", filter: "hiking")
+                ? [(.speed, .hikePace)] : [])
+            + [(.heartRate, .heartRate), (.elevation, .elevation)]
         }
         return order.compactMap { metric, kind in
             decoded.metrics[metric].map {
@@ -128,7 +132,7 @@ extension WorkoutStreamModel.Kind {
         case .speed: "Speed"
         case .power: "Power"
         case .heartRate: "Heart rate"
-        case .runPace, .swimPace: "Pace"
+        case .runPace, .hikePace, .swimPace: "Pace"
         case .bikeCadence, .runCadence: "Cadence"
         case .elevation: "Elevation"
         }
@@ -140,6 +144,7 @@ extension WorkoutStreamModel.Kind {
         case .power: Theme.Palette.sport(.bike)
         case .heartRate: Theme.Palette.danger
         case .runPace: Theme.Palette.sport(.run)
+        case .hikePace: Theme.Palette.sport(.other)
         case .swimPace: Theme.Palette.sport(.swim)
         case .bikeCadence, .runCadence: Theme.Palette.success
         case .elevation: .gray
@@ -160,10 +165,12 @@ extension WorkoutStreamModel.Kind {
     /// How the natural-unit samples reach the plot: pace kinds invert to
     /// seconds-per-unit, speed plots in km/h (matching its axis and tooltip).
     /// The pace floors are where the athlete counts as standing still — slower
-    /// than 33 min/km running, 8:20 /100m swimming.
+    /// than 33 min/km running, 50 min/km hiking (a steep climb runs well below
+    /// the running floor), 8:20 /100m swimming.
     var axis: StreamPlot.Axis {
         switch self {
         case .runPace: .inverse(scale: 1000, floor: 0.5)
+        case .hikePace: .inverse(scale: 1000, floor: 1 / 3)
         case .swimPace: .inverse(scale: 100, floor: 0.2)
         case .speed: .linear(3.6)
         default: .linear(1)
@@ -182,7 +189,7 @@ extension WorkoutStreamModel.Kind {
     /// Y-axis tick label for a plotted value.
     func axisLabel(_ display: Double) -> String {
         switch self {
-        case .runPace, .swimPace: Self.pace(display)
+        case .runPace, .hikePace, .swimPace: Self.pace(display)
         default: "\(Int(display.rounded()))"
         }
     }
@@ -192,7 +199,7 @@ extension WorkoutStreamModel.Kind {
         case .speed: "km/h"
         case .power: "W"
         case .heartRate: "bpm"
-        case .runPace: "/km"
+        case .runPace, .hikePace: "/km"
         case .swimPace: "/100m"
         case .bikeCadence: "rpm"
         case .runCadence: "spm"
