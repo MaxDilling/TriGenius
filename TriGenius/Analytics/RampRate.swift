@@ -16,9 +16,6 @@ struct RampWeek: Identifiable, Sendable, Codable, Equatable {
 
 enum RampRate {
 
-    /// TrainingPeaks safe build band, CTL gained per week.
-    static let safeBand: ClosedRange<Double> = 5.0...8.0
-
     /// Weekly CTL change over the `weeks` most recent Monday-weeks, ascending,
     /// from an ascending PMC series. Weeks without a pre-week baseline point are
     /// omitted (no fabricated zero start); the in-progress week's `ctlEnd` is

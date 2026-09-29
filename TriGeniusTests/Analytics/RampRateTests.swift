@@ -45,7 +45,3 @@ private func series(days: Int, ctl: (Int) -> Double) -> [PMCPoint] {
     let last = RampRate.weeklySeries(points: points, weeks: 4, today: today).last!
     #expect(last.ctlEnd == 41)
 }
-
-@Test func safeBand_isFiveToEight() {
-    #expect(RampRate.safeBand == 5.0...8.0)
-}

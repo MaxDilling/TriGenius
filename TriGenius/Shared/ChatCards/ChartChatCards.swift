@@ -75,9 +75,11 @@ struct RampRateChatCard: View {
             }
         }
         .task {
+            let plan = ATPEngine.current()
             model = RampRateModel(
                 weeks: RampRate.weeklySeries(points: PMCEngine.current().points, weeks: weeks),
-                planned: RampRate.weeklySeries(points: ATPEngine.current()?.planCurve ?? [], weeks: weeks)
+                planned: RampRate.weeklySeries(points: plan?.planCurve ?? [], weeks: weeks),
+                maxRampRate: plan?.maxRampRate
             )
         }
     }

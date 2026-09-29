@@ -12,20 +12,30 @@ import Charts
 struct PMCDetailView: View {
     let result: PMCResult
     @State var range: TimeRange
-    @State private var planCurve: [PMCPoint] = []
+    @State private var plan: ATPPlan?
 
     var body: some View {
         let weeks = range.weeks(first: result.points.first?.date)
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                 PMCPanel(result: result, range: range)
+                SectionHeading("Ramp rate")
                 RampRateChart(model: RampRateModel(
                     weeks: RampRate.weeklySeries(points: result.points, weeks: weeks),
-                    planned: RampRate.weeklySeries(points: planCurve, weeks: weeks)))
-                    .cardTitle("Ramp rate · CTL per week")
-                    .contentCard()
+                    planned: RampRate.weeklySeries(points: plan?.planCurve ?? [], weeks: weeks),
+                    maxRampRate: plan?.maxRampRate))
                 SectionHeading("About Fitness & Form")
-                Text("Every workout gets a training load (TL) score from its duration and intensity — an hour at your threshold scores 100. Fitness (CTL, chronic training load) is your average daily load over roughly the last six weeks, with recent days counting more: it rises slowly as your body adapts to training. Fatigue (ATL, acute training load) is the same over roughly the last week: it jumps after hard days and falls quickly with rest. Form (TSB, training stress balance) is fitness minus fatigue. Negative form is normal while you build — you are tired, but getting fitter; positive form means you are fresh, which is what you want on race day. Form reads on the right-hand scale, with zero in the middle. Dashed lines are projected from your planned workouts. The ramp rate is how much your fitness changes per week, your plan's in grey behind it. The shaded band marks a build your body can absorb; rising faster raises the risk of injury and overtraining.")
+                Text("""
+                    Every workout gets a training load (TL) score from its duration and intensity — an hour at your threshold scores 100.
+
+                    Fitness (CTL, chronic training load) is your average daily load over roughly the last six weeks, with recent days counting more: it rises slowly as your body adapts to training.
+
+                    Fatigue (ATL, acute training load) is the same over roughly the last week: it jumps after hard days and falls quickly with rest.
+
+                    Form (TSB, training stress balance) is fitness minus fatigue. Negative form is normal while you build — you are tired, but getting fitter; positive form means you are fresh, which is what you want on race day. Dashed lines are projected from your planned workouts.
+
+                    The ramp rate is how much your fitness changes per week. With a season plan, the shaded band runs up to your plan's maximum ramp rate, and weeks above it turn red: building faster raises the risk of injury and overtraining.
+                    """)
                     .font(.subheadline).foregroundStyle(.secondary)
                     .contentCard()
             }
@@ -37,7 +47,7 @@ struct PMCDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .rangeBar($range)
-        .task { planCurve = ATPEngine.current()?.planCurve ?? [] }
+        .task { plan = ATPEngine.current() }
     }
 }
 
@@ -78,7 +88,7 @@ private struct PMCPanel: View {
 
     var body: some View {
         if let p = scrubDate.flatMap(nearestPoint) ?? points.last { readout(p) }
-        chart.cardTitle("Fitness, Fatigue & Form").contentCard()
+        chart
     }
 
     /// Health-style header: the three values at the scrubbed day, else today.
@@ -100,7 +110,7 @@ private struct PMCPanel: View {
     private func value(_ label: String, _ color: Color, _ value: Double) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(label).font(.caption.weight(.semibold)).foregroundStyle(color)
-            Text("\(Int(value.rounded()))").font(.title.bold()).monospacedDigit()
+            Text("\(Int(value.rounded()))").font(.largeTitle.bold()).monospacedDigit()
         }
     }
 

@@ -216,6 +216,8 @@ func tightDomain(_ points: [MetricPoint], topPad: Double = 0.18, bottomPad: Doub
 struct PMCStatTiles: View {
     let result: PMCResult
     let range: TimeRange
+    /// The season plan's max ramp rate; nil without a plan, and then the ramp tile has no status.
+    let maxRampRate: Double?
 
     var body: some View {
         if let s = result.snapshot {
@@ -230,14 +232,12 @@ struct PMCStatTiles: View {
     }
 
     private func rampTile(_ week: RampWeek, series: [RampWeek]) -> some View {
-        let band = RampRate.safeBand
         let format: (Double) -> String = { $0.formatted(.number.precision(.fractionLength(1)).sign(strategy: .always())) }
         return NavigationLink { PMCDetailView(result: result, range: range) } label: {
-            SummaryTile(title: "Ramp rate", color: Theme.Palette.info,
+            SummaryTile(title: "Ramp rate", color: Theme.Palette.fitness,
                         value: format(week.delta),
                         unit: "CTL/wk",
-                        status: band.contains(week.delta) ? "Sustainable build"
-                            : week.delta > band.upperBound ? "Above the safe ramp" : "Below build range",
+                        status: maxRampRate.map { week.delta > $0 ? "Above your max ramp" : "Within your max ramp" },
                         series: series.map { MetricPoint(date: $0.weekStart, value: $0.delta) },
                         zeroLine: true) { format($0.value) }
         }

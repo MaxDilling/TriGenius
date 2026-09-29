@@ -48,14 +48,23 @@ enum TimeRange: String, CaseIterable, Identifiable {
 }
 
 extension View {
-    /// The screen-wide range, full width beneath the navigation bar as in Apple Health.
-    /// Pinned there rather than scrolling with the content: it governs every chart
-    /// below, and those run far enough that a control scrolling out of reach is friction.
+    /// The screen-wide range, pinned rather than scrolling with the content: it governs
+    /// every chart below, and those run far enough that a control scrolling out of reach
+    /// is friction. On macOS it sits centred on the title's row, as in Calendar; elsewhere
+    /// that row is too narrow, so it runs full width beneath it, as in Apple Health.
     func rangeBar(_ range: Binding<TimeRange>) -> some View {
+        #if os(macOS)
+        toolbar {
+            ToolbarItem(placement: .principal) {
+                SegmentedPicker("Range", selection: range, options: TimeRange.allCases, label: \.rawValue)
+            }
+        }
+        #else
         safeAreaBar(edge: .top) {
             SegmentedPicker("Range", selection: range, options: TimeRange.allCases, fill: true, label: \.rawValue)
                 .padding(.horizontal, Theme.Spacing.l)
                 .padding(.bottom, Theme.Spacing.s)
         }
+        #endif
     }
 }

@@ -24,7 +24,7 @@ struct StatisticsView: View {
                 if let pmc = viewModel.pmc {
                     section("Fitness & Form") {
                         LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide, fill: 4), spacing: Theme.Spacing.m) {
-                            PMCStatTiles(result: pmc, range: viewModel.range)
+                            PMCStatTiles(result: pmc, range: viewModel.range, maxRampRate: viewModel.maxRampRate)
                         }
                     }
                 }

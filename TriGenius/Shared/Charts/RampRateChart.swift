@@ -3,15 +3,16 @@ import Charts
 
 // MARK: - Ramp rate chart
 //
-// Weekly CTL change as bars over the TrainingPeaks safe build band (shaded), the
-// ATP's planned change as grey bars behind them — as on the ATP chart. Positive
-// deltas inside the band are a sustainable build; above it, a ramp warning;
-// negative, recovery/detraining.
+// Weekly CTL change as bars, the ATP's planned change as grey bars behind them — as
+// on the ATP chart. With a season plan, a shaded band runs up to its max ramp rate —
+// the same line the ATP flags weeks against — and weeks above it turn red.
 
 struct RampRateModel: Codable, Equatable {
     var weeks: [RampWeek]
     /// The plan curve's change over the same weeks; weeks before the plan starts drop out.
     var planned: [RampWeek]
+    /// The season plan's max ramp rate; nil without a plan, and then no band is drawn.
+    var maxRampRate: Double?
 }
 
 struct RampRateChart: View {
@@ -21,11 +22,10 @@ struct RampRateChart: View {
 
     var body: some View {
         Chart {
-            RectangleMark(
-                yStart: .value("Band", RampRate.safeBand.lowerBound),
-                yEnd: .value("Band", RampRate.safeBand.upperBound)
-            )
-            .foregroundStyle(Theme.Palette.success.opacity(0.12))
+            if let max = model.maxRampRate {
+                RectangleMark(yStart: .value("Band", 0), yEnd: .value("Band", max))
+                    .foregroundStyle(Theme.Palette.success.opacity(0.12))
+            }
             ForEach(model.planned) { week in
                 BarMark(x: .value("Week", week.weekStart, unit: .weekOfYear),
                         y: .value("Planned ΔCTL", week.delta), stacking: .unstacked)
@@ -34,7 +34,7 @@ struct RampRateChart: View {
             ForEach(model.weeks) { week in
                 BarMark(x: .value("Week", week.weekStart, unit: .weekOfYear),
                         y: .value("ΔCTL", week.delta), stacking: .unstacked)
-                    .foregroundStyle(Theme.Palette.info)
+                    .foregroundStyle(color(week))
             }
             RuleMark(y: .value("Zero", 0))
                 .foregroundStyle(.secondary.opacity(0.4))
@@ -61,7 +61,7 @@ struct RampRateChart: View {
                     ChartTooltip(
                         title: "Week of \(week.weekStart.formatted(.dateTime.day().month(.abbreviated)))",
                         rows: [
-                            .init(color: Theme.Palette.info, label: "ΔCTL",
+                            .init(color: color(week), label: "ΔCTL",
                                   value: week.delta.formatted(.number.precision(.fractionLength(1)).sign(strategy: .always()))),
                         ] + model.planned.filter { $0.weekStart == week.weekStart }.map {
                             .init(color: Theme.Palette.plan, label: "Plan",
@@ -73,6 +73,10 @@ struct RampRateChart: View {
                     )
                 }
         }
+    }
+
+    private func color(_ week: RampWeek) -> Color {
+        week.delta > model.maxRampRate ?? .infinity ? Theme.Palette.danger : Theme.Palette.fitness
     }
 
     private func week(containing date: Date) -> RampWeek? {

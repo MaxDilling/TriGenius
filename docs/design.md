@@ -49,7 +49,7 @@ The Apple Health model: summaries in tiles, a tap pushes the full page.
 - **Header controls hit on their whole slice.** `.headerPill()` draws the glass capsule around one or more controls; each control's *label* wears `.headerSegment()` (full height, 8 pt each side; the pill adds 4 pt at its ends), so the whole slice is the hit target — never only the glyph's strokes.
 - **Anything that leads somewhere carries a `Chevron`** — tiles, rows, the plan line, a card that switches tabs.
 - **Drilling into data pushes a page; creating or editing opens a sheet.** A detail page puts its readout at the top — the latest value over the span charted, the scrubbed reading and its date while scrubbing (no tooltip) — then the chart on the plain background, then "About" text; adding a value is the `+` in the navigation bar.
-- **One `TimeRange`** (`M 3M 6M Y All`, `.rangeBar(_:)`, full width pinned beneath the navigation bar) for every analysis view; a detail page opens at the range of the screen it came from.
+- **One `TimeRange`** (`M 3M 6M Y All`, `.rangeBar(_:)`, full width pinned beneath the navigation bar; on macOS centred on the title's row) for every analysis view; a detail page opens at the range of the screen it came from.
 Gehe- **One `SegmentedPicker`** for every view switch in a heading, card or toolbar.
 - **One secondary axis, only for Form.** Form (TSB) is signed and rides the trailing axis centred on zero, filled from zero in the Form amber, faded beneath the load lines (`ATPSeasonChart`, `PMCDetailView`). Any other series on a different scale becomes its own chart sharing the time axis.
 

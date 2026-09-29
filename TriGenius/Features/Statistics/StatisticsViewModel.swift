@@ -18,6 +18,8 @@ final class StatisticsViewModel {
     private(set) var pmc: PMCResult?
     /// Actual vs planned fitness over the range, plus the plan just ahead.
     private(set) var ctlTrend = CTLTrendModel(actual: [], planned: [])
+    /// The season plan's max ramp rate, for the ramp tile's status.
+    private(set) var maxRampRate: Double?
     private(set) var week: WeekTargets?
     private(set) var share = SportShareModel(metric: .tss, weeks: [])
     private(set) var zones: [ZoneMetric: [Double]] = [:]
@@ -39,6 +41,7 @@ final class StatisticsViewModel {
         let result = PMCEngine.current()
         pmc = result
         let plan = ATPEngine.current()
+        maxRampRate = plan?.maxRampRate
         ctlTrend = CTLTrendModel.around(points: result.points, planCurve: plan?.planCurve ?? [],
                                         from: range.start(now: now) ?? result.points.first?.date, today: now)
         week = WeeklyTargets.thisWeek(weeklyStructure: weeklyStructure, atpPlan: plan,

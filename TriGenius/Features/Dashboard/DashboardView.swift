@@ -176,7 +176,7 @@ struct DashboardView: View {
             }
             if let result = viewModel.pmc, result.snapshot != nil {
                 LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide, fill: 4), spacing: Theme.Spacing.m) {
-                    PMCStatTiles(result: result, range: .oneMonth)
+                    PMCStatTiles(result: result, range: .oneMonth, maxRampRate: viewModel.atpPlan?.maxRampRate)
                 }
                 if !viewModel.ctlTrend.actual.isEmpty {
                     FitnessVsPlanCard(model: viewModel.ctlTrend)
