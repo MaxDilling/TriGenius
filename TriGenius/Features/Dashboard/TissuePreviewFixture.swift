@@ -9,7 +9,6 @@ enum TissuePreviewFixture {
     static let calendar: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: "Europe/Berlin")!
-        calendar.firstWeekday = 2
         return calendar
     }()
     static let locale = Locale(identifier: "en_US")

@@ -27,12 +27,12 @@ struct RampRateChart: View {
                     .foregroundStyle(Theme.Palette.success.opacity(0.12))
             }
             ForEach(model.planned) { week in
-                BarMark(x: .value("Week", week.weekStart, unit: .weekOfYear),
+                BarMark(x: .value("Week", week.weekStart, unit: .weekOfYear, calendar: TrainingVolume.weekCalendar()),
                         y: .value("Planned ΔCTL", week.delta), stacking: .unstacked)
                     .foregroundStyle(Theme.Palette.plan.opacity(0.45))
             }
             ForEach(model.weeks) { week in
-                BarMark(x: .value("Week", week.weekStart, unit: .weekOfYear),
+                BarMark(x: .value("Week", week.weekStart, unit: .weekOfYear, calendar: TrainingVolume.weekCalendar()),
                         y: .value("ΔCTL", week.delta), stacking: .unstacked)
                     .foregroundStyle(color(week))
             }
@@ -53,7 +53,7 @@ struct RampRateChart: View {
 
     @ChartContentBuilder private var scrubMarks: some ChartContent {
         if let date = scrubDate, let week = week(containing: date) {
-            RuleMark(x: .value("Scrub", week.weekStart, unit: .weekOfYear))
+            RuleMark(x: .value("Scrub", week.weekStart, unit: .weekOfYear, calendar: TrainingVolume.weekCalendar()))
                 .foregroundStyle(.secondary.opacity(0.6))
                 .lineStyle(StrokeStyle(lineWidth: 1))
                 .annotation(position: .top, spacing: 0,

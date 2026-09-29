@@ -244,7 +244,7 @@ struct PlannedWorkoutDetailView: View {
     /// where the context adds nothing.
     private var weeklyContext: (index: Int, count: Int, tssShare: Double)? {
         let cal = Calendar.current
-        let weekStart = TrainingVolume.weekStart(of: workout.date, calendar: cal)
+        let weekStart = TrainingVolume.weekStart(of: workout.date)
         guard let weekEnd = cal.date(byAdding: .day, value: 6, to: weekStart) else { return nil }
         let week = TrainingDataStore.shared.scheduledWorkouts(from: weekStart, to: weekEnd)
         guard week.count > 1 else { return nil }

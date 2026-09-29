@@ -412,11 +412,9 @@ nonisolated struct MetricPoint: Sendable, Identifiable {
     /// week's start day — the trend of a signal whose day-to-day noise swamps a
     /// first-to-last change.
     static func weeklyMeans(_ points: [MetricPoint]) -> [MetricPoint] {
-        let cal = Calendar.current
         var byWeek: [Date: [Double]] = [:]
         for p in points {
-            let week = cal.dateInterval(of: .weekOfYear, for: p.date)?.start ?? p.date
-            byWeek[week, default: []].append(p.value)
+            byWeek[TrainingVolume.weekStart(of: p.date), default: []].append(p.value)
         }
         return byWeek
             .map { MetricPoint(date: $0.key, value: $0.value.reduce(0, +) / Double($0.value.count)) }

@@ -246,7 +246,7 @@ nonisolated enum TissueLoadModel {
     /// average over them: −2 (under half) … +2 (over 1.6×), 0 inside 0.8–1.25×.
     private static func chronic(_ completed: [TissueSession], earliest: Int, today: Date,
                                 calendar: Calendar) -> [TissueGroup: [ChronicWeek]]? {
-        let thisWeek = calendar.dateInterval(of: .weekOfYear, for: today)?.start ?? today
+        let thisWeek = TrainingVolume.weekStart(of: today, calendar: calendar)
         let weeks = (1...TissueConstants.chronicWeeks).reversed().compactMap { calendar.date(byAdding: .day, value: -7 * $0, to: thisWeek) }
         guard let firstWeek = weeks.first,
               let earliestDate = calendar.date(byAdding: .day, value: earliest, to: today),

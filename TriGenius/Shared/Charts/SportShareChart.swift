@@ -74,7 +74,7 @@ struct SportShareChart: View {
                 ForEach(model.weeks) { week in
                     ForEach(week.slices, id: \.sport) { slice in
                         BarMark(
-                            x: .value("Week", week.weekStart, unit: .weekOfYear),
+                            x: .value("Week", week.weekStart, unit: .weekOfYear, calendar: TrainingVolume.weekCalendar()),
                             y: .value(model.metric.label, slice.value)
                         )
                         .foregroundStyle(Theme.Palette.sport(slice.sport))
@@ -100,7 +100,7 @@ struct SportShareChart: View {
         if let date = scrubDate,
            let week = model.weeks.last(where: { $0.weekStart <= date }),
            !week.slices.isEmpty {
-            RuleMark(x: .value("Scrub", week.weekStart, unit: .weekOfYear))
+            RuleMark(x: .value("Scrub", week.weekStart, unit: .weekOfYear, calendar: TrainingVolume.weekCalendar()))
                 .foregroundStyle(.secondary.opacity(0.6))
                 .lineStyle(StrokeStyle(lineWidth: 1))
                 .annotation(position: .top, spacing: 0,

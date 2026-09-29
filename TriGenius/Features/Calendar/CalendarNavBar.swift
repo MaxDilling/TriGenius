@@ -92,8 +92,8 @@ struct CalendarNavBar: View {
     // visible day (the "anchor") carries the accent circle; tapping a day makes it the
     // new leftmost day.
     private var dateStrip: some View {
-        let cal = Self.weekCalendar
-        let weekStart = TrainingVolume.weekStart(of: viewModel.firstVisibleDay, calendar: cal)
+        let cal = Calendar.current
+        let weekStart = TrainingVolume.weekStart(of: viewModel.firstVisibleDay)
         let days = (0..<7).compactMap { cal.date(byAdding: .day, value: $0, to: weekStart) }
         let leftIndex = days.firstIndex { cal.isDate($0, inSameDayAs: viewModel.firstVisibleDay) } ?? 0
         let span = max(1, min(visibleCount, 7 - leftIndex))
@@ -149,10 +149,4 @@ struct CalendarNavBar: View {
     /// The anchor day's accent circle and the grey range capsule share this diameter so
     /// the circle caps the capsule's left end flush (Apple-style).
     private static let circleDiameter: CGFloat = 30
-
-    private static let weekCalendar: Calendar = {
-        var c = Calendar.current
-        c.firstWeekday = 2
-        return c
-    }()
 }

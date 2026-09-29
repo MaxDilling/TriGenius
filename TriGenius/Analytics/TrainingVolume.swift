@@ -29,24 +29,27 @@ enum TrainingVolume {
         }
     }
 
-    /// A Monday-first calendar so week buckets are stable regardless of locale.
-    private static var weekCalendar: Calendar {
-        var cal = Calendar.current
-        cal.firstWeekday = 2 // Monday
+    /// The app's one week policy — ISO weeks (Monday-first, week 1 holds the first
+    /// Thursday) regardless of locale — over `base`'s time zone. Every week bucket,
+    /// week number and week-unit chart axis goes through this, never a bare `Calendar`.
+    nonisolated static func weekCalendar(_ base: Calendar = .current) -> Calendar {
+        var cal = base
+        cal.firstWeekday = 2
+        cal.minimumDaysInFirstWeek = 4
         return cal
     }
 
     /// Start of the Monday-week containing `date`.
-    static func weekStart(of date: Date, calendar: Calendar? = nil) -> Date {
-        let cal = calendar ?? weekCalendar
+    nonisolated static func weekStart(of date: Date, calendar: Calendar = .current) -> Date {
+        let cal = weekCalendar(calendar)
         return cal.dateInterval(of: .weekOfYear, for: date)?.start
             ?? cal.startOfDay(for: date)
     }
 
     /// The `weeks` most recent Monday-weeks, ascending (oldest → current).
     static func recentWeekStarts(weeks: Int = 6, today: Date = Date()) -> [Date] {
-        let cal = weekCalendar
-        let current = weekStart(of: today, calendar: cal)
+        let cal = Calendar.current
+        let current = weekStart(of: today)
         return (0..<weeks).reversed().compactMap {
             cal.date(byAdding: .weekOfYear, value: -$0, to: current)
         }
@@ -59,7 +62,6 @@ enum TrainingVolume {
         weeks: Int = 6,
         today: Date = Date()
     ) -> [WeekBucket] {
-        let cal = weekCalendar
         let starts = recentWeekStarts(weeks: weeks, today: today)
         guard let earliest = starts.first else { return [] }
 
@@ -67,7 +69,7 @@ enum TrainingVolume {
         for s in starts { acc[s] = [:] }
 
         for record in records where record.date >= earliest {
-            let ws = weekStart(of: record.date, calendar: cal)
+            let ws = weekStart(of: record.date)
             guard acc[ws] != nil else { continue } // outside the window
             // A multisport session contributes to each discipline it contains, so a
             // brick counts as one bike *and* one run session.

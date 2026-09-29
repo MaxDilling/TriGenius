@@ -70,17 +70,12 @@ final class CalendarViewModel {
     private(set) var needsCalendarAccess: Bool = false
 
     private static let modeKey = "calendar.mode"
-    private let cal: Calendar = {
-        var c = Calendar.current
-        c.firstWeekday = 2 // Monday
-        return c
-    }()
+    private let cal = TrainingVolume.weekCalendar()
 
     init(today: Date = Date()) {
         let day = Calendar.current.startOfDay(for: today)
-        var c = Calendar.current
-        c.firstWeekday = 2
-        let weekStartOfDay = TrainingVolume.weekStart(of: day, calendar: c)
+        let c = Calendar.current
+        let weekStartOfDay = TrainingVolume.weekStart(of: day)
         self.visibleMonth = CalendarViewModel.monthStart(of: day)
         self.monthFocusWeek = weekStartOfDay
         self.weekFocusDay = day
@@ -160,7 +155,7 @@ final class CalendarViewModel {
     /// Zoom back out from the week grid to the month containing the visible days.
     func showMonth() {
         visibleMonth = Self.monthStart(of: firstVisibleDay)
-        monthFocusWeek = TrainingVolume.weekStart(of: firstVisibleDay, calendar: cal)
+        monthFocusWeek = TrainingVolume.weekStart(of: firstVisibleDay)
         monthScrollTick += 1
         mode = .month   // didSet → load()
     }
@@ -171,7 +166,7 @@ final class CalendarViewModel {
         switch mode {
         case .month:
             visibleMonth = Self.monthStart(of: today)
-            monthFocusWeek = TrainingVolume.weekStart(of: today, calendar: cal)
+            monthFocusWeek = TrainingVolume.weekStart(of: today)
             monthScrollTick += 1
             loadWeekWindow(around: today)
         case .week:
@@ -212,7 +207,7 @@ final class CalendarViewModel {
     /// days visible after it — which the user sees immediately — are in the future and
     /// must already be loaded (otherwise their events pop in only after scrolling).
     func loadWeekWindow(around day: Date) {
-        let center = TrainingVolume.weekStart(of: day, calendar: cal)
+        let center = TrainingVolume.weekStart(of: day)
         let start = cal.date(byAdding: .day, value: -8 * 7, to: center) ?? center
         let end = cal.date(byAdding: .day, value: 12 * 7 - 1, to: center) ?? center
         loadData(from: start, to: end)
