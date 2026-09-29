@@ -42,6 +42,7 @@ struct LiveStrengthView: View {
                         }
                     }
                     .monospacedDigit()
+                    .headerSegment()
                 }
                 .headerPill()
                 Spacer()

@@ -33,14 +33,21 @@ extension View {
         frame(maxWidth: .infinity, alignment: .leading).cardSurface(padding: padding)
     }
 
-    /// One control in a screen header: a glass capsule at the shared chrome height.
-    /// `minWidth` matches the height so a single narrow glyph renders as a circle
-    /// rather than a tall oval; wider content (a label, two icons) grows past it.
+    /// A glass capsule at the shared chrome height around one or more `headerSegment`s.
+    /// `minWidth` matches the height so a lone narrow glyph renders as a circle.
     func headerPill() -> some View {
-        self.padding(.horizontal, Theme.Spacing.m)
+        self.padding(.horizontal, Theme.Spacing.xs)
             .frame(height: Theme.Chrome.pillHeight)
             .frame(minWidth: Theme.Chrome.pillHeight)
             .glassSurface(cornerRadius: Theme.Chrome.pillHeight / 2)
+    }
+
+    /// One control's slice of a `headerPill`, full height. A button wears it on its
+    /// *label* — outside, only the glyph's strokes are hit-testable.
+    func headerSegment() -> some View {
+        self.padding(.horizontal, Theme.Spacing.s)
+            .frame(maxHeight: .infinity)
+            .contentShape(.rect)
     }
 
     /// Control/navigation-layer Liquid Glass. Pass a `tint` to color the glass

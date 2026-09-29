@@ -227,13 +227,12 @@ struct WorkoutStreamDetail: View {
                 } label: {
                     Image(systemName: "square.2.layers.3d")
                         .foregroundStyle(overlay?.kind.color ?? .primary)
-                        .frame(width: Theme.Chrome.pillHeight, height: Theme.Chrome.pillHeight)
-                        .contentShape(.circle)
+                        .headerSegment()
                 }
                 .menuStyle(.button)
                 .buttonStyle(.plain)
                 .menuIndicator(.hidden)
-                .glassSurface(cornerRadius: Theme.Chrome.pillHeight / 2)
+                .headerPill()
             }
             if wide.isWide {
                 HStack(spacing: 0) {
@@ -244,20 +243,15 @@ struct WorkoutStreamDetail: View {
                                 disabled: !zoom.canZoomIn) { zoom.zoom(to: zoom.span / WorkoutStreamChart.Zoom.step) }
                 }
                 .buttonStyle(.plain)
-                .glassSurface(cornerRadius: Theme.Chrome.pillHeight / 2)
+                .headerPill()
             }
         }
     }
 
-    /// One step of the zoom pill: its whole slice clickable, not just the glyph,
-    /// and the change animated.
+    /// One step of the zoom pill, the change animated.
     private func zoomSegment(_ label: some View, shortcut: KeyEquivalent, disabled: Bool,
                              action: @escaping () -> Void) -> some View {
-        Button { withAnimation(.snappy, action) } label: {
-            label.padding(.horizontal, Theme.Spacing.m)
-                .frame(height: Theme.Chrome.pillHeight)
-                .contentShape(.rect)
-        }
+        Button { withAnimation(.snappy, action) } label: { label.headerSegment() }
         .keyboardShortcut(shortcut)
         .disabled(disabled)
     }

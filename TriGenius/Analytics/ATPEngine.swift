@@ -37,6 +37,21 @@ struct ATPPlan: Sendable {
     /// Completed TSS bucketed by week (Monday) — the "done" bars over the plan.
     let completedTSSByWeek: [Date: Double]
     let events: [ATPEventInput]
+    /// The athlete's max CTL ramp per week — also the band either side of the plan
+    /// within which actual fitness counts as on plan.
+    let maxRampRate: Double
+
+    /// The plan curve's fitness on `date`'s day; nil before the plan starts.
+    func plannedCTL(on date: Date) -> Double? {
+        planCurve.last { $0.date <= date }?.ctl
+    }
+
+    /// Actual minus planned fitness on `date`'s day; nil unless both curves reach it.
+    func fitnessGap(on date: Date) -> Double? {
+        guard let actual = actualCurve.last(where: { $0.date <= date })?.ctl,
+              let planned = plannedCTL(on: date) else { return nil }
+        return actual - planned
+    }
 }
 
 enum ATPEngine {
@@ -275,7 +290,8 @@ enum ATPEngine {
         let detraining = PMCEngine.decay(fromDate: todayDay, ctl0: ctlNow, through: horizon)
 
         return ATPPlan(weeks: weeks, planCurve: planCurve, detrainingCurve: detraining,
-                       actualCurve: history, completedTSSByWeek: completedTSSByWeek, events: events)
+                       actualCurve: history, completedTSSByWeek: completedTSSByWeek, events: events,
+                       maxRampRate: params.maxRampRate)
     }
 
     /// Read the store + the actual PMC and build the current plan. Mirrors

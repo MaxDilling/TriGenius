@@ -6,7 +6,7 @@ import Charts
 // TrainingPeaks-style season view: completed TSS as filled weekly bars with the
 // planned target drawn as a thin cap line above each (a cap, not a second bar, so
 // the two never stack — stacked bars would sum past the axis when you out-train the
-// plan). The three CTL curves (plan / actual / detraining) ride the right axis;
+// plan). The three CTL curves (plan dashed / actual solid / detraining) ride the right axis;
 // Swift Charts has no native secondary axis, so — like the PMC chart — CTL is
 // plotted in the TSS coordinate space and a trailing axis re-labels it. Hover
 // (pointer) reveals the exact DAY's values incl. Form (TSB), planned vs actual.
@@ -72,9 +72,6 @@ struct ATPSeasonChart: View {
     let onPinWeek: ((Date, Double) -> Void)?
     /// Clear a week's pin (tap its orange bar). Nil ⇒ read-only chart.
     let onUnpinWeek: ((Date) -> Void)?
-    /// Bleed the plot this far past its trailing edge so the chart reaches the card's
-    /// right edge (cancels the enclosing card padding). 0 ⇒ no bleed.
-    let edgeBleed: CGFloat
 
     // Pointer location (chart-frame coords) driving the hover tooltip, and the live
     // leading-edge date of the scrolled window — lets overlays clamp to the on-screen
@@ -106,11 +103,10 @@ struct ATPSeasonChart: View {
     private let periodSegments: [(period: ATPPeriod, start: Date, end: Date)]
 
     init(plan: ATPPlan, onPinWeek: ((Date, Double) -> Void)? = nil,
-         onUnpinWeek: ((Date) -> Void)? = nil, edgeBleed: CGFloat = 0) {
+         onUnpinWeek: ((Date) -> Void)? = nil) {
         self.plan = plan
         self.onPinWeek = onPinWeek
         self.onUnpinWeek = onUnpinWeek
-        self.edgeBleed = edgeBleed
 
         let start = plan.weeks.first?.weekStart ?? Date()
         let end = plan.planCurve.last?.date ?? start
@@ -170,10 +166,10 @@ struct ATPSeasonChart: View {
 
     // MARK: Marks
 
-    // Planned (grey) and completed (blue) as overlaid `RectangleMark`s — these
+    // Planned (light grey) and completed (dark grey) as overlaid `RectangleMark`s — these
     // position each rect explicitly and do NOT auto-stack the way `BarMark` does, so
     // the two share one baseline instead of summing past the axis. Completed drawn
-    // second → in front: the blue fills the grey plan from the bottom, and pokes
+    // second → in front: it fills the plan from the bottom, and pokes
     // above it when the week was out-trained.
     @ChartContentBuilder private var barMarks: some ChartContent {
         ForEach(plan.weeks) { w in
@@ -186,7 +182,7 @@ struct ATPSeasonChart: View {
             let r = barRange(b.week)
             RectangleMark(xStart: .value("Start", r.0), xEnd: .value("End", r.1),
                           yStart: .value("Zero", 0), yEnd: .value("Completed TSS", b.tss))
-                .foregroundStyle(Theme.Palette.info.opacity(0.85))
+                .foregroundStyle(Theme.Palette.plan.opacity(0.7))
         }
         // Pinned weeks: an orange cap at the planned top so manual overrides read at a glance.
         ForEach(plan.weeks.filter { $0.pinned && $0.weekStart != dragWeek }) { w in
@@ -246,10 +242,11 @@ struct ATPSeasonChart: View {
         ForEach(plan.planCurve) { p in
             LineMark(x: .value("Date", p.date), y: .value("CTL", scaleCTL(p.ctl)), series: .value("c", "plan"))
                 .foregroundStyle(Theme.Palette.fitness)
+                .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
         }
         ForEach(actual) { p in
             LineMark(x: .value("Date", p.date), y: .value("CTL", scaleCTL(p.ctl)), series: .value("c", "actual"))
-                .foregroundStyle(Theme.Palette.success)
+                .foregroundStyle(Theme.Palette.fitness)
         }
         ForEach(plan.detrainingCurve) { p in
             LineMark(x: .value("Date", p.date), y: .value("CTL", scaleCTL(p.ctl)), series: .value("c", "detrain"))
@@ -381,14 +378,13 @@ struct ATPSeasonChart: View {
                 .chartOverlay { proxy in HoverReadoutLayer(live: live, plan: plan, proxy: proxy) }
             }
             .frame(height: 280)
-            // Bleed the plot to the card's right edge (cancels the card's trailing padding).
-            .padding(.trailing, -edgeBleed)
+            // The event letters hang above the plot, outside the chart's frame.
+            .padding(.top, Theme.Spacing.l)
 
             HStack(spacing: Theme.Spacing.l) {
-                legend(Theme.Palette.plan.opacity(0.6), "Plan TSS")
-                legend(Theme.Palette.info, "Completed TSS")
-                legend(Theme.Palette.fitness, "Plan Fitness")
-                legend(Theme.Palette.success, "Actual Fitness")
+                legend(Theme.Palette.plan.opacity(0.28), "Plan TSS")
+                legend(Theme.Palette.plan.opacity(0.7), "Completed TSS")
+                legend(Theme.Palette.fitness, "Fitness")
                 Button { showForm.toggle() } label: {
                     HStack(spacing: Theme.Spacing.xs) {
                         Circle().fill(showForm ? Theme.Palette.form : .secondary.opacity(0.3)).frame(width: 7, height: 7)
@@ -404,11 +400,6 @@ struct ATPSeasonChart: View {
                 Label("\(rampWarningCount) week\(rampWarningCount == 1 ? "" : "s") ramp faster than your max — fitness is climbing aggressively.",
                       systemImage: "exclamationmark.triangle.fill")
                     .font(.caption2).foregroundStyle(Theme.Palette.danger)
-            }
-
-            if onPinWeek != nil {
-                Text("Press and hold a bar, then drag up or down to pin its TSS. Tap a pinned bar to remove.")
-                    .font(.caption2).foregroundStyle(.tertiary)
             }
         }
     }
@@ -590,8 +581,8 @@ private struct HoverReadoutLayer: View {
             if let w = r.weeksToEvent { row("Weeks to event", "\(w)") }
             row("Plan TSS", "\(Int(r.plannedTSS))")
             row("Completed TSS", "\(Int(r.completedTSS))")
-            row("Plan Fitness", fmt(r.planCTL), color: Theme.Palette.fitness)
-            row("Actual Fitness", fmt(r.actualCTL), color: Theme.Palette.success)
+            row("Plan Fitness", fmt(r.planCTL))
+            row("Actual Fitness", fmt(r.actualCTL))
             row("Plan Form", fmt(r.planTSB))
             row("Actual Form", fmt(r.actualTSB))
         }
@@ -601,11 +592,11 @@ private struct HoverReadoutLayer: View {
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.s, style: .continuous).strokeBorder(.separator))
     }
 
-    private func row(_ label: String, _ value: String, color: Color = .primary) -> some View {
+    private func row(_ label: String, _ value: String) -> some View {
         HStack {
             Text(label).foregroundStyle(.secondary)
             Spacer()
-            Text(value).foregroundStyle(color).fontWeight(.medium)
+            Text(value).fontWeight(.medium)
         }
         .font(.caption)
     }

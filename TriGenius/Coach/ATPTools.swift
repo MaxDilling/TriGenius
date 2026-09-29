@@ -251,7 +251,7 @@ final class ATPToolHandler: CoachToolHandler {
                 let wks = max(0, cal.dateComponents([.weekOfYear], from: today, to: a.date).weekOfYear ?? 0)
                 var d: [String: Any] = ["event_id": a.id, "name": a.name, "date": iso(a.date), "weeks_out": wks]
                 if let t = a.targetCTL { d["target_ctl"] = Int(t) }
-                if let proj = projectedCTL(plan, on: a.date) { d["projected_ctl"] = Int(proj) }
+                if let proj = plan.plannedCTL(on: a.date) { d["projected_ctl"] = Int(proj) }
                 root["next_a_race"] = d
             }
             let warn = plan.weeks.filter(\.rampExceeded).count
@@ -300,7 +300,7 @@ final class ATPToolHandler: CoachToolHandler {
                 : "\(days / 7) wks out"
             var s = "Next A race: \(a.name) on \(iso(a.date)) (\(countdown))"
             if let t = a.targetCTL { s += ", target CTL \(Int(t))" }
-            if let proj = projectedCTL(plan, on: a.date) { s += ", projected CTL \(Int(proj))" }
+            if let proj = plan.plannedCTL(on: a.date) { s += ", projected CTL \(Int(proj))" }
             lines.append(s + ".")
         }
 
@@ -333,10 +333,6 @@ final class ATPToolHandler: CoachToolHandler {
     private static func weekEnd(_ weekStart: Date) -> Date {
         Calendar.current.date(byAdding: .day, value: 6, to: weekStart) ?? weekStart
     }
-    private static func projectedCTL(_ plan: ATPPlan, on date: Date) -> Double? {
-        plan.planCurve.last(where: { $0.date <= weekEnd(TrainingVolume.weekStart(of: date)) })?.ctl
-    }
-
     private static let isoDay: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")

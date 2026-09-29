@@ -25,6 +25,18 @@ private func event(_ date: Date, _ prio: ATPEventPriority, ctl: Double? = nil) -
     #expect(ATPEngine.estimateStartingCTL(weeklyHours: 5, sport: "runner") == 45)
 }
 
+@Test func plannedCTL_andFitnessGap_readTheCurvesOnTheDay() {
+    let s = monday()
+    let day = { (n: Int) in cal.date(byAdding: .day, value: n, to: s)! }
+    let plan = ATPPlan(weeks: [], planCurve: (0..<10).map { PMCPoint(date: day($0), ctl: Double(40 + $0), atl: 0, tsb: 0) },
+                       detrainingCurve: [], actualCurve: (0..<5).map { PMCPoint(date: day($0), ctl: 38, atl: 0, tsb: 0) },
+                       completedTSSByWeek: [:], events: [], maxRampRate: 7)
+    #expect(plan.plannedCTL(on: day(-1)) == nil)
+    #expect(plan.plannedCTL(on: day(6).addingTimeInterval(14 * 3600)) == 46)
+    #expect(plan.fitnessGap(on: day(-1)) == nil)
+    #expect(plan.fitnessGap(on: day(3)) == -5)   // 38 − 43
+}
+
 @Test func build_nilWithoutAnchorEvent() {
     let s = monday()
     #expect(ATPEngine.build(params: params(s, ctl: 40, method: .weeklyTSS, avg: 600),

@@ -170,11 +170,10 @@ struct PerformanceMetricsSection: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
                 SectionHeading("Performance") {
-                    Button { showAdd = true } label: {
-                        Image(systemName: "plus.circle.fill").font(.title3)
-                    }
-                    .buttonStyle(.plain).foregroundStyle(.tint)
-                    .accessibilityLabel("Add performance value")
+                    Button { showAdd = true } label: { Image(systemName: "plus") }
+                        .buttonStyle(.glass)
+                        .buttonBorderShape(.circle)
+                        .accessibilityLabel("Add performance value")
                 }
                 let performance = available(.performance)
                 if !performance.isEmpty {

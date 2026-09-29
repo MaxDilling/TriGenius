@@ -379,14 +379,14 @@ struct CoachChatView: View {
                 }
                 .safeAreaBar(edge: .top) {
                     ScreenHeader("Coach") {
-                        HStack(spacing: Theme.Spacing.l) {
+                        HStack(spacing: 0) {
                             Button { showReport = true } label: {
-                                Image(systemName: "exclamationmark.bubble")
+                                Image(systemName: "exclamationmark.bubble").headerSegment()
                             }
                             .buttonStyle(.plain)
                             .help("Report an issue")
                             Button { viewModel.reset() } label: {
-                                Image(systemName: "arrow.counterclockwise")
+                                Image(systemName: "arrow.counterclockwise").headerSegment()
                             }
                             .buttonStyle(.plain)
                             .help("Reset session")

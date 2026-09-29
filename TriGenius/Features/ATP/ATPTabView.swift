@@ -2,9 +2,10 @@ import SwiftUI
 
 // MARK: - Plan tab (ATP)
 //
-// The season-plan surface: the chart fills the tab, while the methodology + volume
-// config and event list sit in a setup sheet behind the toolbar's edit button (edit
-// → Save → the deterministic engine recomputes and the chart updates).
+// The season-plan surface, laid out like a detail page: the next A race's readout,
+// the season chart on the plain background, the events, then "About". The
+// methodology + volume config sits in a setup sheet behind the header's Setup pill
+// (Setup → Save → the deterministic engine recomputes and the chart updates).
 
 struct ATPTabView: View {
 
@@ -27,23 +28,33 @@ struct ATPTabView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                 if let plan {
-                    chartCard(plan)
+                    season(plan)
                 } else {
                     emptyHint
                 }
-                eventsCard
+                eventsSection
+                SectionHeading("About the season plan")
+                Text("""
+                    Your season plan works backwards from your races. It divides the months ahead into periods — Base builds your aerobic foundation, Build adds race-specific intensity, Peak and Race cut the load so you arrive fresh — and gives each week a training-load target that raises your fitness at a rate your body can absorb, with a lighter recovery week every three or four weeks.
+
+                    Give every race a priority. The plan builds towards your A races and tapers for two weeks before each; a B race gets a one-week taper; C races are training days the plan doesn't change for.
+
+                    Each week's target becomes the weekly goal on your dashboard, and your coach plans your workouts around it. If a week will look different — a holiday, a work trip — pin its load, and the other weeks adjust to keep the season on track.
+                    """)
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .contentCard()
             }
-            .padding()
+            .padding(Theme.Spacing.l)
         }
         .safeAreaBar(edge: .top) {
-            // Pencil, not a gear: the sheet edits *this plan*, and a gear here reads
-            // as app settings. The bare glyph, not `square.and.pencil` — that one's
-            // nib overshoots the square and sits visibly high in a round pill.
+            // A word, not a glyph: a pencil or gear leaves open whether it edits the
+            // plan, an event or the app.
             ScreenHeader("Plan") {
-                Button { showingSetup = true } label: { Image(systemName: "pencil") }
-                    .buttonStyle(.plain)
-                    .headerPill()
-                    .accessibilityLabel("Edit plan")
+                Button { showingSetup = true } label: {
+                    Text("Setup").font(.subheadline.weight(.semibold)).headerSegment()
+                }
+                .buttonStyle(.plain)
+                .headerPill()
             }
             .padding(.horizontal)
             .padding(.vertical, Theme.Spacing.s)
@@ -71,7 +82,7 @@ struct ATPTabView: View {
         }
     }
 
-    // MARK: Setup (behind the gear)
+    // MARK: Setup sheet
 
     /// The methodology + volume config, presented from the toolbar edit button so the Plan
     /// tab itself stays focused on the season chart + events. Events live on the tab,
@@ -135,24 +146,29 @@ struct ATPTabView: View {
 
     // MARK: Events (below the chart)
 
-    private var eventsCard: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-            if events.isEmpty {
-                Text("Add at least one A/B event to anchor the plan.")
-                    .font(.caption).foregroundStyle(.secondary)
+    private var eventsSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            SectionHeading("Events") {
+                Button {
+                    editingEvent = EventDraft(id: UUID().uuidString, name: "", date: startDate,
+                                              eventType: .triOlympic, priority: .a, targetCTL: nil)
+                } label: { Image(systemName: "plus") }
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .accessibilityLabel("Add event")
             }
-            ForEach(upcomingEvents) { e in
-                Button { editingEvent = e } label: { eventRow(e) }
-                    .buttonStyle(.plain)
+            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
+                if events.isEmpty {
+                    Text("Add at least one A/B event to anchor the plan.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(upcomingEvents) { e in
+                    Button { editingEvent = e } label: { eventRow(e) }
+                        .buttonStyle(.plain)
+                }
             }
+            .contentCard()
         }
-        .cardTitle("Events") {
-            Button {
-                editingEvent = EventDraft(id: UUID().uuidString, name: "", date: startDate,
-                                          eventType: .triOlympic, priority: .a, targetCTL: nil)
-            } label: { Image(systemName: "plus.circle.fill") }
-        }
-        .contentCard()
     }
 
     /// What the list shows. Display only — `events` keeps every race, so the plan
@@ -175,6 +191,7 @@ struct ATPTabView: View {
             }
             Spacer()
             if let c = e.targetCTL { Text("\(Int(c)) CTL").font(.caption).foregroundStyle(.secondary) }
+            Chevron()
         }
         .contentShape(Rectangle())
     }
@@ -205,18 +222,13 @@ struct ATPTabView: View {
 
     // MARK: Chart
 
-    /// The week whose Mon–Sun span contains today; falls back to the first upcoming
-    /// week (e.g. a plan that starts in the future).
-    private func currentWeek(_ plan: ATPPlan) -> ATPWeekPlan? {
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        return plan.weeks.first { wk in
-            let end = cal.date(byAdding: .day, value: 6, to: wk.weekStart) ?? wk.weekStart
-            return today >= wk.weekStart && today <= end
-        } ?? plan.weeks.first { ($0.weeksToNextEvent ?? -1) >= 0 }
-    }
-
-    private func chartCard(_ plan: ATPPlan) -> some View {
+    @ViewBuilder
+    private func season(_ plan: ATPPlan) -> some View {
+        let today = Calendar.current.startOfDay(for: Date())
+        if let race = plan.events.filter({ $0.priority == .a && $0.date >= today }).min(by: { $0.date < $1.date }),
+           let raceCTL = plan.plannedCTL(on: race.date) {
+            readout(race, raceCTL: raceCTL, today: today, plan: plan)
+        }
         ATPSeasonChart(
             plan: plan,
             onPinWeek: { week, tss in
@@ -224,20 +236,43 @@ struct ATPTabView: View {
             },
             onUnpinWeek: { week in
                 TrainingDataStore.shared.clearATPOverride(weekStart: week)
-            },
-            edgeBleed: Theme.Spacing.l)
-        .cardTitle("Season") {
-            if let current = currentWeek(plan) {
-                Text("\(current.period.label) · \(Int(current.plannedTSS)) TSS this week"
-                     + (current.weeksToNextEvent.map { " · \($0) wk to event" } ?? ""))
-                    .font(.caption).foregroundStyle(.secondary)
+            })
+    }
+
+    /// Health-style readout: the fitness the plan builds for the next A race, and how
+    /// today's actual fitness stands against the plan's.
+    private func readout(_ race: ATPEventInput, raceCTL: Double, today: Date, plan: ATPPlan) -> some View {
+        let weeks = Calendar.current.dateComponents([.weekOfYear], from: today, to: race.date).weekOfYear ?? 0
+        let gap = plan.fitnessGap(on: today)
+        return VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Circle().fill(Theme.Palette.fitness).frame(width: 9, height: 9)
+                Text("\(Int(raceCTL.rounded()))").font(.largeTitle.bold()).monospacedDigit()
+                Text("CTL").font(.subheadline).foregroundStyle(.secondary)
+                if let gap { gapLabel(gap, band: plan.maxRampRate) }
             }
+            Text([race.name.isEmpty ? "Unnamed event" : race.name, "A race",
+                  race.date.formatted(.dateTime.day().month(.abbreviated).year()),
+                  weeks > 0 ? "in \(weeks) wk" : "this week"].joined(separator: " · "))
+                .font(.subheadline).foregroundStyle(.secondary)
         }
-        .contentCard()
+    }
+
+    /// Within one week of max ramp either side counts as on plan. Off it in either
+    /// direction is a warning: fitness above the plan means load rose faster than planned.
+    private func gapLabel(_ gap: Double, band: Double) -> some View {
+        let onPlan = abs(gap) <= band
+        return HStack(spacing: 2) {
+            if !onPlan { Image(systemName: gap < 0 ? "arrow.down" : "arrow.up") }
+            Text(onPlan ? "on plan today" : "\(Int(abs(gap).rounded())) \(gap < 0 ? "below" : "above") plan today")
+        }
+        .font(.subheadline.weight(.semibold))
+        .foregroundStyle(onPlan ? Theme.Palette.success : Theme.Palette.warning)
+        .padding(.leading, Theme.Spacing.s)
     }
 
     private var emptyHint: some View {
-        Text("No plan yet — tap the gear to set your volume and add an A/B event, then Save.")
+        Text("No plan yet — tap Setup to set your volume and add an A/B event, then Save.")
             .font(.callout).foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.top, Theme.Spacing.xl)

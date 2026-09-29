@@ -46,6 +46,7 @@ struct CalendarNavBar: View {
                     Text(viewModel.monthLabel).font(.title3.weight(.semibold))
                 }
                 .padding(.horizontal, Theme.Spacing.m)
+                .headerSegment()
             }
             .buttonStyle(.plain)
             .headerPill()
@@ -70,7 +71,7 @@ struct CalendarNavBar: View {
     // Jump back to today — sits beside the (mockup) search/add controls.
     private var todayPill: some View {
         Button { viewModel.goToToday() } label: {
-            Text("Today").font(.subheadline.weight(.semibold))
+            Text("Today").font(.subheadline.weight(.semibold)).headerSegment()
         }
         .buttonStyle(.plain)
         .headerPill()
@@ -78,11 +79,12 @@ struct CalendarNavBar: View {
 
     // Search (still a visual mockup, by design) + add (creates a planned workout).
     private var controls: some View {
-        HStack(spacing: Theme.Spacing.l) {
+        HStack(spacing: 0) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
+                .headerSegment()
             Button(action: onAdd) {
-                Image(systemName: "plus")
+                Image(systemName: "plus").headerSegment()
             }
             .buttonStyle(.plain)
         }

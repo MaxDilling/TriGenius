@@ -144,7 +144,7 @@ struct DashboardView: View {
                         onBackendChanged: onBackendChanged
                     )
                 } label: {
-                    Image(systemName: "gearshape").font(.title3)
+                    Image(systemName: "gearshape").font(.title3).headerSegment()
                 }
                 .buttonStyle(.plain)
                 .headerPill()
