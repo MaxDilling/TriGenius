@@ -15,6 +15,10 @@ A planned strength session worked through in the app, set by set — started fro
 - **Save** → `DataSyncCoordinator.saveLiveStrength` (see `docs/store.md`); **Discard** drops the file and leaves the plan untouched. Nothing is written to Apple Health.
 - The exercise demo and form cues are placeholders until the library carries media.
 
+## Activities (`Features/Activities/`)
+
+The search tab (`Tab(role: .search)` in `RootTabView`): every completed workout, read-only, newest first in training weeks. `TrainingDataStore.activityListItems()` fetches only the row columns (never streams or curves) into `ActivityListItem`s; `ActivityList` (`Analytics/`, pinned by `ActivityListTests`) searches them — every word must appear in name, sports or month + year — filters by sport and totals each week. Under a sport filter a multisport session is listed whole, but the week totals count only that sport's legs (`sportContributions`, as in `TrainingVolume`). A row opens `WorkoutDetailDestination`. Rows are the shared `WorkoutRow`, as in the Dashboard's Up Next.
+
 ## `App/SparkleUpdater.swift` (macOS only)
 
 Sparkle auto-update for the **Developer-ID** build — the one `Scripts/release.sh` publishes to GitHub Releases, **not** App-Store-compatible (guideline 2.4.5). `SPUStandardUpdaterController` + a "Check for Updates…" app-menu command.

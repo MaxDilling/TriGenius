@@ -295,7 +295,7 @@ struct DashboardView: View {
         VStack(spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                 if index > 0 {
-                    Divider().padding(.leading, 62).padding(.trailing, Theme.Spacing.m)
+                    Divider().padding(.leading, WorkoutRow.dividerInset).padding(.trailing, Theme.Spacing.m)
                 }
                 upNextRow(item)
             }
@@ -303,7 +303,6 @@ struct DashboardView: View {
         .frame(maxWidth: .infinity)
     }
 
-    /// One compact row in the Up Next tile: date column, sport dot, title + summary.
     @ViewBuilder private func upNextRow(_ item: UpNextItem) -> some View {
         NavigationLink {
             if let record = item.record {
@@ -312,46 +311,10 @@ struct DashboardView: View {
                 PlannedWorkoutDetailView(workout: planned)
             }
         } label: {
-            HStack(spacing: Theme.Spacing.m) {
-                dateColumn(item.date)
-
-                ZStack {
-                    Circle().fill(item.family.color.opacity(0.25))
-                    Image(systemName: item.family.icon)
-                        .font(.headline)
-                        .foregroundStyle(item.family.color)
-                }
-                .frame(width: 44, height: 44)
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(item.title).font(.headline).lineLimit(1)
-                    Text(item.summary).font(.subheadline).foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 0)
-
-                if item.completed {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(Theme.Palette.success)
-                }
-                Chevron()
-            }
-            .padding(.vertical, Theme.Spacing.m)
-            .padding(.horizontal, Theme.Spacing.l)
-            .contentShape(.rect)
+            WorkoutRow(date: item.date, family: item.family, title: item.title,
+                       summary: item.summary, checkmark: item.completed)
         }
         .buttonStyle(.plain)
-    }
-
-    private func dateColumn(_ date: Date) -> some View {
-        let isToday = Calendar.current.isDateInToday(date)
-        return VStack(spacing: 2) {
-            Text(date.formatted(.dateTime.weekday(.abbreviated)).uppercased())
-                .font(.caption).foregroundStyle(isToday ? Color.accentColor : .secondary)
-            Text(date.formatted(.dateTime.day()))
-                .font(.title2.bold())
-                .foregroundStyle(isToday ? Color.accentColor : .primary)
-        }
-        .frame(width: 34)
     }
 }
 

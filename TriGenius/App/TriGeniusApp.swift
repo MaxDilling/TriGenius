@@ -188,6 +188,10 @@ struct RootTabView: View {
             Tab("Calendar", systemImage: "calendar", value: CoachRouter.RootTab.calendar) {
                 NavigationStack { CalendarView() }
             }
+
+            Tab("Activities", systemImage: "magnifyingglass", value: CoachRouter.RootTab.activities, role: .search) {
+                NavigationStack { ActivitiesView() }
+            }
         }
         // Tab bar on the phone, sidebar on iPad regular width and macOS — the wide
         // shell the dashboard's column layouts assume.

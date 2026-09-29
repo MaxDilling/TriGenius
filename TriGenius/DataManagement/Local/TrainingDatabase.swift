@@ -1711,6 +1711,16 @@ final class TrainingDataStore {
         return (try? context.fetch(descriptor)) ?? []
     }
 
+    /// Every completed activity as an activity-list row, newest first. Fetches only
+    /// the columns a row needs, never the streams or curves.
+    func activityListItems() -> [ActivityListItem] {
+        var descriptor = FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.isCompleted })
+        descriptor.propertiesToFetch = [\.id, \.date, \.startMinute, \.sport, \.name,
+                                        \.durationMinutes, \.distanceKm, \.tss, \.segmentsJSON]
+        return ((try? context.fetch(descriptor)) ?? []).map(ActivityListItem.init)
+            .sorted { $0.start > $1.start }
+    }
+
     /// Total number of stored completed activities.
     var count: Int {
         (try? context.fetchCount(FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.isCompleted }))) ?? 0

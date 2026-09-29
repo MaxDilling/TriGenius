@@ -4,9 +4,8 @@ import SwiftUI
 //
 // The floating glass control layer above the grid, mirroring Apple Calendar. The
 // control row carries the month on the left — a back pill that zooms out in week
-// mode, the screen's big title in month mode — and a right-hand pill with search +
-// add ("+" opens the workout editor; search is a mockup only, per the design
-// reference). Below it, week mode shows a date strip of the visible week that
+// mode, the screen's big title in month mode — and a right-hand "+" that opens the
+// workout editor. Below it, week mode shows a date strip of the visible week that
 // highlights the selected day and the columns currently on screen and tabs to a
 // day; month mode shows the weekday letters.
 
@@ -68,7 +67,7 @@ struct CalendarNavBar: View {
         }
     }
 
-    // Jump back to today — sits beside the (mockup) search/add controls.
+    // Jump back to today — sits beside the add control.
     private var todayPill: some View {
         Button { viewModel.goToToday() } label: {
             Text("Today").font(.subheadline.weight(.semibold)).headerSegment()
@@ -77,17 +76,11 @@ struct CalendarNavBar: View {
         .headerPill()
     }
 
-    // Search (still a visual mockup, by design) + add (creates a planned workout).
     private var controls: some View {
-        HStack(spacing: 0) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-                .headerSegment()
-            Button(action: onAdd) {
-                Image(systemName: "plus").headerSegment()
-            }
-            .buttonStyle(.plain)
+        Button(action: onAdd) {
+            Image(systemName: "plus").headerSegment()
         }
+        .buttonStyle(.plain)
         .font(.body.weight(.medium))
         .headerPill()
     }
