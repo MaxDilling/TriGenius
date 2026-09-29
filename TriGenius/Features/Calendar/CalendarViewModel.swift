@@ -197,19 +197,19 @@ final class CalendarViewModel {
 
     /// Update the month header + load window as the continuous month grid scrolls.
     /// The header shows the month of the row's midweek day (its dominant month).
-    func updateMonthScroll(topWeekStart: Date) {
-        let midweek = cal.date(byAdding: .day, value: 3, to: topWeekStart) ?? topWeekStart
+    func updateMonthScroll(centerWeekStart: Date) {
+        let midweek = cal.date(byAdding: .day, value: 3, to: centerWeekStart) ?? centerWeekStart
         // Only write on an *actual* month change: this runs on every scroll frame, and
         // `visibleMonth` is observed by every day cell's `isInVisibleMonth` dimming — a
         // same-value assignment would still re-invalidate them all, per frame.
         let month = Self.monthStart(of: midweek)
         if month != visibleMonth { visibleMonth = month }
-        ensureWeekLoaded(around: topWeekStart)
+        ensureWeekLoaded(around: centerWeekStart)
     }
 
     /// Load a window around `day` for the continuous grids. Skewed forward (8 weeks
-    /// back, 12 ahead) because the month view pins its focus week to the *top*, so the
-    /// weeks visible below it — which the user sees immediately — are in the future and
+    /// back, 12 ahead) because the week grid pins its focus day to the *left*, so the
+    /// days visible after it — which the user sees immediately — are in the future and
     /// must already be loaded (otherwise their events pop in only after scrolling).
     func loadWeekWindow(around day: Date) {
         let center = TrainingVolume.weekStart(of: day, calendar: cal)

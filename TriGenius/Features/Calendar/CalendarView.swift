@@ -144,12 +144,14 @@ private struct MonthScrollView: View {
         }
         .scrollPosition($scrollPosition)
         .scrollIndicators(.hidden)
-        .onScrollGeometryChange(for: CGFloat.self) { $0.contentOffset.y } action: { _, y in
+        .onScrollGeometryChange(for: CGFloat.self) {
+            $0.contentOffset.y + $0.containerSize.height / 2
+        } action: { _, y in
             guard ready else { return }
             let weeks = viewModel.monthScrollWeeks
             guard !weeks.isEmpty else { return }
             let index = max(0, min(weeks.count - 1, Int((y / rowHeight).rounded(.down))))
-            viewModel.updateMonthScroll(topWeekStart: weeks[index])
+            viewModel.updateMonthScroll(centerWeekStart: weeks[index])
         }
         .onAppear {
             guard !didInitialScroll else { return }
@@ -157,13 +159,13 @@ private struct MonthScrollView: View {
             // Defer so the lazy rows realise their layout before we scroll to the
             // focus week (otherwise it no-ops and we start at the first backing week).
             DispatchQueue.main.async {
-                scrollPosition.scrollTo(id: viewModel.monthFocusWeek)
+                scrollPosition.scrollTo(id: viewModel.monthFocusWeek, anchor: .center)
                 DispatchQueue.main.async { ready = true }
             }
         }
         .onChange(of: viewModel.monthScrollTick) { _, _ in
             ready = false
-            scrollPosition.scrollTo(id: viewModel.monthFocusWeek)
+            scrollPosition.scrollTo(id: viewModel.monthFocusWeek, anchor: .center)
             DispatchQueue.main.async { ready = true }
         }
     }
