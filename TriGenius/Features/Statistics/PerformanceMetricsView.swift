@@ -28,6 +28,9 @@ struct PerformanceMetric: Identifiable {
     let storageUnit: String
     /// Renders a raw stored value as a display string.
     let format: (Double) -> String
+    /// The smallest difference `format` shows, in the unit it shows — seconds for a pace.
+    /// The detail chart's ticks never sit closer, or two labels would read the same.
+    var resolution: Double = 1
     /// Parses a display string back into the raw stored value (inverse of `format`),
     /// or nil when the input is malformed — drives manual-entry validation.
     let parse: (String) -> Double?
@@ -74,7 +77,7 @@ struct PerformanceMetric: Identifiable {
                           estimateNote: "Estimated from heart rate and power in your rides.",
                           about: "Critical power (CP) is the highest power, in watts, you can hold without steadily draining your anaerobic reserve — the boundary between efforts that settle and efforts that end within minutes. Above CP you spend W′, a fixed store of work; below it, W′ refills. It sits a little above FTP. The app works it out from how hard your heart works at a given power, and raises it whenever a ride proves you can do more."),
         PerformanceMetric(key: "w_prime", title: "W′", group: .performance, accent: SportFamily.bike.color,
-                          unit: "kJ", storageUnit: "kj", format: oneDecimalFormat, parse: doubleParse, higherIsBetter: true,
+                          unit: "kJ", storageUnit: "kj", format: oneDecimalFormat, resolution: 0.1, parse: doubleParse, higherIsBetter: true,
                           estimateNote: "Estimated from the hardest efforts in your rides.",
                           about: "W′ (\"W prime\") is the amount of work, in kilojoules, you can do above your critical power before you have to slow down — your anaerobic reserve for attacks, climbs and sprints. Riding above CP spends it; riding below CP refills it over minutes. It is typically 10–25 kJ. The app reads it from what your rides prove you have spent at once, so it only rises when a ride shows it; it changes slowly with training."),
         PerformanceMetric(key: "running_ftp", title: "FTP (Run)", group: .performance, accent: SportFamily.run.color,
@@ -99,7 +102,7 @@ struct PerformanceMetric: Identifiable {
                           unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true,
                           about: "Your maximum heart rate is the highest your heart can beat at an all-out effort, and the upper end of your heart-rate range. It depends mostly on your genes and declines slowly with age — training barely changes it, so a higher max HR does not mean you are fitter. A new value usually just means your watch caught a harder effort than before."),
         PerformanceMetric(key: "weight_kg", title: "Weight", group: .performance, accent: Theme.Palette.body,
-                          unit: "kg", storageUnit: "kg", format: oneDecimalFormat, parse: doubleParse, higherIsBetter: false,
+                          unit: "kg", storageUnit: "kg", format: oneDecimalFormat, resolution: 0.1, parse: doubleParse, higherIsBetter: false,
                           about: "Your weight directly affects your VO₂max: at the same fitness, a lighter body gets a higher VO₂max and a heavier one a lower value. On the bike, less weight means faster climbs at the same power, because what counts uphill is watts per kilogram. Weight swings by 1–2 kg from day to day through water, food and stored carbohydrate (glycogen), so look at the trend over weeks."),
         // Recovery (daily wellness signals)
         PerformanceMetric(key: "resting_hr", title: "Resting HR", group: .recovery, accent: Theme.Palette.recovery,
@@ -112,13 +115,23 @@ struct PerformanceMetric: Identifiable {
                           unit: "", storageUnit: "", format: intFormat, parse: doubleParse, higherIsBetter: true,
                           about: "A score from 0 to 100 your watch gives each night, based on how long you slept, how much time you spent in deep and REM sleep, and how restless you were. Every manufacturer calculates it differently, so look at the trend rather than single nights. Several poor nights in a row mean your body recovers less from training."),
         PerformanceMetric(key: "sleep_duration_h", title: "Sleep Duration", group: .recovery, accent: Theme.Palette.recovery,
-                          unit: "h", storageUnit: "h", format: oneDecimalFormat, parse: doubleParse, higherIsBetter: true,
+                          unit: "h", storageUnit: "h", format: oneDecimalFormat, resolution: 0.1, parse: doubleParse, higherIsBetter: true,
                           about: "How long you slept. Most adults need 7–9 hours, and more when training a lot. Your body adapts to training mainly while you sleep: in deep sleep it releases most of its growth hormone, which drives muscle repair, and it refills its energy stores. Several short nights make training harder and less effective."),
     ]
 
     /// The markers the athlete can hand-enter (physiological capacity + weight);
     /// daily wellness signals are provider-driven and excluded.
     static let editable: [PerformanceMetric] = all.filter { $0.group == .performance }
+
+    /// The detail chart's y axis in stored units. A pace is stored as speed, so its ticks are
+    /// laid out in the seconds the labels show and mapped back.
+    func axis(_ points: [MetricPoint]) -> MetricAxis.Axis? {
+        guard let d = paceDistanceM else {
+            return MetricAxis.axis(points.map(\.value), resolution: resolution)
+        }
+        guard let a = MetricAxis.axis(points.map { d / $0.value }, resolution: resolution) else { return nil }
+        return .init(domain: (d / a.domain.upperBound)...(d / a.domain.lowerBound), ticks: a.ticks.map { d / $0 })
+    }
 
     /// One point as the athlete reads it: an estimate is prefixed "~" so a derived
     /// number is never mistaken for a measured one.
@@ -138,8 +151,8 @@ struct PerformanceMetric: Identifiable {
     private static func paceFromSpeed(_ distanceM: Double) -> (Double) -> String {
         { speed in
             guard speed > 0 else { return "—" }
-            let secs = distanceM / speed
-            return String(format: "%d:%02d", Int(secs) / 60, Int(secs) % 60)
+            let secs = Int((distanceM / speed).rounded())
+            return String(format: "%d:%02d", secs / 60, secs % 60)
         }
     }
     /// Inverse of `paceFromSpeed`: parse "m:ss" pace over `distanceM` back into m/s.
@@ -416,7 +429,7 @@ struct MetricDetailView: View {
 
     @ViewBuilder
     private var chart: some View {
-        if visiblePoints.count >= 2 {
+        if visiblePoints.count >= 2, let axis = metric.axis(visiblePoints) {
             Chart {
                 // One `LineMark` per stretch, not per point: `lineStyle` applies to a
                 // whole *series*, so a per-point dash makes the last point style the
@@ -428,8 +441,8 @@ struct MetricDetailView: View {
                                  series: .value("Stretch", stretch.id))
                             .interpolationMethod(.linear)
                             .foregroundStyle(metric.accent.opacity(metric.group == .recovery ? 0.35 : 1))
-                            // An estimate carried forward, or resting on a window too
-                            // thin for the aggregate to be robust, is not a reading;
+                            // A stand-in for the estimate, or an estimate still calibrating
+                            // or resting on thin or old evidence, is not our reading;
                             // drawn solid it is indistinguishable from one.
                             .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round,
                                                    dash: stretch.isProvisional ? [1, 4] : []))
@@ -459,9 +472,9 @@ struct MetricDetailView: View {
             .chartScrubbing($scrubDate) { date in
                 visiblePoints.min(by: { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) })?.date
             }
-            .chartYScale(domain: tightDomain(visiblePoints))
+            .chartYScale(domain: axis.domain)
             .chartYAxis {
-                AxisMarks { value in
+                AxisMarks(values: axis.ticks) { value in
                     AxisGridLine()
                     AxisValueLabel {
                         if let v = value.as(Double.self) { Text(metric.format(v)) }
