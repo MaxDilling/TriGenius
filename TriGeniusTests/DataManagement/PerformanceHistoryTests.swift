@@ -3,7 +3,7 @@ import Foundation
 @testable import TriGenius
 
 // Pins `PerformanceHistory.estimatedSeries` — the progression of a threshold that
-// has no stored series of its own (`FTPEstimate` / `LTHREstimate`), re-resolved at
+// has no stored series of its own (`CriticalPowerEstimate` / `LTHREstimate`), re-resolved at
 // every date one of its inputs moved. Dates are relative to now because the
 // resolver anchors the LTHR observation window on today.
 struct PerformanceHistoryTests {
@@ -17,60 +17,109 @@ struct PerformanceHistoryTests {
         .init(date: date, value: value, rank: rank)
     }
 
-    // MARK: FTP from VO2max + mass
+    // MARK: Cycling VO2max, CP/W′ and FTP
 
-    @Test func ftpSeriesMovesWithItsInputs() {
-        let history = PerformanceHistory(
-            byKey: [
-                "vo2max_cycling": [entry(ago(100), 50)],
-                "weight_kg": [entry(ago(100), 70), entry(ago(10), 72)],
-            ],
-            estimateFTPFromVO2max: true)
-        let series = history.estimatedSeries("cycling_ftp")
-        // 0.0582413 * 50 * 70 = 203.84 -> 204; * 72 = 209.67 -> 210, held to today.
-        #expect(series.map(\.value) == [204, 210, 210])
-        #expect(series.map(\.isEstimated) == [true, true, true])
+    /// Eight rides with power and heart rate, a floor from a hard 5-minute effort on each.
+    private var rides: [PerformanceHistory.ActivityEvidence] {
+        let floors = CriticalPowerEstimate.floors(power: [Double](repeating: 150, count: 600)
+            + [Double](repeating: 350, count: 300) + [Double](repeating: 150, count: 600))
+        return (0 ..< 8).map { k in
+            .init(date: ago(Double(40 - 4 * k)), steadyHR20: 0, peakHR: 180,
+                  submaxProfile: [480: (watts: 240 + Double(k % 3) * 10, hr: 152),
+                                  1200: (watts: 225, hr: 156)],
+                  wPrimeFloors: floors, family: .bike)
+        }
     }
 
-    /// The series has to carry the metric it is named after. `estimatedSeries` maps the
-    /// resolved snapshot back through a switch whose `default` is LT pace, so a key
-    /// without its own case silently published pace under another metric's name.
-    @Test func theVO2maxSeriesCarriesVO2maxAndNotThePaceDefault() {
-        let history = PerformanceHistory(
-            byKey: [
-                "max_hr": [entry(ago(400), 206)],
-                "resting_hr": [entry(ago(100), 48)],
-                "weight_kg": [entry(ago(100), 75)],
-                "vo2max_cycling": [entry(ago(100), 55)],
-                "lactate_threshold_speed": [entry(ago(100), 3.7)],
-            ],
-            estimateFTPFromVO2max: false, estimateVO2maxFromRides: true)
-        // No ride evidence, so the estimate cannot resolve and the stored reading stands:
-        // 55 ml/kg/min, not the 3.7 m/s the pace default would have returned. Two points
-        // — the reading's own date, then today, which is always appended.
-        #expect(history.estimatedSeries("vo2max_cycling").map(\.value) == [55, 55])
+    private func cycling(ftp: Bool = true, cp: Bool = true, vo2: Bool = false,
+                         extra: [String: [PerformanceHistory.Entry]] = [:]) -> PerformanceHistory {
+        PerformanceHistory(
+            byKey: ["max_hr": [entry(ago(100), 190)], "resting_hr": [entry(ago(5), 50)],
+                    "weight_kg": [entry(ago(100), 70)]].merging(extra) { $1 },
+            estimateFTPFromCP: ftp, estimateVO2maxFromRides: vo2, estimateCPFromRides: cp,
+            evidence: rides)
+    }
+
+    /// FTP is the joint CP times 0.76 / 0.821 — one posterior, so the two cannot disagree.
+    @Test func ftpIsDerivedFromTheJointCP() throws {
+        let snap = cycling().snapshot(asOf: now)
+        let cp = try #require(snap.criticalPower)
+        #expect(snap.criticalPowerIsEstimated && snap.wPrimeIsEstimated && snap.cyclingFTPIsEstimated)
+        #expect(snap.cyclingFTP == Int(CriticalPowerEstimate.ftp(cp: cp).rounded()))
+        #expect(snap.criticalPowerRange!.contains(cp))
+        // The rides are 4-40 days old: still inside the 8-week calibration.
+        #expect(snap.criticalPowerConfidence == .thin)
+    }
+
+    /// Rides without floors (stored before floors existed, not yet recomputed) leave the
+    /// priors alone — which must not read as a value backed by recent efforts.
+    @Test func withoutAnyFloorCPAndWPrimeAreRough() {
+        let bare = rides.map {
+            PerformanceHistory.ActivityEvidence(date: $0.date, steadyHR20: 0, peakHR: $0.peakHR,
+                                                submaxProfile: $0.submaxProfile, family: .bike)
+        }
+        let snap = PerformanceHistory(
+            byKey: ["max_hr": [entry(ago(100), 190)], "resting_hr": [entry(ago(5), 50)],
+                    "weight_kg": [entry(ago(100), 70)]],
+            estimateFTPFromCP: true, estimateCPFromRides: true, evidence: bare).snapshot(asOf: now)
+        #expect(snap.criticalPower != nil)
+        #expect(snap.criticalPowerConfidence == .rough)
+        #expect(snap.cyclingFTPConfidence == .thin)
+    }
+
+    /// The three share one posterior per date, so their series are resolved in one pass
+    /// and must equal what each resolves alone.
+    @Test func theCPFamilyResolvesTogetherAsItDoesApart() {
+        let history = cycling()
+        let together = history.estimatedSeries(PerformanceHistory.cpPosteriorKeys)
+        for key in PerformanceHistory.cpPosteriorKeys {
+            #expect(together[key]?.map(\.value) == history.estimatedSeries(key).map(\.value))
+        }
+        #expect(PerformanceHistory.seriesFamily(of: "w_prime") == PerformanceHistory.cpPosteriorKeys)
+        #expect(PerformanceHistory.seriesFamily(of: "vo2max_cycling") == ["vo2max_cycling"])
+    }
+
+    /// The VO2max series has to carry VO2max, not the LT-pace default of the mapping.
+    @Test func theVO2maxSeriesCarriesVO2max() throws {
+        let series = cycling(ftp: false, cp: false, vo2: true).estimatedSeries("vo2max_cycling")
+        let last = try #require(series.last)
+        #expect(last.isEstimated)
+        #expect((30 ... 90).contains(last.value))
     }
 
     @Test func noSeriesWithoutTheOptIn() {
-        let history = PerformanceHistory(
-            byKey: ["vo2max_cycling": [entry(ago(100), 50)], "weight_kg": [entry(ago(100), 70)]],
-            estimateFTPFromVO2max: false)
-        #expect(history.estimatedSeries("cycling_ftp").isEmpty)
+        #expect(cycling(ftp: false, cp: false).estimatedSeries("cycling_ftp").isEmpty)
+        #expect(cycling(ftp: false, cp: false).estimatedSeries("critical_power").isEmpty)
     }
 
-    @Test func manualReadingOutranksTheEstimate() {
+    @Test func manualReadingsOutrankTheEstimate() {
+        let snap = cycling(extra: ["cycling_ftp": [entry(ago(2), 250, rank: PerformanceHistory.manualRank)],
+                                   "critical_power": [entry(ago(2), 280, rank: PerformanceHistory.manualRank)]])
+            .snapshot(asOf: now)
+        #expect(snap.cyclingFTP == 250 && !snap.cyclingFTPIsEstimated)
+        #expect(snap.criticalPower == 280 && !snap.criticalPowerIsEstimated)
+        #expect(snap.wPrimeIsEstimated)
+    }
+
+    /// Without resting HR there is no reserve to scale by, so no cycling estimate at all —
+    /// the synced FTP stands.
+    @Test func missingRestingHRLeavesTheSyncedFTP() {
         let history = PerformanceHistory(
-            byKey: [
-                "vo2max_cycling": [entry(ago(100), 50)],
-                "weight_kg": [entry(ago(100), 70), entry(ago(10), 72)],
-                "cycling_ftp": [entry(ago(50), 250, rank: PerformanceHistory.manualRank)],
-            ],
-            estimateFTPFromVO2max: true)
-        let series = history.estimatedSeries("cycling_ftp")
-        // 0.0582413 * 50 * 70 = 203.84 -> 204, then the manual reading takes over.
-        // The weight change at -10 d no longer moves anything, so it is not a change point.
-        #expect(series.map(\.value) == [204, 250, 250])
-        #expect(series.map(\.isEstimated) == [true, false, false])
+            byKey: ["max_hr": [entry(ago(100), 190)], "weight_kg": [entry(ago(100), 70)],
+                    "cycling_ftp": [entry(ago(50), 240)]],
+            estimateFTPFromCP: true, estimateCPFromRides: true, evidence: rides)
+        let snap = history.snapshot(asOf: now)
+        #expect(snap.cyclingFTP == 240 && !snap.cyclingFTPIsEstimated)
+        #expect(snap.criticalPower == nil)
+    }
+
+    /// Scoring a run never pays for the cycling posterior.
+    @Test func onlyRidesResolveTheCyclingEstimates() {
+        #expect(PerformanceHistory.scoringKeys(sport: "cycling", multisport: false) == nil)
+        #expect(PerformanceHistory.scoringKeys(sport: "running", multisport: true) == nil)
+        let run = PerformanceHistory.scoringKeys(sport: "running", multisport: false)
+        #expect(run?.contains("cycling_ftp") == false)
+        #expect(run?.contains("lactate_threshold_speed") == true)
     }
 
     // MARK: LTHR from HRmax + sustained efforts
@@ -83,7 +132,7 @@ struct PerformanceHistoryTests {
     @Test func lthrSeriesRisesWithAnObservedEffort() {
         let history = PerformanceHistory(
             byKey: ["max_hr": [entry(ago(200), 190)]],
-            estimateFTPFromVO2max: false,
+            estimateFTPFromCP: false,
             estimateLTHRFromHRMax: true,
             evidence: [run(ago(100), steady: 175, peak: 185)])
         // 0.85 * 190 = 161.5 -> 162 while nothing has ever qualified; the effort clears
@@ -94,7 +143,7 @@ struct PerformanceHistoryTests {
     @Test func anEffortOlderThanTheWindowIsCarriedForwardNotDropped() {
         let history = PerformanceHistory(
             byKey: ["max_hr": [entry(ago(500), 190)]],
-            estimateFTPFromVO2max: false,
+            estimateFTPFromCP: false,
             estimateLTHRFromHRMax: true,
             evidence: [run(ago(400), steady: 175, peak: 185)])
         // Outside the 365-day window the value holds at what the athlete last showed
@@ -107,7 +156,7 @@ struct PerformanceHistoryTests {
         let history = PerformanceHistory(
             byKey: ["max_hr": [entry(ago(1), 195),
                                entry(ago(1), 206, rank: PerformanceHistory.manualRank)]],
-            estimateFTPFromVO2max: false,
+            estimateFTPFromCP: false,
             estimateLTHRFromHRMax: true)
         #expect(history.snapshot(asOf: now).lactateThrHR == 175)   // 0.85 * 206 = 175.1
     }
@@ -115,7 +164,7 @@ struct PerformanceHistoryTests {
     @Test func anImplausibleReadingIsNoEvidence() {
         let history = PerformanceHistory(
             byKey: ["max_hr": [entry(ago(200), 190)]],
-            estimateFTPFromVO2max: false,
+            estimateFTPFromCP: false,
             estimateLTHRFromHRMax: true,
             // Peaking above the athlete's maximum is a sensor fault, not an effort.
             evidence: [run(ago(100), steady: 175, peak: 205)])
@@ -172,7 +221,7 @@ struct PerformanceHistoryTests {
     @Test func theCyclingThresholdHRGatesOnWattsNotOnHeartRate() {
         let snap = PerformanceHistory(
             byKey: ["max_hr": [entry(ago(400), 206)]],
-            estimateFTPFromVO2max: false,
+            estimateFTPFromCP: false,
             estimateCyclingLTHRFromRides: true,
             evidence: [ride(ago(60), watts: 300, hr: 170), ride(ago(50), watts: 295, hr: 170),
                        ride(ago(40), watts: 290, hr: 170), ride(ago(30), watts: 298, hr: 170),
@@ -189,7 +238,7 @@ struct PerformanceHistoryTests {
         let snap = PerformanceHistory(
             byKey: ["max_hr": [entry(ago(400), 206)],
                     "lactate_threshold_hr": [entry(ago(300), 182)]],
-            estimateFTPFromVO2max: false,
+            estimateFTPFromCP: false,
             estimateCyclingLTHRFromRides: true).snapshot(asOf: now)
         #expect(snap.cyclingLactateThrHR == nil)
         #expect(!snap.cyclingLactateThrHRIsEstimated)
@@ -249,7 +298,7 @@ struct PerformanceHistoryTests {
                 byKey: ["max_hr": [entry(ago(400), 206)],
                         "resting_hr": [entry(ago(400), 48)],
                         "lactate_threshold_hr": [entry(ago(300), 184)]],
-                estimateFTPFromVO2max: false,
+                estimateFTPFromCP: false,
                 estimateLTPaceFromRuns: true,
                 evidence: [40.0, 35, 30].map { paceRun(ago($0), [170: 3.0]) } + extra)
                 .snapshot(asOf: now).lactateThrPaceSeconds!.rounded()
@@ -269,7 +318,7 @@ struct PerformanceHistoryTests {
             byKey: ["max_hr": [entry(ago(400), 206)],
                     "resting_hr": [entry(ago(400), 48)],
                     "lactate_threshold_hr": [entry(ago(300), 184)]],
-            estimateFTPFromVO2max: false,
+            estimateFTPFromCP: false,
             estimateLTPaceFromRuns: true,
             estimateRunningVO2maxFromRuns: true,
             evidence: pacedRuns).snapshot(asOf: now)
@@ -287,7 +336,7 @@ struct PerformanceHistoryTests {
             byKey: ["max_hr": [entry(ago(400), 206)],
                     "resting_hr": [entry(ago(400), 48)],
                     "lactate_threshold_hr": lthr],
-            estimateFTPFromVO2max: false,
+            estimateFTPFromCP: false,
             estimateLTPaceFromRuns: true,
             evidence: pacedRuns)
             .estimatedSeries("lactate_threshold_speed")
@@ -321,7 +370,7 @@ struct PerformanceHistoryTests {
             byKey: ["max_hr": [entry(ago(400), 206)],
                     "resting_hr": [entry(ago(400), 48)],
                     "lactate_threshold_hr": [entry(ago(300), 184)]],
-            estimateFTPFromVO2max: false,
+            estimateFTPFromCP: false,
             estimateLTPaceFromRuns: true,
             // Seven runs, all long past the 90-day window: the pool was full once and
             // nothing qualifies today.
@@ -336,7 +385,7 @@ struct PerformanceHistoryTests {
     @Test func aCyclingEffortDoesNotSetTheRunningLTHR() {
         let history = PerformanceHistory(
             byKey: ["max_hr": [entry(ago(200), 190)]],
-            estimateFTPFromVO2max: false,
+            estimateFTPFromCP: false,
             estimateLTHRFromHRMax: true,
             evidence: [.init(date: ago(100), steadyHR20: 178, peakHR: 185, family: .bike)])
         // Cycling LTHR runs 5-10 bpm under running LTHR in the same athlete, so a ride

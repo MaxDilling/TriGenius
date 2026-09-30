@@ -294,7 +294,8 @@ nonisolated enum StreamPlot {
         return best
     }
 
-    /// Rate/effort metrics anchor at zero; level metrics tighten to the data; an
+    /// Rate/effort metrics anchor at zero, reaching below it only where a value does (an
+    /// overdrawn W′ balance); level metrics tighten to the data; an
     /// inverting axis reverses and scales to the 98th percentile so a lone
     /// walk/stop spike clips instead of squashing the run. A tight or inverting
     /// frame is widened to `minSpan` around its centre. Read from the raw bins
@@ -305,7 +306,7 @@ nonisolated enum StreamPlot {
             return Domain(lo: 0, hi: 1, reversed: false)
         }
         if case .fromZero = metric.framing, !metric.axis.isInverting {
-            return Domain(lo: 0, hi: last * 1.1, reversed: false)
+            return Domain(lo: min(first, 0) * 1.1, hi: last * 1.1, reversed: false)
         }
         let top = metric.axis.isInverting ? plots.sorted()[Int(0.98 * Double(plots.count - 1))] : last
         let widen = max(metric.minSpan - (top - first), 0) / 2

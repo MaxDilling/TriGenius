@@ -2,10 +2,8 @@ import Foundation
 
 // MARK: - Recency weighting shared by the threshold estimators
 
-/// Age weighting and the weighted quantile the threshold estimators reduce their
-/// evidence with. Both `LTHREstimate` and `VO2maxEstimate` select the best efforts an
-/// athlete happens to have produced, so both need the same two operations, and a second
-/// copy of either would be free to drift.
+/// Age weighting and the weighted quantile `LTHREstimate` reduces its evidence with — the
+/// best efforts an athlete happens to have produced, weighted toward the recent ones.
 nonisolated enum RecencyWeighting {
 
     /// Cauchy kernel `1 / (1 + (age/τ)²)`.

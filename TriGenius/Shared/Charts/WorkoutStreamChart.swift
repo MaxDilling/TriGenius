@@ -11,7 +11,7 @@ import Charts
 
 struct WorkoutStreamModel: Equatable, Identifiable {
     enum Kind: String {
-        case speed, power, heartRate, runPace, hikePace, swimPace, bikeCadence, runCadence, elevation
+        case speed, power, wPrimeBalance, heartRate, runPace, hikePace, swimPace, bikeCadence, runCadence, elevation
     }
     /// A *measured* level drawn as a rule across the plot — normalized power on
     /// a bike power trace. Never an average standing in for one that is missing.
@@ -25,6 +25,9 @@ struct WorkoutStreamModel: Equatable, Identifiable {
     /// Natural units per bin (m/s, W, bpm, rpm/spm, m); nil = recording gap.
     let values: [Double?]
     let reference: Reference?
+    /// What a derived trace was computed against — the W′ balance's CP and W′ and where
+    /// they came from — so it never reads as a recording.
+    let basis: String?
     /// The z1–z4 upper bounds this workout was bucketed against, in the metric's
     /// own unit — the shading behind the trace. Nil where the discipline has no
     /// zone model or the threshold behind it was unknown.
@@ -39,8 +42,9 @@ struct WorkoutStreamModel: Equatable, Identifiable {
     let runs: [[StreamPlot.Sample]]
 
     init(kind: Kind, binSeconds: Int, values: [Double?], reference: Reference? = nil,
-         zones: [Double]? = nil, zoneSeconds: [Double]? = nil) {
+         basis: String? = nil, zones: [Double]? = nil, zoneSeconds: [Double]? = nil) {
         self.kind = kind
+        self.basis = basis
         self.binSeconds = binSeconds
         self.values = values
         self.reference = reference
@@ -52,6 +56,7 @@ struct WorkoutStreamModel: Equatable, Identifiable {
     }
 
     var id: String { kind.rawValue }
+    var title: String { basis.map { "\(kind.label) · \($0)" } ?? kind.label }
     /// Elapsed seconds the stored bins cover.
     var spanSeconds: Double { Double(values.count * binSeconds) }
 
@@ -81,9 +86,11 @@ struct WorkoutStreamModel: Equatable, Identifiable {
 
     /// Chart models for a workout's decoded streams, in the sport's display order;
     /// pace sports render the speed stream as pace. `details` supplies the
-    /// reference levels the source measured at full stream resolution.
+    /// reference levels the source measured at full stream resolution. A ride with
+    /// `wPrime` — the (CP, W′) of its day and their provenance — also draws its W′ balance.
     static func models(from decoded: [WorkoutStreams.Metric: [Double?]], details: [String: Any],
-                       family: SportFamily) -> [WorkoutStreamModel] {
+                       family: SportFamily,
+                       wPrime: (cp: Double, kJ: Double, basis: String)? = nil) -> [WorkoutStreamModel] {
         let order: [(WorkoutStreams.Metric, Kind)] = switch family {
         case .bike:
             [(.speed, .speed), (.power, .power), (.heartRate, .heartRate),
@@ -100,7 +107,7 @@ struct WorkoutStreamModel: Equatable, Identifiable {
                 ? [(.speed, .hikePace)] : [])
             + [(.heartRate, .heartRate), (.elevation, .elevation)]
         }
-        return order.compactMap { metric, kind in
+        var models = order.compactMap { metric, kind in
             decoded[metric].map {
                 WorkoutStreamModel(kind: kind, binSeconds: WorkoutStreams.binSeconds, values: $0,
                                    reference: reference(kind, details),
@@ -112,6 +119,14 @@ struct WorkoutStreamModel: Equatable, Identifiable {
                                    })
             }
         }
+        if family == .bike, let wPrime, let power = decoded[.power],
+           let at = models.firstIndex(where: { $0.kind == .power }) {
+            models.insert(WorkoutStreamModel(
+                kind: .wPrimeBalance, binSeconds: WorkoutStreams.binSeconds,
+                values: CriticalPowerEstimate.balance(power: power, cp: wPrime.cp, wPrimeKJ: wPrime.kJ),
+                basis: wPrime.basis), at: at + 1)
+        }
+        return models
     }
 
     /// The stored normalized power — computed at ingest over the full-resolution
@@ -166,6 +181,7 @@ extension WorkoutStreamModel.Kind {
         switch self {
         case .speed: "Speed"
         case .power: "Power"
+        case .wPrimeBalance: "W′ balance"
         case .heartRate: "Heart rate"
         case .runPace, .hikePace, .swimPace: "Pace"
         case .bikeCadence, .runCadence: "Cadence"
@@ -177,6 +193,7 @@ extension WorkoutStreamModel.Kind {
         switch self {
         case .speed: Theme.Palette.info
         case .power: Theme.Palette.sport(.bike)
+        case .wPrimeBalance: Theme.Palette.warning
         case .heartRate: Theme.Palette.danger
         case .runPace: Theme.Palette.sport(.run)
         case .hikePace: Theme.Palette.sport(.other)
@@ -250,6 +267,7 @@ extension WorkoutStreamModel.Kind {
         switch self {
         case .speed: "km/h"
         case .power: "W"
+        case .wPrimeBalance: "kJ"
         case .heartRate: "bpm"
         case .runPace, .hikePace: "/km"
         case .swimPace: "/100m"
@@ -260,11 +278,20 @@ extension WorkoutStreamModel.Kind {
     }
 
     /// The number the axis shows for a natural-unit value, with a decimal for
-    /// speed, where whole km/h is coarse.
+    /// speed and W′, where whole km/h and whole kJ are coarse.
     func number(_ value: Double) -> String {
         let plotted = axis.display(value)
-        return self == .speed ? String(format: "%.1f", plotted) : axisLabel(plotted)
+        return [.speed, .wPrimeBalance].contains(self) ? String(format: "%.1f", plotted) : axisLabel(plotted)
     }
+
+    /// How a stretch of this metric is summed up: its mean — or, for the W′ balance,
+    /// its lowest point, the one number that says how deep the stretch went.
+    func summary(_ samples: [Double]) -> Double? {
+        guard !samples.isEmpty else { return nil }
+        return self == .wPrimeBalance ? samples.min() : samples.reduce(0, +) / Double(samples.count)
+    }
+
+    var summaryLabel: String { self == .wPrimeBalance ? "Lowest" : "Average" }
 
     /// Tooltip formatting: the number plus its unit.
     func format(_ value: Double) -> String { number(value) + " " + unit }

@@ -59,7 +59,7 @@ final class ActivityReadToolHandler: CoachToolHandler {
             ),
             ToolDefinition(
                 name: "get_metric_history",
-                description: "Progression of physiological / wellness markers (FTP, LT pace/HR, CSS, VO2max, max HR, weight, resting HR, HRV, sleep) over time, merged across the athlete's sources. Per metric: `current` (latest value and since when it holds), `summary` (trend and range), and `history` — comma-separated \"YYYY-MM-DD value\" pairs, oldest first, consecutive repeats omitted. Recovery markers (resting HR, HRV, sleep) come daily for ranges up to 14 days and as weekly means beyond. Defaults to the last 6 months; the last 14 days when only recovery markers are requested.",
+                description: "Progression of physiological / wellness markers (FTP, critical power, W′, LT pace/HR, CSS, VO2max, max HR, weight, resting HR, HRV, sleep) over time, merged across the athlete's sources. Per metric: `current` (latest value and since when it holds), `summary` (trend and range), and `history` — comma-separated \"YYYY-MM-DD value\" pairs, oldest first, consecutive repeats omitted. Recovery markers (resting HR, HRV, sleep) come daily for ranges up to 14 days and as weekly means beyond. Defaults to the last 6 months; the last 14 days when only recovery markers are requested.",
                 parameters: [
                     "type": "object",
                     "properties": [
@@ -77,7 +77,7 @@ final class ActivityReadToolHandler: CoachToolHandler {
                     "type": "object",
                     "properties": [
                         "metric": ["type": "string", "enum": PerformanceMetric.editable.map(\.key), "description": "Metric to set."],
-                        "value": ["type": "string", "description": "The measured value. A plain number for watts / bpm / kg / ml/kg/min; an m:ss pace for lactate_threshold_speed (per km) and swim_css_speed (per 100 m), e.g. \"4:35\"."],
+                        "value": ["type": "string", "description": "The measured value. A plain number for watts / bpm / kg / ml/kg/min / kJ (w_prime); an m:ss pace for lactate_threshold_speed (per km) and swim_css_speed (per 100 m), e.g. \"4:35\"."],
                         "date": ["type": "string", "description": "Measurement date in YYYY-MM-DD format. Defaults to today."]
                     ],
                     "required": ["metric", "value"]

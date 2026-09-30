@@ -266,6 +266,13 @@ struct StreamPlotDomainTests {
         #expect(domain == StreamPlot.Domain(lo: 0, hi: 330, reversed: false))
     }
 
+    /// An overdrawn W′ balance stays on the plot: the frame reaches below zero with the
+    /// same 10 % headroom.
+    @Test func effortBelowZeroExtendsTheFrame() {
+        let domain = StreamPlot.domain(values: [20, 5, -10], metric: power)
+        #expect(domain == StreamPlot.Domain(lo: -11, hi: 22, reversed: false))
+    }
+
     /// A level metric tightens to the data, padded by the larger of 15 % of the
     /// spread (0.15 × 20 = 3) and 2 % of the peak (0.02 × 160 = 3.2) — so 3.2.
     @Test func levelFramesTight() {

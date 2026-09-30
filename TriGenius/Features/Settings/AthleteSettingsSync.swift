@@ -15,7 +15,8 @@ import Foundation
 enum AthleteSettingsSync {
     private static let cloud = NSUbiquitousKeyValueStore.default
 
-    private static let flags = [AppSettings.estimateFTPFromVO2maxKey,
+    private static let flags = [AppSettings.estimateFTPFromCPKey,
+                                AppSettings.estimateCPFromRidesKey,
                                 AppSettings.estimateVO2maxFromRidesKey,
                                 AppSettings.estimateLTHRFromHRMaxKey,
                                 AppSettings.estimateCyclingLTHRFromRidesKey,
@@ -29,8 +30,8 @@ enum AthleteSettingsSync {
     /// inputs to `PerformanceHistory`, not stored values, so flipping one changes every
     /// threshold the app shows without writing a row — and every surface refreshes on
     /// `trainingDataDidChange`, which a defaults write does not post. Called from every
-    /// setter rather than per key: five writes are cheaper than five call sites that can
-    /// each forget one.
+    /// setter rather than per key: a handful of writes is cheaper than a call site per
+    /// key that can each forget one.
     @MainActor static func didChange() {
         for key in flags { cloud.set(UserDefaults.standard.bool(forKey: key), forKey: key) }
         for key in numbers { cloud.set(UserDefaults.standard.double(forKey: key), forKey: key) }

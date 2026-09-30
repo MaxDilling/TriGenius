@@ -121,19 +121,15 @@ struct WorkoutStreamDetail: View {
         .windowFillingSheet()
     }
 
-    private static func mean(_ values: [Double]) -> Double? {
-        values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
-    }
-
     /// Health-style readout: the value under the pointer, else the visible
-    /// window's average — and, on the zone ribbon, that zone spelled out. The
-    /// overlay's legend sits right under the value, since its scale left with
+    /// window's summary (`Kind.summary`) — and, on the zone ribbon, that zone spelled
+    /// out. The overlay's legend sits right under the value, since its scale left with
     /// its axis.
     private var readout: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Circle().fill(model.kind.color).frame(width: 9, height: 9)
-                Text((reading?.vertex.mean ?? Self.mean(model.samples(in: zoom.window)))
+                Text((reading?.vertex.mean ?? model.kind.summary(model.samples(in: zoom.window)))
                         .map(model.kind.number) ?? "—")
                     .font(.largeTitle.bold()).monospacedDigit()
                 Text(model.kind.unit).font(.subheadline).foregroundStyle(.secondary)
@@ -155,7 +151,7 @@ struct WorkoutStreamDetail: View {
                     Text("At " + model.timeLabel(reading.vertex.offset, withSeconds: true))
                 } else {
                     let withSeconds = StreamPlot.timeTicks(in: zoom.window).step < 60
-                    Text("Average · " + model.timeLabel(zoom.window.lowerBound, withSeconds: withSeconds)
+                    Text(model.kind.summaryLabel + " · " + model.timeLabel(zoom.window.lowerBound, withSeconds: withSeconds)
                          + "–" + model.timeLabel(zoom.window.upperBound, withSeconds: withSeconds))
                 }
             }
@@ -165,8 +161,8 @@ struct WorkoutStreamDetail: View {
     }
 
     /// The visible stretch across the workout's other metrics — zoom onto the
-    /// climb and read what it cost. The trace's own average heads the sheet;
-    /// elevation has no meaningful average.
+    /// climb and read what it cost. The trace's own summary heads the sheet;
+    /// elevation has no meaningful one.
     private var summary: [(label: String, value: String)] {
         let window = zoom.window
         return summaryMemo(SummaryKey(window: window, metrics: [model] + overlays)) {
@@ -179,8 +175,9 @@ struct WorkoutStreamDetail: View {
                                           : String(format: "%.2f km", metres / 1000)))
             }
             for other in overlays where other.kind != .elevation {
-                if let average = Self.mean(other.samples(in: window)) {
-                    stats.append((other.kind.label, other.kind.format(average)))
+                if let value = other.kind.summary(other.samples(in: window)) {
+                    stats.append((other.kind == .wPrimeBalance ? "Lowest W′" : other.kind.label,
+                                  other.kind.format(value)))
                 }
             }
             return stats

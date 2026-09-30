@@ -48,16 +48,23 @@ struct AutomaticCalculationView: View {
                 value: snapshot.vo2maxCycling.map { String(format: "%.1f ml/kg/min", $0) },
                 calculatedHere: snapshot.vo2maxCyclingIsEstimated,
                 calculation: $settings.estimateVO2maxFromRides,
-                confidence: nil,
-                method: "Reconstructed from ordinary rides: each sustained effort's oxygen cost, scaled up by the heart-rate reserve you left unused. No maximal test needed.",
+                confidence: snapshot.vo2maxCyclingIsEstimated ? snapshot.vo2maxCyclingConfidence : nil,
+                method: "Reconstructed from ordinary rides: each ride's sustained efforts priced in oxygen and scaled up by the heart-rate reserve you left unused, then followed as a slowly moving level — one warm day or one bad strap barely moves it. No maximal test needed.",
+                needs: "max HR, resting HR, weight, rides with power"),
+            Row(metricKey: "critical_power", title: "Critical power & W′",
+                value: criticalPowerValue,
+                calculatedHere: snapshot.criticalPowerIsEstimated,
+                calculation: $settings.estimateCPFromRides,
+                confidence: snapshot.criticalPowerIsEstimated ? snapshot.criticalPowerConfidence : nil,
+                method: "Critical power from your aerobic ceiling, raised wherever a ride proves more: every ride shows how much anaerobic capacity (W′) it used up at a given CP, and a CP too low for what you rode is ruled out. The range is 80 % likely.",
                 needs: "max HR, resting HR, weight, rides with power"),
             Row(metricKey: "cycling_ftp", title: "Cycling FTP",
                 value: snapshot.cyclingFTP.map { "\($0) W" },
                 calculatedHere: snapshot.cyclingFTPIsEstimated,
-                calculation: $settings.estimateFTPFromVO2max,
-                confidence: nil,
-                method: "Your aerobic ceiling times the share of it held at threshold, converted to watts at a trained cyclist's efficiency.",
-                needs: "cycling VO₂max, weight"),
+                calculation: $settings.estimateFTPFromCP,
+                confidence: snapshot.cyclingFTPIsEstimated ? snapshot.cyclingFTPConfidence : nil,
+                method: "Your critical power times the share of it held at threshold (0.76 ÷ 0.821 of VO₂max) — the same chain, so FTP and CP cannot disagree.",
+                needs: "max HR, resting HR, weight, rides with power"),
             Row(metricKey: "lactate_threshold_hr_cycling", title: "Cycling threshold HR",
                 value: snapshot.cyclingLactateThrHR.map { "\($0) bpm" },
                 calculatedHere: snapshot.cyclingLactateThrHRIsEstimated,
@@ -67,6 +74,22 @@ struct AutomaticCalculationView: View {
                 method: "The heart rate you hold in rides near your own best 20-minute power. Gated on watts, not on heart rate — on a bike the intensity is measured, so a high heart rate at low power is a bad strap, not a threshold.",
                 needs: "max HR, rides with power"),
         ]
+    }
+
+    /// "306 W (296–318) · W′ 23.2 kJ (20.1–26.0)" — each value with its 80 % range.
+    private var criticalPowerValue: String? {
+        guard let cp = snapshot.criticalPower else { return nil }
+        var text = "\(Int(cp.rounded())) W"
+        if let r = snapshot.criticalPowerRange {
+            text += " (\(Int(r.lowerBound.rounded()))–\(Int(r.upperBound.rounded())))"
+        }
+        if let w = snapshot.wPrimeKJ {
+            text += String(format: " · W′ %.1f kJ", w)
+            if let r = snapshot.wPrimeRange {
+                text += String(format: " (%.1f–%.1f)", r.lowerBound, r.upperBound)
+            }
+        }
+        return text
     }
 
     private var runningRows: [Row] {
@@ -216,9 +239,9 @@ struct AutomaticCalculationView: View {
     private func confidenceText(_ c: EstimateConfidence) -> String {
         switch c {
         case .anchored: "backed by several recent efforts"
-        case .thin: "rests on one or two efforts, so a single session moves it"
-        case .stale: "not enough recent runs — carrying an older value forward"
-        case .rough: "no qualifying effort yet — a share of your max HR, not a reading"
+        case .thin: "rests on too little yet, so a single session can move it"
+        case .stale: "no recent qualifying session — it rests on older efforts"
+        case .rough: "no qualifying effort yet — it rests on a population value, not on your own"
         }
     }
 

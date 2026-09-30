@@ -201,7 +201,13 @@ final class CoachMemory: ObservableObject {
                            ? "\(label) \(cur)\(note) (was \(was!))" : "\(label) \(cur)\(note)")
         }
         marker("FTP", now.cyclingFTP.map { "\($0) W" }, prev.cyclingFTP.map { "\($0) W" },
-               now.cyclingFTPIsEstimated ? " (estimated from VO2max)" : "")
+               now.cyclingFTPIsEstimated ? " (estimated from critical power)" : "")
+        marker("CP", now.criticalPower.map { "\(Int($0.rounded())) W" },
+               prev.criticalPower.map { "\(Int($0.rounded())) W" },
+               now.criticalPowerRange.map { " (estimated, 80 % range \(Int($0.lowerBound.rounded()))–\(Int($0.upperBound.rounded())) W)" } ?? "")
+        marker("W′", now.wPrimeKJ.map { String(format: "%.1f kJ", $0) },
+               prev.wPrimeKJ.map { String(format: "%.1f kJ", $0) },
+               now.wPrimeRange.map { String(format: " (estimated, 80 %% range %.1f–%.1f kJ)", $0.lowerBound, $0.upperBound) } ?? "")
         marker("max HR", now.maxHR.map { "\($0) bpm" }, prev.maxHR.map { "\($0) bpm" })
         marker("LTHR", now.lactateThrHR.map { "\($0) bpm" }, prev.lactateThrHR.map { "\($0) bpm" },
                now.lactateThrHRIsEstimated ? " (estimated from max HR)" : "")

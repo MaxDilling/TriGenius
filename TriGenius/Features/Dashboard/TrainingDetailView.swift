@@ -80,6 +80,8 @@ struct TrainingDetailView: View {
         /// The whole session's track — a multisport row's parent stream is
         /// empty, so there it is every leg's track in the leg's color.
         var route: [RouteTrack] = []
+        /// The thresholds as of the workout's own date — what its TL was scored against.
+        var scoredAgainst: PerformanceSnapshot?
     }
 
     /// What the charts are built from — a re-sync or rescore rewrites one of these.
@@ -371,7 +373,7 @@ struct TrainingDetailView: View {
             strengthCard(details)
             let models = charts.whole
             if let primary = models.first {
-                WorkoutStreamCard(title: primary.kind.label, model: primary, siblings: models, height: 180)
+                WorkoutStreamCard(title: primary.title, model: primary, siblings: models, height: 180)
             }
             chartGrid(Array(models.dropFirst()), siblings: models, columns: 2, height: 150)
             swimSection(details)
@@ -390,7 +392,7 @@ struct TrainingDetailView: View {
             spacing: Theme.Spacing.m
         ) {
             ForEach(models) { model in
-                WorkoutStreamCard(title: model.kind.label + suffix, model: model,
+                WorkoutStreamCard(title: model.title + suffix, model: model,
                                   siblings: siblings, bands: bands, height: height)
             }
         }
@@ -564,9 +566,7 @@ struct TrainingDetailView: View {
     }
 
     private var tssBasis: String? {
-        guard record.tss != nil else { return nil }
-        // As-of the activity's own date — the same basis it was scored with at ingest.
-        let snapshot = TrainingDataStore.shared.performanceHistory().snapshot(asOf: record.date)
+        guard record.tss != nil, let snapshot = charts.scoredAgainst else { return nil }
         return TSSCalculator.compute(details: details, snapshot: snapshot,
                                      heartRate: storedHeartRateSamples).basis?.label
     }
@@ -914,7 +914,7 @@ struct TrainingDetailView: View {
     private var raceCharts: some View {
         let models = charts.race
         ForEach(models) { model in
-            WorkoutStreamCard(title: "\(model.kind.label) · full race", model: model,
+            WorkoutStreamCard(title: "\(model.title) · full race", model: model,
                               siblings: models, bands: raceBands)
         }
     }
@@ -963,7 +963,7 @@ struct TrainingDetailView: View {
 
     private func streamsSection(_ models: [WorkoutStreamModel]) -> some View {
         ForEach(models) { model in
-            WorkoutStreamCard(title: model.kind.label, model: model, siblings: models)
+            WorkoutStreamCard(title: model.title, model: model, siblings: models)
         }
     }
 
@@ -975,19 +975,42 @@ struct TrainingDetailView: View {
     /// `body` pass — so it runs once per source, off the main actor.
     private func loadCharts() async {
         let decoded = await Self.decode([record.streamsData] + legs.map(\.segment.streamsData))
+        let snapshot = await Self.resolve(
+            TrainingDataStore.shared.performanceHistory(), asOf: record.date,
+            keys: PerformanceHistory.scoringKeys(sport: record.sport, multisport: !legs.isEmpty))
         guard !Task.isCancelled else { return }
+        let wPrime = Self.wPrime(snapshot)
         let legStreams = Array(zip(legs, decoded.dropFirst()))
         let route = [RouteTrack(id: -1, streams: decoded[0], startingAt: 0, color: family.color)]
             + legStreams.map {
                 RouteTrack(id: $0.index, streams: $1, startingAt: $0.segment.offsetSeconds, color: $0.color)
             }
         charts = Charts(
-            whole: WorkoutStreamModel.models(from: decoded[0], details: details, family: family),
+            whole: WorkoutStreamModel.models(from: decoded[0], details: details, family: family,
+                                             wPrime: wPrime),
             legs: legStreams.map {
-                WorkoutStreamModel.models(from: $1, details: $0.segment.details, family: $0.segment.family)
+                WorkoutStreamModel.models(from: $1, details: $0.segment.details, family: $0.segment.family,
+                                          wPrime: wPrime)
             },
             race: WorkoutStreamModel.raceModels(legs: legStreams.map { ($0.segment.offsetSeconds, $1) }),
-            route: route.compactMap { $0 })
+            route: route.compactMap { $0 },
+            scoredAgainst: snapshot)
+    }
+
+    /// The thresholds as of the workout's own date, as ingest scored it — for a ride, a
+    /// critical-power posterior, too slow for a `body` pass.
+    @concurrent private static func resolve(_ history: PerformanceHistory, asOf date: Date,
+                                            keys: Set<String>?) async -> PerformanceSnapshot {
+        history.snapshot(asOf: date, resolving: keys)
+    }
+
+    /// The (CP, W′) a ride's W′ balance is read against — those of its own day, the rule
+    /// TL follows — and where they came from, so a balance on an estimate never reads
+    /// as a measurement.
+    private static func wPrime(_ s: PerformanceSnapshot) -> (cp: Double, kJ: Double, basis: String)? {
+        guard let cp = s.criticalPower, let kJ = s.wPrimeKJ else { return nil }
+        let source = s.criticalPowerIsEstimated || s.wPrimeIsEstimated ? "estimated" : "entered"
+        return (cp, kJ, String(format: "CP %d W, W′ %.1f kJ, %@", Int(cp.rounded()), kJ, source))
     }
 
     @concurrent private static func decode(_ blobs: [Data]) async -> [[WorkoutStreams.Metric: [Double?]]] {
@@ -1164,6 +1187,8 @@ struct TrainingDetailView: View {
         if let v = s.lactateThrPaceSeconds { d["lactate_thr_pace_s_per_km"] = v }
         if let v = s.vo2maxRunning { d["vo2max_running"] = v }
         if let v = s.vo2maxCycling { d["vo2max_cycling"] = v }
+        if let v = s.criticalPower { d["critical_power_w"] = v }
+        if let v = s.wPrimeKJ { d["w_prime_kj"] = v }
         if let v = s.weightKg { d["weight_kg"] = v }
         return d
     }

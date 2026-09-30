@@ -195,17 +195,28 @@ final class AppSettings: ObservableObject {
     static let crossTrainingCreditKey = "cross_training_credit"
     static let defaultCrossTrainingCredit = 0.5
 
-    /// Fill a missing cycling FTP from the reported cycling VO2max and body mass
-    /// (`FTPEstimate`), for watches that never compute one. Off by default — it is a
-    /// derived stand-in, so the athlete opts in. Read by `TrainingDataStore`
-    /// (outside SwiftUI) via `estimateFTPFromVO2maxKey`.
-    @Published var estimateFTPFromVO2max: Bool {
+    /// Derive cycling FTP from the critical-power estimate (`CriticalPowerEstimate.ftp`),
+    /// for watches that never compute one. Off by default — it replaces the synced value,
+    /// so the athlete opts in. Read by `TrainingDataStore` (outside SwiftUI) via
+    /// `estimateFTPFromCPKey`.
+    @Published var estimateFTPFromCP: Bool {
         didSet {
-            UserDefaults.standard.set(estimateFTPFromVO2max, forKey: Self.estimateFTPFromVO2maxKey)
+            UserDefaults.standard.set(estimateFTPFromCP, forKey: Self.estimateFTPFromCPKey)
             AthleteSettingsSync.didChange()
         }
     }
-    static let estimateFTPFromVO2maxKey = "estimate_ftp_from_vo2max"
+    static let estimateFTPFromCPKey = "estimate_ftp_from_cp"
+
+    /// Estimate cycling critical power and W′ from rides (`CriticalPowerEstimate`). No
+    /// source reports either, so the switch only decides whether they are shown. Read by
+    /// `TrainingDataStore` via `estimateCPFromRidesKey`.
+    @Published var estimateCPFromRides: Bool {
+        didSet {
+            UserDefaults.standard.set(estimateCPFromRides, forKey: Self.estimateCPFromRidesKey)
+            AthleteSettingsSync.didChange()
+        }
+    }
+    static let estimateCPFromRidesKey = "estimate_cp_from_rides"
 
     /// Reconstruct cycling VO₂max from submaximal rides (`VO2maxEstimate`). Separate
     /// from the FTP switch because the two are independently useful: a watch may report
@@ -328,7 +339,8 @@ final class AppSettings: ObservableObject {
         openRouterModel = Self.storedOpenRouterModel()
         openRouterSummaryModel = UserDefaults.standard.string(forKey: "openrouter_summary_model") ?? Self.availableSummaryModels[0].model
         openRouterWebSearch = UserDefaults.standard.bool(forKey: "openrouter_web_search")
-        estimateFTPFromVO2max = UserDefaults.standard.bool(forKey: Self.estimateFTPFromVO2maxKey)
+        estimateFTPFromCP = UserDefaults.standard.bool(forKey: Self.estimateFTPFromCPKey)
+        estimateCPFromRides = UserDefaults.standard.bool(forKey: Self.estimateCPFromRidesKey)
         estimateVO2maxFromRides = UserDefaults.standard.bool(forKey: Self.estimateVO2maxFromRidesKey)
         estimateLTHRFromHRMax = UserDefaults.standard.bool(forKey: Self.estimateLTHRFromHRMaxKey)
         estimateCyclingLTHRFromRides = UserDefaults.standard.bool(forKey: Self.estimateCyclingLTHRFromRidesKey)
@@ -351,7 +363,8 @@ final class AppSettings: ObservableObject {
     /// setters below write straight back to the same defaults, which is idempotent —
     /// the values are already the ones being read.
     func reloadAthleteSettings() {
-        estimateFTPFromVO2max = UserDefaults.standard.bool(forKey: Self.estimateFTPFromVO2maxKey)
+        estimateFTPFromCP = UserDefaults.standard.bool(forKey: Self.estimateFTPFromCPKey)
+        estimateCPFromRides = UserDefaults.standard.bool(forKey: Self.estimateCPFromRidesKey)
         estimateVO2maxFromRides = UserDefaults.standard.bool(forKey: Self.estimateVO2maxFromRidesKey)
         estimateLTHRFromHRMax = UserDefaults.standard.bool(forKey: Self.estimateLTHRFromHRMaxKey)
         estimateCyclingLTHRFromRides = UserDefaults.standard.bool(forKey: Self.estimateCyclingLTHRFromRidesKey)

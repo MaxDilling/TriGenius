@@ -2,13 +2,11 @@ import Foundation
 import Testing
 @testable import TriGenius
 
-// Pins `VO2maxEstimate`. The reserve scaling, the duration normalisation and the
-// top-N age-weighted aggregation are the spec — derivation and the rejected
-// aggregations are in `ref/threshold_lab/cycling/FINDINGS.md`.
+// Pins `VO2maxEstimate`. The reserve scaling, the duration normalisation and the filter
+// are the spec. The filter's pins come from the lab reference on the same rides
+// (`ref/threshold_lab/cycling/statespace.py`, `estimator()`), which is what makes the
+// cohort validation transfer.
 struct VO2maxEstimateTests {
-
-    private let now = Date(timeIntervalSince1970: 1_000_000)
-    private func ago(_ days: Double) -> Date { now.addingTimeInterval(-days * 86_400) }
 
     private let hrMax = 206.0, hrRest = 48.0, mass = 75.0
 
@@ -18,84 +16,100 @@ struct VO2maxEstimateTests {
         // 250 W / 75 kg -> 11.016 * 250 / 75 + 7 = 43.72 ml/kg/min at %HRR
         // (160 - 48) / (206 - 48) = 0.70886, so 3.5 + (43.72 - 3.5) / 0.70886 = 60.2389.
         // At the reference duration the normalisation is a no-op.
-        let e = VO2maxEstimate.Effort(date: now, seconds: 480, watts: 250, heartRate: 160)
-        let r = VO2maxEstimate.readings(efforts: [e], hrMax: hrMax, hrRest: hrRest, massKg: mass)
-        #expect(r.count == 1)
-        #expect(abs(r[0].vo2max - 60.238928571428566) < 1e-12)
+        let r = VO2maxEstimate.reading(seconds: 480, watts: 250, heartRate: 160,
+                                       hrMax: hrMax, hrRest: hrRest, massKg: mass)
+        #expect(abs(r! - 60.238928571428566) < 1e-12)
     }
 
     @Test func longerEffortsAreNormalisedUpToTheReference() {
         // Within a ride a 1200 s effort reads lower than a 480 s one, because HR has
         // drifted; the normalisation scales it up: 60.2389 * (1200/480)^0.080 = 64.8205.
-        let long = VO2maxEstimate.Effort(date: now, seconds: 1200, watts: 250, heartRate: 160)
-        let r = VO2maxEstimate.readings(efforts: [long], hrMax: hrMax, hrRest: hrRest, massKg: mass)
-        #expect(abs(r[0].vo2max - 64.8205093686543) < 1e-12)
+        let r = VO2maxEstimate.reading(seconds: 1200, watts: 250, heartRate: 160,
+                                       hrMax: hrMax, hrRest: hrRest, massKg: mass)
+        #expect(abs(r! - 64.8205093686543) < 1e-12)
     }
 
     @Test func effortsOutsideTheReserveBandDoNotCount() {
         // 0.60-0.95 of a 158 bpm reserve is 142.8-198.1 bpm.
-        let easy = VO2maxEstimate.Effort(date: now, seconds: 480, watts: 150, heartRate: 120)
-        let sprint = VO2maxEstimate.Effort(date: now, seconds: 480, watts: 400, heartRate: 202)
-        #expect(VO2maxEstimate.readings(efforts: [easy, sprint], hrMax: hrMax,
-                                        hrRest: hrRest, massKg: mass).isEmpty)
+        #expect(VO2maxEstimate.reading(seconds: 480, watts: 150, heartRate: 120,
+                                       hrMax: hrMax, hrRest: hrRest, massKg: mass) == nil)
+        #expect(VO2maxEstimate.reading(seconds: 480, watts: 400, heartRate: 202,
+                                       hrMax: hrMax, hrRest: hrRest, massKg: mass) == nil)
     }
 
     @Test func missingBodyMassYieldsNothing() {
-        let e = VO2maxEstimate.Effort(date: now, seconds: 480, watts: 250, heartRate: 160)
-        #expect(VO2maxEstimate.readings(efforts: [e], hrMax: hrMax, hrRest: hrRest,
-                                        massKg: 0).isEmpty)
+        #expect(VO2maxEstimate.reading(seconds: 480, watts: 250, heartRate: 160,
+                                       hrMax: hrMax, hrRest: hrRest, massKg: 0) == nil)
     }
 
-    // MARK: estimate
+    @Test func hrMaxDeclinesWithAgeInBothDirections() {
+        // 0.7 bpm/year: two years before the measurement it was 1.4 bpm higher.
+        let measured = Date(timeIntervalSince1970: 1_000_000_000)
+        let earlier = measured.addingTimeInterval(-2 * 365.25 * 86_400)
+        #expect(abs(VO2maxEstimate.hrMax(206, measured: measured, on: earlier) - 207.4) < 1e-9)
+        #expect(VO2maxEstimate.hrMax(206, measured: measured, on: measured) == 206)
+    }
 
-    private func efforts(_ count: Int, watts: Double = 250, hr: Double = 160,
-                         spacingDays: Double = 1) -> [VO2maxEstimate.Effort] {
-        (0 ..< count).map {
-            .init(date: ago(Double($0) * spacingDays), seconds: 480, watts: watts, heartRate: hr)
+    @Test func detrainingStartsAfterTheWeeklyRhythm() {
+        #expect(VO2maxEstimate.detraining(idleDays: 5) == 0)
+        #expect(VO2maxEstimate.detraining(idleDays: 7) == 0)
+        // 0.064 * (exp(-7/13.2) - exp(-14/13.2))
+        #expect(abs(VO2maxEstimate.detraining(idleDays: 14) - 0.015499566773199941) < 1e-15)
+    }
+
+    // MARK: the filter
+
+    @Test func boundedMinimiserTakesSciPysSteps() {
+        // scipy.optimize.minimize_scalar(f, bounds=(-2, 3), method="bounded",
+        // options={"xatol": 1e-3}).x for f = (x - 1)^2 + 0.1 sin(5x).
+        let x = VO2maxEstimate.minimizeBounded((-2, 3)) { ($0 - 1) * ($0 - 1) + 0.1 * sin(5 * $0) }
+        #expect(abs(x - 0.9680855813449294) < 1e-12)
+    }
+
+    private let t0 = Date(timeIntervalSince1970: 1_000_000)
+    private func day(_ d: Double) -> Date { t0.addingTimeInterval(d * 86_400) }
+
+    /// Eight rides three days apart, a 13-day gap before the seventh, two efforts each;
+    /// a run on days 19 and 22 falls inside the gap.
+    private var rides: [VO2maxEstimate.Ride] {
+        let watts = [220.0, 260, 210, 250, 200, 265, 230, 245]
+        let hrs = [150.0, 152, 149, 155, 151, 156, 150, 149]
+        return (0 ..< 8).map { k in
+            .init(date: day(Double(3 * k + (k >= 6 ? 10 : 0))),
+                  profile: [480: (watts[k], hrs[k]), 1200: (watts[k] - 15, hrs[k] + 4)])
         }
     }
 
-    @Test func identicalEffortsResolveToTheirOwnValue() {
-        let r = VO2maxEstimate.estimate(efforts: efforts(20), hrMax: hrMax, hrRest: hrRest,
-                                        massKg: mass, asOf: now)!
-        #expect(abs(r.vo2max - 60.238928571428566) < 1e-9)
-        #expect(r.effortCount == 20)
-        #expect(r.confidence == .anchored)
+    private func track(_ rides: [VO2maxEstimate.Ride]) -> VO2maxEstimate.Track? {
+        VO2maxEstimate.track(rides: rides, sessions: [day(19), day(22)], hrMax: 190,
+                             hrMaxDate: day(30), hrRest: 50, massKg: 70)
     }
 
-    @Test func belowTheMinimumThereIsNoEstimate() {
-        #expect(VO2maxEstimate.estimate(efforts: efforts(19), hrMax: hrMax, hrRest: hrRest,
-                                        massKg: mass, asOf: now) == nil)
-    }
-
-    @Test func selectsTheBestEffortsSoEasyVolumeIsInert() {
-        // Twenty hard efforts plus forty easy ones: the easy ones are inside the band
-        // but never enter the top ten, so they cannot dilute the answer.
-        let pool = efforts(20, watts: 250) + efforts(40, watts: 180, hr: 150)
-        let r = VO2maxEstimate.estimate(efforts: pool, hrMax: hrMax, hrRest: hrRest,
-                                        massKg: mass, asOf: now)!
-        #expect(abs(r.vo2max - 60.238928571428566) < 1e-9)
-        #expect(r.effortCount == 60)
-    }
-
-    @Test func evidenceOlderThanATrainingBlockIsFlaggedStale() {
-        let old = efforts(20, spacingDays: 1).map {
-            VO2maxEstimate.Effort(date: $0.date.addingTimeInterval(-60 * 86_400),
-                                  seconds: $0.seconds, watts: $0.watts, heartRate: $0.heartRate)
+    @Test func filterMatchesTheLabReference() throws {
+        let track = try #require(track(rides))
+        #expect(abs(track.rideNoise - 0.001660577000657237) < 1e-12)
+        for (d, log, sd) in [(12.0, 4.118920085655162, 0.03136997050803023),
+                             (36.0, 4.143420222908415, 0.0281672772535433),
+                             (80.0, 4.107324160490761, 0.04903387838971259)] {
+            let state = try #require(track.state(at: day(d)))
+            #expect(abs(state.log - log) < 1e-10)
+            #expect(abs(state.sd - sd) < 1e-10)
         }
-        let r = VO2maxEstimate.estimate(efforts: old, hrMax: hrMax, hrRest: hrRest,
-                                        massKg: mass, asOf: now)!
-        #expect(r.confidence == .stale)
-        #expect(r.evidenceAgeDays >= VO2maxEstimate.staleDays)
     }
 
-    @Test func effortsAfterTheAsOfDateAreNotVisible() {
-        let future = efforts(20).map {
-            VO2maxEstimate.Effort(date: $0.date.addingTimeInterval(10 * 86_400),
-                                  seconds: $0.seconds, watts: $0.watts, heartRate: $0.heartRate)
-        }
-        #expect(VO2maxEstimate.estimate(efforts: future, hrMax: hrMax, hrRest: hrRest,
-                                        massKg: mass, asOf: now) == nil)
+    @Test func belowFiveRidesThereIsNoLevel() throws {
+        #expect(track(Array(rides.prefix(4))) == nil)
+        // Five rides: the level exists from the fifth ride's day, not before.
+        let track = try #require(track(Array(rides.prefix(5))))
+        #expect(track.state(at: day(11)) == nil)
+        #expect(track.state(at: day(12)) != nil)
+    }
+
+    @Test func confidenceCountsCalibrationAndStaleness() throws {
+        let track = try #require(track(rides))
+        #expect(track.confidence(at: day(40)) == .thin)       // < 56 days of rides
+        #expect(track.confidence(at: day(60)) == .anchored)   // last ride day 31
+        #expect(track.confidence(at: day(80)) == .stale)      // 49 days without a ride
     }
 
     // MARK: profile codec
