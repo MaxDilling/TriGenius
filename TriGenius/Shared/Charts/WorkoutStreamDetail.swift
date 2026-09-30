@@ -50,7 +50,6 @@ struct WorkoutStreamDetail: View {
     let bands: [WorkoutStreamChart.Band]
 
     @Environment(\.dismiss) private var dismiss
-    @Environment(\.windowSize) private var windowSize
     private var wide = WideLayout()
     @State private var zoom: WorkoutStreamChart.Zoom
     /// `WorkoutStreamModel.id` of the metric drawn behind the trace, nil for none.
@@ -64,6 +63,13 @@ struct WorkoutStreamDetail: View {
     /// in a short one (a phone in landscape), where the page scrolls instead.
     @State private var viewport: CGFloat = 0
     @State private var rest: CGFloat = 0
+    /// The window's figures change with the window, not with the pointer.
+    @State private var summaryMemo = Memo<SummaryKey, [(label: String, value: String)]>()
+
+    private struct SummaryKey: Equatable {
+        let window: ClosedRange<Double>
+        let metrics: [WorkoutStreamModel]
+    }
 
     private static let minChartHeight: CGFloat = 240
 
@@ -112,27 +118,8 @@ struct WorkoutStreamDetail: View {
                 }
             }
         }
-        #if os(macOS)
-        // Most of the presenting window. Without an explicit size the sheet
-        // takes the smallest one its content accepts; with a fixed one it
-        // overflows a small window and wastes a large one.
-        .frame(width: macSheetSize.width, height: macSheetSize.height)
-        #else
-        // A frame cannot resize a sheet here — the presentation owns the size —
-        // and iPadOS defaults to `.form`, small and centred. `.page` is the one
-        // that hands a chart the screen; on iPhone it is the usual sheet.
-        .presentationSizing(.page)
-        #endif
+        .windowFillingSheet()
     }
-
-    #if os(macOS)
-    /// Most of the window, and it follows the window when that is resized.
-    /// `.zero` only before the root's first layout pass.
-    private var macSheetSize: CGSize {
-        guard windowSize.width > 0 else { return CGSize(width: 900, height: 600) }
-        return CGSize(width: windowSize.width * 0.92, height: windowSize.height * 0.88)
-    }
-    #endif
 
     private static func mean(_ values: [Double]) -> Double? {
         values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
@@ -165,10 +152,11 @@ struct WorkoutStreamDetail: View {
                 if let hoveredZone, let zone = zoneReadout(hoveredZone) {
                     Text(zone).foregroundStyle(Theme.Palette.zones[hoveredZone])
                 } else if let reading {
-                    Text("At " + model.timeLabel(reading.vertex.offset))
+                    Text("At " + model.timeLabel(reading.vertex.offset, withSeconds: true))
                 } else {
-                    Text("Average · " + model.timeLabel(zoom.window.lowerBound)
-                         + "–" + model.timeLabel(zoom.window.upperBound))
+                    let withSeconds = StreamPlot.timeTicks(in: zoom.window).step < 60
+                    Text("Average · " + model.timeLabel(zoom.window.lowerBound, withSeconds: withSeconds)
+                         + "–" + model.timeLabel(zoom.window.upperBound, withSeconds: withSeconds))
                 }
             }
             .font(.subheadline).monospacedDigit().lineLimit(1)
@@ -181,19 +169,22 @@ struct WorkoutStreamDetail: View {
     /// elevation has no meaningful average.
     private var summary: [(label: String, value: String)] {
         let window = zoom.window
-        var stats: [(label: String, value: String)] = []
-        if let speed = ([model] + overlays).first(where: \.kind.isSpeed) {
-            let metres = StreamPlot.distance(speeds: speed.values, binSeconds: speed.binSeconds,
-                                             in: window)
-            stats.append(("Distance", speed.kind == .swimPace ? "\(Int(metres.rounded())) m"
-                                                              : String(format: "%.2f km", metres / 1000)))
-        }
-        for other in overlays where other.kind != .elevation {
-            if let average = Self.mean(other.samples(in: window)) {
-                stats.append((other.kind.label, other.kind.format(average)))
+        return summaryMemo(SummaryKey(window: window, metrics: [model] + overlays)) {
+            var stats: [(label: String, value: String)] = []
+            if let speed = ([model] + overlays).first(where: \.kind.isSpeed) {
+                let metres = StreamPlot.distance(speeds: speed.values, binSeconds: speed.binSeconds,
+                                                 in: window)
+                stats.append(("Distance", speed.kind == .swimPace || metres < 1000
+                                          ? "\(Int(metres.rounded())) m"
+                                          : String(format: "%.2f km", metres / 1000)))
             }
+            for other in overlays where other.kind != .elevation {
+                if let average = Self.mean(other.samples(in: window)) {
+                    stats.append((other.kind.label, other.kind.format(average)))
+                }
+            }
+            return stats
         }
-        return stats
     }
 
     private var overlay: WorkoutStreamModel? {

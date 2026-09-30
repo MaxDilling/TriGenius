@@ -18,6 +18,15 @@ enum DataSource: String, CaseIterable, Identifiable {
         case .appleHealth: return "heart.text.square"
         }
     }
+
+    /// The read source behind a stored record's `source` key.
+    init?(storedSource: String) {
+        switch storedSource {
+        case "garmin": self = .garmin
+        case "healthkit": self = .appleHealth
+        default: return nil
+        }
+    }
 }
 
 /// A *write* target: where the coach's planned workouts are pushed. Exactly one is

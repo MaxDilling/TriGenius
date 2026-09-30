@@ -36,6 +36,20 @@ nonisolated enum GarminTransform {
         return parser.date(from: string)
     }
 
+    /// The local wall-clock end ("HH:mm") of an activity starting at
+    /// `startTimeLocal` (list or summary spelling) that ran `elapsedSeconds` —
+    /// pauses included, unlike `duration`. GMT arithmetic keeps the local clock.
+    static func endClock(startTimeLocal: String, elapsedSeconds: Double) -> String? {
+        let parser = DateFormatter()
+        parser.locale = Locale(identifier: "en_US_POSIX")
+        parser.timeZone = TimeZone(identifier: "GMT")
+        parser.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let stamp = String(startTimeLocal.prefix(19)).replacingOccurrences(of: "T", with: " ")
+        guard elapsedSeconds > 0, let start = parser.date(from: stamp) else { return nil }
+        parser.dateFormat = "HH:mm"
+        return parser.string(from: start.addingTimeInterval(elapsedSeconds))
+    }
+
     /// Convert speed in m/s into pace (mm:ss) for the requested reference distance.
     static func speedToPace(_ speedMps: Double?, distanceM: Double = 1000) -> String? {
         guard let speedMps, speedMps > 0 else { return nil }

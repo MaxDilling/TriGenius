@@ -13,35 +13,29 @@ struct HeroMetric: Identifiable {
     var id: String { label }
 }
 
-struct HeroMetricsCard: View {
+struct HeroMetricsRow: View {
     let metrics: [HeroMetric]
 
     @State private var showsNote = false
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(Array(metrics.enumerated()), id: \.element.id) { index, metric in
-                if index > 0 {
-                    Divider().frame(height: 34)
-                }
-                cell(metric)
-            }
+        HStack(alignment: .top, spacing: Theme.Spacing.xl) {
+            ForEach(metrics) { cell($0) }
         }
-        .frame(maxWidth: .infinity)
-        .cardSurface()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.bottom, Theme.Spacing.s)
     }
 
     @ViewBuilder
     private func cell(_ metric: HeroMetric) -> some View {
-        let cell = VStack(spacing: Theme.Spacing.xs) {
+        let cell = VStack(alignment: .leading, spacing: 2) {
             Text(metric.value)
-                .font(.title2.weight(.semibold))
+                .font(.title3.weight(.semibold))
                 .monospacedDigit()
                 .lineLimit(1).minimumScaleFactor(0.6)
             Text(metric.label)
                 .font(.caption).foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity)
         if let note = metric.note {
             cell
                 .contentShape(Rectangle())

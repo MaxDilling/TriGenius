@@ -147,6 +147,16 @@ private let bikeChildDTO: [String: Any] = [
     #expect(flat["averageRunningCadenceInStepsPerMinute"] == nil)
 }
 
+/// The multisport capture: 08:46:01 local + 11252.7 s elapsed = 11:53:33.
+@Test func endClock_addsElapsedToTheLocalStart() {
+    #expect(GarminTransform.endClock(startTimeLocal: "2026-07-26T08:46:01.0", elapsedSeconds: 11252.728) == "11:53")
+}
+
+/// A list-entry stamp, and a night run past midnight: 23:30 + 90 min = 01:00.
+@Test func endClock_wrapsPastMidnight() {
+    #expect(GarminTransform.endClock(startTimeLocal: "2026-07-26 23:30:00", elapsedSeconds: 5400) == "01:00")
+}
+
 @Test func timestamp_parsesGarminsFractionalGMTStamp() {
     let start = GarminTransform.timestamp("2026-07-26T06:46:01.0")
     let bikeStart = GarminTransform.timestamp("2026-07-26T07:32:48.0")

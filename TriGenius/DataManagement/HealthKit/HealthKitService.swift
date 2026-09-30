@@ -222,6 +222,7 @@ final class HealthKitService {
             "name": sport,
             "date": DateFormatter.ymd.string(from: scope.start),
             "time": Self.clock.string(from: scope.start),
+            "end_time": Self.clock.string(from: scope.end),
             "sport": sport,
             "duration_minutes": Self.round1(durationMin),
             "distance_km": distanceM.map { Self.round2($0 / 1000) } ?? NSNull(),
@@ -315,10 +316,13 @@ final class HealthKitService {
         case .strength, .other:
             break
         }
-        // Altitude profile from the GPS route (outdoor run/ride only).
-        if family == .run || family == .bike,
+        // Track and altitude profile from the GPS route (outdoor run/ride/hike only).
+        if family == .run || family == .bike || scope.activityType == .hiking,
            let route = try? await routeLocations(during: scope), route.count >= 2 {
-            metrics[.elevation] = route.map { ($0.timestamp.timeIntervalSince(start), $0.altitude) }
+            let offsets = route.map { $0.timestamp.timeIntervalSince(start) }
+            metrics[.elevation] = zip(offsets, route).map { ($0, $1.altitude) }
+            metrics[.latitude] = zip(offsets, route).map { ($0, $1.coordinate.latitude) }
+            metrics[.longitude] = zip(offsets, route).map { ($0, $1.coordinate.longitude) }
         }
         return (data, powerCurveJSON,
                 WorkoutStreams.encode(spanSeconds: scope.duration, metrics: metrics), zoneSamples)
@@ -740,7 +744,8 @@ final class HealthKitService {
     // MARK: - Formatting helpers
 
     /// Local wall-clock `HH:mm` of the workout start — parsed back into `startMinute`
-    /// by the store (`clockMinute(fromDetails:)`), mirroring Garmin's `time` field.
+    /// by the store (`clockMinute(fromDetails:)`), mirroring Garmin's `time` field —
+    /// and of its end (`end_time`).
     private static let clock: DateFormatter = {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")

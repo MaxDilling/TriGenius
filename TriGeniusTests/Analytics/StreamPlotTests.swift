@@ -14,6 +14,22 @@ private let runPace = StreamPlot.Metric(axis: .inverse(scale: 1000, floor: 0.5),
 private let zoned = StreamPlot.Metric(axis: .linear(1), framing: .fromZero,
                                       zones: [150, 200, 300, 400], bridgesGaps: false)
 
+/// The stream bucketed as the chart draws it — the whole workout unless a
+/// `window` narrows it.
+private func bucketed(_ values: [Double?], binSeconds: Int, metric: StreamPlot.Metric,
+                      visibleSpan: Double, plotWidth: Double,
+                      in window: ClosedRange<Double>? = nil) -> [StreamPlot.Segment] {
+    StreamPlot.segments(runs: StreamPlot.runs(values: values, binSeconds: binSeconds, metric: metric),
+                        binSeconds: binSeconds, metric: metric, visibleSpan: visibleSpan,
+                        plotWidth: plotWidth, in: window ?? 0...Double(values.count * binSeconds))
+}
+
+private func heldSamples(_ values: [Double?], binSeconds: Int, metric: StreamPlot.Metric,
+                         in window: ClosedRange<Double>) -> [Double] {
+    StreamPlot.samples(runs: StreamPlot.runs(values: values, binSeconds: binSeconds, metric: metric),
+                       in: window)
+}
+
 @Suite("StreamPlot bucketing")
 struct StreamPlotBucketingTests {
 
@@ -21,8 +37,8 @@ struct StreamPlotBucketingTests {
     /// bucket, so 600 / 8 = 75 vertices.
     @Test func bucketSizeFollowsTheVisibleSpanPerPixel() {
         let values = [Double?](repeating: 100, count: 600)
-        let segments = StreamPlot.segments(values: values, binSeconds: 50, metric: power,
-                                           visibleSpan: 30000, plotWidth: 300)
+        let segments = bucketed(values, binSeconds: 50, metric: power,
+                                visibleSpan: 30000, plotWidth: 300)
         #expect(segments[0].vertices.count == 75)
     }
 
@@ -31,8 +47,8 @@ struct StreamPlotBucketingTests {
     /// averaged away and every bin becomes its own vertex.
     @Test func zoomingInFloorsTheBucketAtOneStoredBin() {
         let values = [Double?](repeating: 100, count: 600)
-        let segments = StreamPlot.segments(values: values, binSeconds: 50, metric: power,
-                                           visibleSpan: 3000, plotWidth: 300)
+        let segments = bucketed(values, binSeconds: 50, metric: power,
+                                visibleSpan: 3000, plotWidth: 300)
         #expect(segments[0].vertices.count == 600)
     }
 
@@ -40,8 +56,8 @@ struct StreamPlotBucketingTests {
     /// midpoint of the first and last bin centres (5 and 35), and the bucket
     /// spans the bins' outer edges, 0…40.
     @Test func bucketCarriesMeanSpreadAndItsOwnSlice() {
-        let segments = StreamPlot.segments(values: [10, 20, 30, 40], binSeconds: 10,
-                                           metric: power, visibleSpan: 40, plotWidth: 4)
+        let segments = bucketed([10, 20, 30, 40], binSeconds: 10,
+                                metric: power, visibleSpan: 40, plotWidth: 4)
         let v = segments[0].vertices[0]
         #expect(v.mean == 25)
         #expect(v.low == 10 && v.high == 40)
@@ -49,12 +65,33 @@ struct StreamPlotBucketingTests {
         #expect(v.start == 0 && v.end == 40)
     }
 
+    /// 100 one-second bins, bucket 10 × 4 / 40 = 1: a 50…59 window builds the
+    /// bins centred 50.5…58.5 plus one either side, 49.5 and 59.5 — 11 vertices,
+    /// not 100.
+    @Test func onlyTheVisibleBucketsAreBuilt() {
+        let v = bucketed([Double?](repeating: 100, count: 100), binSeconds: 1, metric: power,
+                         visibleSpan: 10, plotWidth: 40, in: 50...59)[0].vertices
+        #expect(v.count == 11)
+        #expect(v.first?.offset == 49.5 && v.last?.offset == 59.5)
+    }
+
+    /// Bucket 40 × 4 / 40 = 4 bins, counted from the run's start: panning the
+    /// window from 21 s to 22 s leaves the first drawn bucket at 16…20.
+    @Test func panningNeverMovesTheBucketBoundaries() {
+        let values = [Double?](repeating: 100, count: 100)
+        for window in [21.0...40.0, 22.0...41.0] {
+            let v = bucketed(values, binSeconds: 1, metric: power,
+                             visibleSpan: 40, plotWidth: 40, in: window)[0].vertices
+            #expect(v.first?.start == 16 && v.first?.end == 20)
+        }
+    }
+
     /// A bin without a reading is not a pause while it stays inside
     /// `holdSeconds`: the last value is held across it, so the trace stays one
     /// run. Width 20 keeps the bucket at one bin, so each bin is its own vertex.
     @Test func aShortGapIsHeldAcross() {
-        let segments = StreamPlot.segments(values: [100, 100, nil, 200, 200], binSeconds: 1,
-                                           metric: power, visibleSpan: 5, plotWidth: 20)
+        let segments = bucketed([100, 100, nil, 200, 200], binSeconds: 1,
+                                metric: power, visibleSpan: 5, plotWidth: 20)
         #expect(segments.map(\.vertices.count) == [5])
         #expect(segments[0].vertices[2].mean == 100)   // the held reading
     }
@@ -63,8 +100,8 @@ struct StreamPlotBucketingTests {
     /// run splits and the bins either side never share a bucket.
     @Test func aGapPastTheHoldBreaksTheTrace() {
         let values: [Double?] = [100, 100, nil, nil, nil, nil, 200, 200]
-        let segments = StreamPlot.segments(values: values, binSeconds: 10, metric: power,
-                                           visibleSpan: 80, plotWidth: 320)
+        let segments = bucketed(values, binSeconds: 10, metric: power,
+                                visibleSpan: 80, plotWidth: 320)
         #expect(segments.map(\.vertices.count) == [2, 2])
     }
 
@@ -74,8 +111,8 @@ struct StreamPlotBucketingTests {
         let elevation = StreamPlot.Metric(axis: .linear(1), framing: .tight,
                                           zones: nil, bridgesGaps: true)
         let values: [Double?] = [100, 100, nil, 200, 200]
-        let segments = StreamPlot.segments(values: values, binSeconds: 60, metric: elevation,
-                                           visibleSpan: 300, plotWidth: 1)
+        let segments = bucketed(values, binSeconds: 60, metric: elevation,
+                                visibleSpan: 300, plotWidth: 1)
         #expect(segments.count == 1)
         #expect(segments[0].vertices[0].mean == 140)
     }
@@ -83,8 +120,8 @@ struct StreamPlotBucketingTests {
     /// A pace bucket inverts: the slowest speed (2 m/s → 500 s/km) is the
     /// *highest* plot value, and `low`/`high` stay paired with their plot twins.
     @Test func paceBucketOrdersItsSpreadByPlotPosition() {
-        let segments = StreamPlot.segments(values: [2, 4], binSeconds: 1, metric: runPace,
-                                           visibleSpan: 2, plotWidth: 1)
+        let segments = bucketed([2, 4], binSeconds: 1, metric: runPace,
+                                visibleSpan: 2, plotWidth: 1)
         let v = segments[0].vertices[0]
         #expect(v.mean == 3)                 // mean speed, not mean pace
         #expect(v.plot == 1000.0 / 3.0)
@@ -95,16 +132,16 @@ struct StreamPlotBucketingTests {
     /// Below the floor the athlete is standing still: the bin is a gap, not a
     /// very slow one, so it breaks the trace instead of plotting a huge pace.
     @Test func aStoppedPaceBinIsAGap() {
-        let segments = StreamPlot.segments(values: [3, 0.1, 3], binSeconds: 1, metric: runPace,
-                                           visibleSpan: 3, plotWidth: 3)
+        let segments = bucketed([3, 0.1, 3], binSeconds: 1, metric: runPace,
+                                visibleSpan: 3, plotWidth: 3)
         #expect(segments.count == 2)
     }
 
     /// The zone is the one the bucket spent the most *time* in: three bins in
     /// zone 0 against one in zone 4.
     @Test func zoneIsTheOneHoldingMostBins() {
-        let segments = StreamPlot.segments(values: [100, 100, 100, 500], binSeconds: 1,
-                                           metric: zoned, visibleSpan: 4, plotWidth: 1)
+        let segments = bucketed([100, 100, 100, 500], binSeconds: 1,
+                                metric: zoned, visibleSpan: 4, plotWidth: 1)
         #expect(segments[0].vertices[0].zone == 0)
     }
 
@@ -112,16 +149,16 @@ struct StreamPlotBucketingTests {
     /// to 250 W — zone 2 — but the athlete rode zone 0 for three quarters of the
     /// bucket, and that is what the trace colours.
     @Test func dominantZoneDisagreesWithTheMean() {
-        let segments = StreamPlot.segments(values: [100, 100, 100, 700], binSeconds: 1,
-                                           metric: zoned, visibleSpan: 4, plotWidth: 1)
+        let segments = bucketed([100, 100, 100, 700], binSeconds: 1,
+                                metric: zoned, visibleSpan: 4, plotWidth: 1)
         #expect(segments[0].vertices[0].mean == 250)
         #expect(segments[0].vertices[0].zone == 0)
     }
 
     /// An even split reads as the easier zone rather than flipping on rounding.
     @Test func aTiedBucketTakesTheLowerZone() {
-        let segments = StreamPlot.segments(values: [100, 500], binSeconds: 1, metric: zoned,
-                                           visibleSpan: 2, plotWidth: 1)
+        let segments = bucketed([100, 500], binSeconds: 1, metric: zoned,
+                                visibleSpan: 2, plotWidth: 1)
         #expect(segments[0].vertices[0].zone == 0)
     }
 }
@@ -132,8 +169,8 @@ struct StreamPlotZoneRunTests {
     /// One bucket per bin, zones 0,0,4,4 — two stretches, meeting where the zone
     /// changes and together covering the whole 4 s.
     @Test func adjacentBucketsOfOneZoneMergeIntoAStretch() {
-        let segments = StreamPlot.segments(values: [100, 100, 500, 500], binSeconds: 1,
-                                           metric: zoned, visibleSpan: 4, plotWidth: 16)
+        let segments = bucketed([100, 100, 500, 500], binSeconds: 1,
+                                metric: zoned, visibleSpan: 4, plotWidth: 16)
         let runs = StreamPlot.zoneRuns(of: segments)
         #expect(runs.map(\.zone) == [0, 4])
         #expect(runs[0].start == 0 && runs[0].end == 2)
@@ -144,8 +181,8 @@ struct StreamPlotZoneRunTests {
     /// the ribbon never paints over a pause — 40 s of silence, past the hold.
     @Test func aStretchNeverSpansAGap() {
         let values: [Double?] = [100, nil, nil, nil, nil, 100]
-        let segments = StreamPlot.segments(values: values, binSeconds: 10, metric: zoned,
-                                           visibleSpan: 60, plotWidth: 240)
+        let segments = bucketed(values, binSeconds: 10, metric: zoned,
+                                visibleSpan: 60, plotWidth: 240)
         let runs = StreamPlot.zoneRuns(of: segments)
         #expect(runs.map(\.zone) == [0, 0])
         #expect(runs[0].end == 10 && runs[1].start == 50)
@@ -153,11 +190,35 @@ struct StreamPlotZoneRunTests {
 
     /// Without a zone model there is nothing to colour: one stretch, no zone.
     @Test func noZoneModelIsOneStretch() {
-        let segments = StreamPlot.segments(values: [100, 500], binSeconds: 1, metric: power,
-                                           visibleSpan: 2, plotWidth: 8)
+        let segments = bucketed([100, 500], binSeconds: 1, metric: power,
+                                visibleSpan: 2, plotWidth: 8)
         let runs = StreamPlot.zoneRuns(of: segments)
         #expect(runs.count == 1)
         #expect(runs[0].zone == nil)
+    }
+}
+
+@Suite("StreamPlot time axis")
+struct StreamPlotTimeTicksTests {
+
+    /// 5 h = 18000 s: 1800 s would make ten intervals, 3600 s makes five.
+    @Test func aLongRideTicksHourly() {
+        let ticks = StreamPlot.timeTicks(in: 0...18000)
+        #expect(ticks.step == 3600)
+        #expect(ticks.values == [0, 3600, 7200, 10800, 14400, 18000])
+    }
+
+    /// 150 s zoomed in at 1:23:20: 30 s steps, placed on multiples of 30 — the
+    /// first at 5010 s, never at the window's own edge.
+    @Test func zoomedInTicksOnRoundSeconds() {
+        let ticks = StreamPlot.timeTicks(in: 5000...5150)
+        #expect(ticks.step == 30)
+        #expect(ticks.values == [5010, 5040, 5070, 5100, 5130])
+    }
+
+    /// Past the round steps, whole hours: 17 h / 5 = 3.4 h, rounded up to 4 h.
+    @Test func anIronmanTicksInWholeHours() {
+        #expect(StreamPlot.timeTicks(in: 0...61200).step == 14400)
     }
 }
 
@@ -167,15 +228,15 @@ struct StreamPlotSamplesTests {
     /// 10 s bins centred at 5, 15, 25: the empty middle bin holds the 100 before
     /// it, and a 0…15 window takes the first two centres.
     @Test func aWindowTakesTheHeldSamplesInside() {
-        #expect(StreamPlot.samples(values: [100, nil, 200], binSeconds: 10, metric: power,
-                                   in: 0...15) == [100, 100])
+        #expect(heldSamples([100, nil, 200], binSeconds: 10, metric: power,
+                            in: 0...15) == [100, 100])
     }
 
     /// A stop on a pace axis is no sample — it would drag the average pace
     /// toward standing still.
     @Test func aStoppedPaceBinIsNoSample() {
-        #expect(StreamPlot.samples(values: [2, 0.1, 4], binSeconds: 10, metric: runPace,
-                                   in: 0...30) == [2, 4])
+        #expect(heldSamples([2, 0.1, 4], binSeconds: 10, metric: runPace,
+                            in: 0...30) == [2, 4])
     }
 
     /// Speeds 2, held 2, 3 and a 0.2 m/s shuffle — which counts here though a

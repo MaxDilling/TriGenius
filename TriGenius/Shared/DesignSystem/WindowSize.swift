@@ -21,6 +21,33 @@ extension View {
     func measuringWindow() -> some View {
         modifier(WindowSizeReader())
     }
+
+    /// A sheet that takes most of the window — for a chart or map worth the
+    /// room. Put on the sheet's content.
+    func windowFillingSheet() -> some View {
+        modifier(WindowFillingSheet())
+    }
+}
+
+private struct WindowFillingSheet: ViewModifier {
+    @Environment(\.windowSize) private var windowSize
+
+    func body(content: Content) -> some View {
+        #if os(macOS)
+        // Without an explicit size the sheet takes the smallest one its content
+        // accepts; a fixed one overflows a small window and wastes a large one.
+        // `.zero` only before the root's first layout pass.
+        let size = windowSize.width > 0
+            ? CGSize(width: windowSize.width * 0.92, height: windowSize.height * 0.88)
+            : CGSize(width: 900, height: 600)
+        content.frame(width: size.width, height: size.height)
+        #else
+        // A frame cannot resize a sheet here — the presentation owns the size —
+        // and iPadOS defaults to `.form`, small and centred. `.page` hands the
+        // content the screen; on iPhone it is the usual sheet.
+        content.presentationSizing(.page)
+        #endif
+    }
 }
 
 private struct WindowSizeReader: ViewModifier {

@@ -58,7 +58,7 @@ Gehe- **One `SegmentedPicker`** for every view switch in a heading, card or tool
 - **Reduce vertical scrolling.** Prefer compact horizontal rows over bulky vertical cards in lists; separate entries with thin translucent dividers.
 - **Color tinting over icons.** Don't use large discipline icons (swim/bike/run). Use a small icon and lightly **tint** the row/glass with the discipline color.
 - **Life vs. training.** Non-training calendar events (Work, Uni) must be visually subordinate: colorless, flat, minimal height — so colored training sessions stand out as the day's anchors.
-- **Hero metrics.** In detail views, lift the 2–3 most important metrics (TL, Duration, IF/TE) into a prominent hero capsule at the top; keep secondary metrics in a compact list below.
+- **Hero metrics.** In detail views, lift the 2–3 most important metrics (TL, Duration, IF/TE) into a hero row (`HeroMetricsRow`) at the top, left-aligned with the title and on the page background rather than a card; keep secondary metrics in a compact list below.
 
 ## 6. Tokens (`Theme.swift`)
 

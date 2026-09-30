@@ -37,7 +37,7 @@ private let transitionLeg: [String: Any] = ["sport": "transition", "duration_min
     #expect(decoded[0].durationMinutes == 60)
     // The leg's own streams survive the base64 round trip — the bike leg charts
     // rpm, which the parent's single steps/min series can't provide.
-    #expect(WorkoutStreams.decode(decoded[0].streamsData)?.metrics[.cadence]?.first == 85)
+    #expect(WorkoutStreams.decode(decoded[0].streamsData)?[.cadence]?.first == 85)
 }
 
 @Test func encode_emptySegmentsIsEmptyString() {

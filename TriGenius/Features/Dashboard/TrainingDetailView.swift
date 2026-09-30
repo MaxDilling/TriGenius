@@ -45,7 +45,13 @@ struct TrainingDetailView: View {
                     : (totals[segment.sport] ?? 1) > 1 ? "\(title) \(ordinal)" : title,
                 color: segment.isTransition ? .gray : segment.family.color)
         }
+        self.hasRoute = ([record.streamsData] + legs.map(\.segment.streamsData))
+            .contains { WorkoutStreams.contains(.latitude, in: $0) }
     }
+
+    /// Known before the streams decode, so the route header holds its place
+    /// from the first frame.
+    private let hasRoute: Bool
 
     /// nil = the Total tab; otherwise the index into `legs`.
     @State private var selectedLeg: Int?
@@ -62,7 +68,26 @@ struct TrainingDetailView: View {
     @State private var showUnlinkConfirm = false
     @State private var showIgnoreConfirm = false
     @State private var editingSets: [StrengthSets.SetRow]?
+    /// Every chart this page can show, built once per stored stream by `loadCharts`.
+    @State private var charts = Charts()
+    @State private var routeCursor = RouteCursor()
     @Environment(\.dismiss) private var dismiss
+
+    private struct Charts {
+        var whole: [WorkoutStreamModel] = []
+        var legs: [[WorkoutStreamModel]] = []
+        var race: [WorkoutStreamModel] = []
+        /// The whole session's track — a multisport row's parent stream is
+        /// empty, so there it is every leg's track in the leg's color.
+        var route: [RouteTrack] = []
+    }
+
+    /// What the charts are built from — a re-sync or rescore rewrites one of these.
+    private struct ChartSource: Equatable {
+        let streams: Data
+        let details: String
+        let segments: String
+    }
 
     private var family: SportFamily { SportFamily(sportKey: record.sport) }
     private var structure: PlannedWorkoutStructure? { record.structure }
@@ -98,19 +123,29 @@ struct TrainingDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            Group {
-                if isWide { wideBody } else { compactBody }
+        Group {
+            if hasRoute && !isWide {
+                RouteMapPage(tracks: routeTracks) { header } content: { compactBody.padding() }
+            } else {
+                ScrollView {
+                    Group { if isWide { wideBody } else { compactBody } }.padding()
+                }
             }
-            .padding()
         }
         .onGeometryChange(for: Bool.self) { $0.size.width >= 1000 } action: { isWide = $0 }
+        .environment(\.routeCursor, routeCursor)
+        .task(id: ChartSource(streams: record.streamsData, details: record.detailsJSON,
+                              segments: record.segmentsJSON)) { await loadCharts() }
         .background(Color.appBackground)
         .navigationTitle(family.displayName)
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .toolbar {
+            // Declared here, not by the map page, so it sits left of the menu.
+            if hasRoute && !isWide {
+                ToolbarItem(placement: .primaryAction) { RouteMapStyleButton() }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Menu {
                     if record.isPlanned, record.isCompleted {
@@ -261,8 +296,8 @@ struct TrainingDetailView: View {
 
     private var compactBody: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.l) {
-            header
-            HeroMetricsCard(metrics: heroMetrics)
+            if !hasRoute { header }
+            HeroMetricsRow(metrics: heroMetrics)
             comparisonCard
             plannedStructureCard
             if legs.isEmpty {
@@ -270,7 +305,7 @@ struct TrainingDetailView: View {
                 activityCard(details)
                 zonesCard(details)
                 feelCard
-                streamsSection(record.streamsData, details: details, family: family)
+                streamsSection(charts.whole)
                 swimSection(details)
             } else {
                 multisportSection
@@ -283,7 +318,7 @@ struct TrainingDetailView: View {
             // Single sport needs no heading here: the navigation title already
             // names it, and the rail carries the workout's own header card.
             if !legs.isEmpty {
-                header
+                if hasRoute { routeHeader() } else { header }
                 segmentStrip
             }
             HStack(alignment: .top, spacing: Theme.Spacing.l) {
@@ -300,14 +335,16 @@ struct TrainingDetailView: View {
     @ViewBuilder
     private var rail: some View {
         if let leg = selectedLegValue {
-            HeroMetricsCard(metrics: totalsMetrics(leg.segment.durationMinutes, leg.segment.tss,
+            HeroMetricsRow(metrics: totalsMetrics(leg.segment.durationMinutes, leg.segment.tss,
                                                    leg.segment.distanceKm, family: leg.segment.family,
                                                    basis: leg.segment.tssBasis))
             activityCard(leg.segment.details, title: "\(leg.name) · Metrics")
             zonesCard(leg.segment.details)
         } else {
-            if legs.isEmpty { header.cardSurface() }
-            HeroMetricsCard(metrics: heroMetrics)
+            if legs.isEmpty {
+                if hasRoute { routeHeader() } else { header.cardSurface() }
+            }
+            HeroMetricsRow(metrics: heroMetrics)
             comparisonCard
             plannedStructureCard
             activityCard(details, title: legs.isEmpty ? "Activity" : "Metrics", extra: transitionsRow)
@@ -326,20 +363,20 @@ struct TrainingDetailView: View {
     @ViewBuilder
     private var chartPane: some View {
         if let leg = selectedLegValue {
-            let models = WorkoutStreamModel.models(from: leg.segment.streamsData, details: leg.segment.details,
-                                                   family: leg.segment.family)
+            let models = legCharts(leg)
             chartGrid(models, siblings: models, columns: models.count > 2 ? 2 : 1, height: 168)
+                .environment(\.routeCursorBase, leg.segment.offsetSeconds)
             swimSection(leg.segment.details)
         } else if legs.isEmpty {
             strengthCard(details)
-            let models = WorkoutStreamModel.models(from: record.streamsData, details: details, family: family)
+            let models = charts.whole
             if let primary = models.first {
                 WorkoutStreamCard(title: primary.kind.label, model: primary, siblings: models, height: 180)
             }
             chartGrid(Array(models.dropFirst()), siblings: models, columns: 2, height: 150)
             swimSection(details)
         } else {
-            let models = WorkoutStreamModel.raceModels(segments: legs.map(\.segment))
+            let models = charts.race
             chartGrid(models, siblings: models, columns: 1, height: 168,
                       bands: raceBands, suffix: " · full race")
         }
@@ -361,27 +398,34 @@ struct TrainingDetailView: View {
 
     // MARK: Header
 
-    private var header: some View {
-        HStack(spacing: Theme.Spacing.m) {
-            Image(systemName: legs.isEmpty ? family.icon : "link")
-                .font(.title)
-                .foregroundStyle(.white)
-                .frame(width: 52, height: 52)
-                .background(accent.gradient)
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.m))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(record.name).font(.headline)
-                HStack(spacing: 4) {
-                    if let time = Coerce.string(details["time"]), !time.isEmpty {
-                        Text(time)
-                    }
-                    Text(record.date, style: .date)
-                    Text("(\(record.source))")
-                }
-                .font(.subheadline).foregroundStyle(.secondary)
-            }
-            Spacer()
+    /// Nil until the streams have decoded; the route header holds its place meanwhile.
+    private var routeTracks: [RouteTrack]? { charts.route.isEmpty ? nil : charts.route }
+
+    /// The header laid over the route map as a card — the wide layout's.
+    private func routeHeader() -> some View {
+        RouteHeader(tracks: routeTracks) { header }
+    }
+
+    /// "27. September 2026, 07:34–16:32 · Garmin"
+    private var dateLine: String {
+        var line = record.date.formatted(date: .long, time: .omitted)
+        if let time = Coerce.string(details["time"]), !time.isEmpty {
+            line += ", " + time
+            if let end = Coerce.string(details["end_time"]), !end.isEmpty { line += "–" + end }
         }
+        let source = DataSource(storedSource: record.source)?.displayName
+            ?? (record.source == "app" ? "TriGenius" : record.source)
+        return line + " · " + source
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(record.name).font(.title2.bold())
+            Text(dateLine)
+                .font(.subheadline).foregroundStyle(.secondary)
+                .lineLimit(1).minimumScaleFactor(0.8)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: Hero metrics
@@ -724,8 +768,8 @@ struct TrainingDetailView: View {
             }
             activityCard(leg.segment.details, title: "Metrics")
             zonesCard(leg.segment.details)
-            streamsSection(leg.segment.streamsData, details: leg.segment.details,
-                               family: leg.segment.family)
+            streamsSection(legCharts(leg))
+                .environment(\.routeCursorBase, leg.segment.offsetSeconds)
             swimSection(leg.segment.details)
         } else {
             splitsCard
@@ -868,7 +912,7 @@ struct TrainingDetailView: View {
     /// The race-long traces, with the legs shaded behind them.
     @ViewBuilder
     private var raceCharts: some View {
-        let models = WorkoutStreamModel.raceModels(segments: legs.map(\.segment))
+        let models = charts.race
         ForEach(models) { model in
             WorkoutStreamCard(title: "\(model.kind.label) · full race", model: model,
                               siblings: models, bands: raceBands)
@@ -917,13 +961,37 @@ struct TrainingDetailView: View {
                          : String(format: "%d:%02d", s / 60, s % 60)
     }
 
-    @ViewBuilder
-    private func streamsSection(_ data: Data, details: [String: Any],
-                                family: SportFamily) -> some View {
-        let models = WorkoutStreamModel.models(from: data, details: details, family: family)
+    private func streamsSection(_ models: [WorkoutStreamModel]) -> some View {
         ForEach(models) { model in
             WorkoutStreamCard(title: model.kind.label, model: model, siblings: models)
         }
+    }
+
+    private func legCharts(_ leg: Leg) -> [WorkoutStreamModel] {
+        leg.index < charts.legs.count ? charts.legs[leg.index] : []
+    }
+
+    /// Decoding a long ride's 1 Hz streams costs tens of ms — too much for a
+    /// `body` pass — so it runs once per source, off the main actor.
+    private func loadCharts() async {
+        let decoded = await Self.decode([record.streamsData] + legs.map(\.segment.streamsData))
+        guard !Task.isCancelled else { return }
+        let legStreams = Array(zip(legs, decoded.dropFirst()))
+        let route = [RouteTrack(id: -1, streams: decoded[0], startingAt: 0, color: family.color)]
+            + legStreams.map {
+                RouteTrack(id: $0.index, streams: $1, startingAt: $0.segment.offsetSeconds, color: $0.color)
+            }
+        charts = Charts(
+            whole: WorkoutStreamModel.models(from: decoded[0], details: details, family: family),
+            legs: legStreams.map {
+                WorkoutStreamModel.models(from: $1, details: $0.segment.details, family: $0.segment.family)
+            },
+            race: WorkoutStreamModel.raceModels(legs: legStreams.map { ($0.segment.offsetSeconds, $1) }),
+            route: route.compactMap { $0 })
+    }
+
+    @concurrent private static func decode(_ blobs: [Data]) async -> [[WorkoutStreams.Metric: [Double?]]] {
+        blobs.map { WorkoutStreams.decode($0) ?? [:] }
     }
 
     // MARK: Strength

@@ -9,37 +9,51 @@ import Charts
 // separate segments; pace kinds plot the speed stream as seconds-per-unit on a
 // reversed axis (faster = up). Pure value model, no store access.
 
-struct WorkoutStreamModel: Codable, Equatable, Identifiable {
-    enum Kind: String, Codable {
+struct WorkoutStreamModel: Equatable, Identifiable {
+    enum Kind: String {
         case speed, power, heartRate, runPace, hikePace, swimPace, bikeCadence, runCadence, elevation
     }
     /// A *measured* level drawn as a rule across the plot — normalized power on
     /// a bike power trace. Never an average standing in for one that is missing.
-    struct Reference: Codable, Equatable {
+    struct Reference: Equatable {
         let value: Double   // natural units
         let label: String
     }
 
-    var kind: Kind
-    var binSeconds: Int
+    let kind: Kind
+    let binSeconds: Int
     /// Natural units per bin (m/s, W, bpm, rpm/spm, m); nil = recording gap.
-    var values: [Double?]
-    var reference: Reference? = nil
+    let values: [Double?]
+    let reference: Reference?
     /// The z1–z4 upper bounds this workout was bucketed against, in the metric's
     /// own unit — the shading behind the trace. Nil where the discipline has no
     /// zone model or the threshold behind it was unknown.
-    var zones: [Double]? = nil
+    let zones: [Double]?
     /// Seconds in z1…z5 as bucketed at ingest — the exact figures, not a count
     /// of the buckets currently on screen.
-    var zoneSeconds: [Double]? = nil
+    let zoneSeconds: [Double]?
+    /// What `StreamPlot` needs to lay this metric out.
+    let plotMetric: StreamPlot.Metric
+    /// The stream as the trace draws it (`StreamPlot.runs`), derived once: at
+    /// 1 Hz, every redraw and window read starting from `values` is too slow.
+    let runs: [[StreamPlot.Sample]]
+
+    init(kind: Kind, binSeconds: Int, values: [Double?], reference: Reference? = nil,
+         zones: [Double]? = nil, zoneSeconds: [Double]? = nil) {
+        self.kind = kind
+        self.binSeconds = binSeconds
+        self.values = values
+        self.reference = reference
+        self.zones = zones
+        self.zoneSeconds = zoneSeconds
+        self.plotMetric = .init(axis: kind.axis, framing: kind.framing, zones: zones,
+                                bridgesGaps: kind == .elevation, minSpan: kind.minSpan)
+        self.runs = StreamPlot.runs(values: values, binSeconds: binSeconds, metric: plotMetric)
+    }
+
     var id: String { kind.rawValue }
     /// Elapsed seconds the stored bins cover.
     var spanSeconds: Double { Double(values.count * binSeconds) }
-    /// What `StreamPlot` needs to lay this metric out.
-    var plotMetric: StreamPlot.Metric {
-        .init(axis: kind.axis, framing: kind.framing, zones: zones, bridgesGaps: kind == .elevation,
-              minSpan: kind.minSpan)
-    }
 
     /// The stored bins overlapping an elapsed-time window.
     func bins(in window: ClosedRange<Double>) -> ArraySlice<Double?> {
@@ -51,23 +65,25 @@ struct WorkoutStreamModel: Codable, Equatable, Identifiable {
 
     /// The recorded samples in a window, as the trace draws them.
     func samples(in window: ClosedRange<Double>) -> [Double] {
-        StreamPlot.samples(values: values, binSeconds: binSeconds, metric: plotMetric, in: window)
+        StreamPlot.samples(runs: runs, in: window)
     }
 
     /// Elapsed time in one format for the whole workout — `h:mm` once it runs an
     /// hour, `m:ss` below — so two labels side by side never mix the two.
-    func timeLabel(_ seconds: Double) -> String {
+    /// `withSeconds` extends `h:mm` to `h:mm:ss`: a point readout, or an axis
+    /// zoomed in below minute ticks.
+    func timeLabel(_ seconds: Double, withSeconds: Bool = false) -> String {
         let s = Int(seconds)
-        return spanSeconds >= 3600 ? String(format: "%d:%02d", s / 3600, (s % 3600) / 60)
-                                   : String(format: "%d:%02d", s / 60, s % 60)
+        guard spanSeconds >= 3600 else { return String(format: "%d:%02d", s / 60, s % 60) }
+        return withSeconds ? String(format: "%d:%02d:%02d", s / 3600, (s % 3600) / 60, s % 60)
+                           : String(format: "%d:%02d", s / 3600, (s % 3600) / 60)
     }
 
-    /// Chart models for a workout's stored streams, in the sport's display order;
+    /// Chart models for a workout's decoded streams, in the sport's display order;
     /// pace sports render the speed stream as pace. `details` supplies the
     /// reference levels the source measured at full stream resolution.
-    static func models(from data: Data, details: [String: Any],
+    static func models(from decoded: [WorkoutStreams.Metric: [Double?]], details: [String: Any],
                        family: SportFamily) -> [WorkoutStreamModel] {
-        guard let decoded = WorkoutStreams.decode(data) else { return [] }
         let order: [(WorkoutStreams.Metric, Kind)] = switch family {
         case .bike:
             [(.speed, .speed), (.power, .power), (.heartRate, .heartRate),
@@ -85,8 +101,8 @@ struct WorkoutStreamModel: Codable, Equatable, Identifiable {
             + [(.heartRate, .heartRate), (.elevation, .elevation)]
         }
         return order.compactMap { metric, kind in
-            decoded.metrics[metric].map {
-                WorkoutStreamModel(kind: kind, binSeconds: decoded.binSeconds, values: $0,
+            decoded[metric].map {
+                WorkoutStreamModel(kind: kind, binSeconds: WorkoutStreams.binSeconds, values: $0,
                                    reference: reference(kind, details),
                                    zones: kind.zoneMetric.flatMap {
                                        ZoneDistribution.zoneBounds(details: details, metric: $0)
@@ -99,7 +115,7 @@ struct WorkoutStreamModel: Codable, Equatable, Identifiable {
     }
 
     /// The stored normalized power — computed at ingest over the full-resolution
-    /// stream, so it is read here, never recomputed from the downsampled bins.
+    /// stream, so it is read here, never recomputed from the stored stream.
     private static func reference(_ kind: Kind, _ details: [String: Any]) -> Reference? {
         guard kind == .power,
               let np = Coerce.double((details["cycling"] as? [String: Any])?["normalized_power_w"]),
@@ -108,21 +124,18 @@ struct WorkoutStreamModel: Codable, Equatable, Identifiable {
         return Reference(value: np, label: "NP")
     }
 
-    /// Race-wide models for a multisport session: every leg's stored bins placed
+    /// Race-wide models for a multisport session: every leg's decoded bins placed
     /// on one elapsed-race timeline (a leg's gap between end and the next start
     /// stays nil, so the line breaks there). Only heart rate and elevation
     /// combine — cadence, power and pace mean different things per discipline,
     /// so one series across the legs would be a number that never existed.
-    static func raceModels(segments: [WorkoutSegment]) -> [WorkoutStreamModel] {
-        let legs = segments.compactMap { segment -> (offset: Double, decoded: WorkoutStreams.Decoded)? in
-            WorkoutStreams.decode(segment.streamsData).map { (segment.offsetSeconds, $0) }
-        }
+    static func raceModels(legs: [(offset: Double, metrics: [WorkoutStreams.Metric: [Double?]])])
+        -> [WorkoutStreamModel] {
+        let bin = WorkoutStreams.binSeconds
         let span: Double = legs.map { leg in
-            let bins: Int = leg.decoded.metrics.values.first?.count ?? 0
-            return leg.offset + Double(bins * leg.decoded.binSeconds)
+            leg.offset + Double((leg.metrics.values.first?.count ?? 0) * bin)
         }.max() ?? 0
         guard span > 0 else { return [] }
-        let bin = WorkoutStreams.binSeconds(spanSeconds: span)
         let count = Int((span / Double(bin)).rounded(.up))
 
         return [(WorkoutStreams.Metric.heartRate, Kind.heartRate), (.elevation, .elevation)]
@@ -130,10 +143,10 @@ struct WorkoutStreamModel: Codable, Equatable, Identifiable {
                 var sums = [Double](repeating: 0, count: count)
                 var hits = [Int](repeating: 0, count: count)
                 for leg in legs {
-                    guard let values = leg.decoded.metrics[metric] else { continue }
+                    guard let values = leg.metrics[metric] else { continue }
                     for (i, value) in values.enumerated() {
                         guard let value else { continue }
-                        let center = leg.offset + (Double(i) + 0.5) * Double(leg.decoded.binSeconds)
+                        let center = leg.offset + (Double(i) + 0.5) * Double(bin)
                         let slot = Int(center) / bin
                         guard slot >= 0, slot < count else { continue }
                         sums[slot] += value
@@ -343,6 +356,8 @@ struct WorkoutStreamChart: View {
     let reading: Binding<Reading?>?
 
     @State private var scrubOffset: Double?
+    @Environment(\.routeCursor) private var routeCursor
+    @Environment(\.routeCursorBase) private var routeCursorBase
     /// The plot rectangle itself: its width sets the smoothing bucket, its
     /// height keeps the zone ribbon a constant thickness instead of a share of
     /// however tall the chart happens to be.
@@ -356,6 +371,22 @@ struct WorkoutStreamChart: View {
     @State private var heldDomain: StreamPlot.Domain?
     /// Whether the pointer is down on the zone ribbon rather than the trace.
     @State private var onRibbon = false
+    /// The geometry, keyed by what it depends on — a pointer move changes none
+    /// of it, and every hover redraws `body`.
+    @State private var plotMemo = Memo<PlotKey, (segments: [StreamPlot.Segment], runs: [StreamPlot.Run])>()
+    @State private var domainMemo = Memo<PlotKey, StreamPlot.Domain>()
+    @State private var overlayMemo = Memo<OverlayKey, Overlaid>()
+
+    private struct PlotKey: Equatable {
+        let model: WorkoutStreamModel
+        let window: ClosedRange<Double>
+        let width: Double
+    }
+
+    private struct OverlayKey: Equatable {
+        let plot: PlotKey
+        let target: StreamPlot.Domain
+    }
 
     /// The zone ribbon's thickness in points — constant, so a tall plot does not
     /// hand it more of the chart than it needs — and the taller strip that counts
@@ -405,6 +436,7 @@ struct WorkoutStreamChart: View {
         .onChange(of: highlightedZone) { _, zone in highlight?.wrappedValue = zone }
         .onChange(of: onRibbon ? nil : scrubOffset) { _, offset in
             reading?.wrappedValue = offset.flatMap(read(at:))
+            routeCursor?.offset = offset.map { $0 + routeCursorBase }
         }
     }
 
@@ -413,8 +445,12 @@ struct WorkoutStreamChart: View {
     /// The axis follows the visible stretch, never narrower than the kind's
     /// `minSpan`.
     private var yDomain: StreamPlot.Domain {
-        heldDomain ?? StreamPlot.domain(values: model.bins(in: window), metric: model.plotMetric)
+        heldDomain ?? domainMemo(plotKey) {
+            StreamPlot.domain(values: model.bins(in: window), metric: model.plotMetric)
+        }
     }
+
+    private var plotKey: PlotKey { PlotKey(model: model, window: window, width: plotWidth) }
 
     private func hold(_ holding: Bool) {
         if holding {
@@ -428,7 +464,12 @@ struct WorkoutStreamChart: View {
     private var plotWidth: Double { plotSize.width > 0 ? plotSize.width : 320 }
 
     private func overlaid(into domain: StreamPlot.Domain) -> Overlaid? {
-        overlay.map { Overlaid($0, window: window, plotWidth: plotWidth, into: domain) }
+        overlay.map { overlay in
+            overlayMemo(OverlayKey(plot: PlotKey(model: overlay, window: window, width: plotWidth),
+                                   target: domain)) {
+                Overlaid(overlay, window: window, plotWidth: plotWidth, into: domain)
+            }
+        }
     }
 
     private func read(at offset: Double) -> Reading? {
@@ -440,10 +481,12 @@ struct WorkoutStreamChart: View {
 
     /// The bucketing this pass renders, and the zone stretches over it.
     private var plot: (segments: [StreamPlot.Segment], runs: [StreamPlot.Run]) {
-        let segments = StreamPlot.segments(
-            values: model.values, binSeconds: model.binSeconds, metric: model.plotMetric,
-            visibleSpan: visibleSpan, plotWidth: plotWidth)
-        return (segments, StreamPlot.zoneRuns(of: segments))
+        plotMemo(plotKey) {
+            let segments = StreamPlot.segments(
+                runs: model.runs, binSeconds: model.binSeconds, metric: model.plotMetric,
+                visibleSpan: visibleSpan, plotWidth: plotWidth, in: window)
+            return (segments, StreamPlot.zoneRuns(of: segments))
+        }
     }
 
     /// The zone under the pointer, but only while it rests on the ribbon —
@@ -545,10 +588,13 @@ struct WorkoutStreamChart: View {
         }
         .chartXScale(domain: zoom?.wrappedValue.window ?? 0...model.spanSeconds)
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 5)) { value in
+            let ticks = StreamPlot.timeTicks(in: window)
+            AxisMarks(values: ticks.values) { value in
                 AxisGridLine()
                 AxisValueLabel {
-                    if let seconds = value.as(Double.self) { Text(model.timeLabel(seconds)) }
+                    if let seconds = value.as(Double.self) {
+                        Text(model.timeLabel(seconds, withSeconds: ticks.step < 60))
+                    }
                 }
             }
         }
@@ -621,7 +667,7 @@ struct WorkoutStreamChart: View {
             } else {
                 rule.annotation(position: .top, spacing: 0,
                             overflowResolution: .init(x: .fit(to: .plot), y: .fit(to: .plot))) {
-                    ChartTooltip(title: model.timeLabel(vertex.offset),
+                    ChartTooltip(title: model.timeLabel(vertex.offset, withSeconds: true),
                                  rows: tooltipRows(vertex))
                 }
             }
@@ -656,10 +702,10 @@ struct WorkoutStreamChart: View {
         init(_ model: WorkoutStreamModel, window: ClosedRange<Double>, plotWidth: Double,
              into target: StreamPlot.Domain) {
             self.model = model
-            self.segments = StreamPlot.segments(values: model.values, binSeconds: model.binSeconds,
+            self.segments = StreamPlot.segments(runs: model.runs, binSeconds: model.binSeconds,
                                                 metric: model.plotMetric,
                                                 visibleSpan: window.upperBound - window.lowerBound,
-                                                plotWidth: plotWidth)
+                                                plotWidth: plotWidth, in: window)
             let source = StreamPlot.domain(values: model.bins(in: window), metric: model.plotMetric)
             let top = target.fromFloor(Self.band)
             self.base = target.floor

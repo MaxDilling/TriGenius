@@ -57,7 +57,7 @@ struct IgnoredWorkoutsView: View {
     }
 
     private func restore(_ entry: IgnoredWorkout) {
-        guard let source = Self.dataSource(for: entry.source) else {
+        guard let source = DataSource(storedSource: entry.source) else {
             // Unknown origin — just un-blacklist; no source to re-pull from.
             TrainingDataStore.shared.restoreIgnoredWorkout(id: entry.id)
             entries = IgnoredWorkouts.entries
@@ -69,15 +69,6 @@ struct IgnoredWorkoutsView: View {
             _ = await DataSyncCoordinator.shared.resync(source: source)
             restoring = nil
             entries = IgnoredWorkouts.entries
-        }
-    }
-
-    /// Map a stored `source` string ("garmin"/"healthkit") to its read source.
-    private static func dataSource(for source: String) -> DataSource? {
-        switch source {
-        case "garmin": return .garmin
-        case "healthkit": return .appleHealth
-        default: return nil
         }
     }
 }

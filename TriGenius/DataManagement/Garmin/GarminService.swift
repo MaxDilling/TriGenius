@@ -157,6 +157,8 @@ nonisolated final class GarminService: Sendable {
             "name": activity["activityName"] as? String ?? "Activity",
             "date": startTime.count >= 10 ? String(startTime.prefix(10)) : "",
             "time": startTime.count > 11 ? String(startTime.dropFirst(11).prefix(5)) : "",
+            "end_time": Coerce.double(activity["elapsedDuration"])
+                .flatMap { GarminTransform.endClock(startTimeLocal: startTime, elapsedSeconds: $0) } ?? NSNull(),
             "sport": activityType,
             "duration_minutes": round1((Coerce.double(activity["duration"]) ?? 0) / 60),
             "distance_km": round2((Coerce.double(activity["distance"]) ?? 0) / 1000),
@@ -264,7 +266,8 @@ nonisolated final class GarminService: Sendable {
         if let details {
             var keys: [WorkoutStreams.Metric: String] = [
                 .heartRate: "directHeartRate", .power: "directPower",
-                .speed: "directSpeed", .elevation: "directElevation"
+                .speed: "directSpeed", .elevation: "directElevation",
+                .latitude: "directLatitude", .longitude: "directLongitude"
             ]
             if data["running"] != nil { keys[.cadence] = "directDoubleCadence" }
             if data["cycling"] != nil { keys[.cadence] = "directBikeCadence" }

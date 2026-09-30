@@ -723,12 +723,17 @@ final class DataSyncCoordinator {
     func saveLiveStrength(_ session: StrengthSession) {
         let id = "app:\(UUID().uuidString)"
         let start = session.startedAt
-        let clock = Calendar.current.dateComponents([.hour, .minute], from: start)
-        let minutes = (session.elapsed(at: session.endedAt ?? .now) / 6).rounded() / 10
+        let end = session.endedAt ?? .now
+        func clock(_ date: Date) -> String {
+            let c = Calendar.current.dateComponents([.hour, .minute], from: date)
+            return String(format: "%02d:%02d", c.hour ?? 0, c.minute ?? 0)
+        }
+        let minutes = (session.elapsed(at: end) / 6).rounded() / 10
         var details: [String: Any] = [
             "id": id, "name": session.planName, "sport": session.sport,
             "date": DateFormatter.ymd.string(from: start),
-            "time": String(format: "%02d:%02d", clock.hour ?? 0, clock.minute ?? 0),
+            "time": clock(start),
+            "end_time": clock(end),
             "duration_minutes": minutes,
             "strength": ["exercises": StrengthSets.entries(session.performed)],
         ]

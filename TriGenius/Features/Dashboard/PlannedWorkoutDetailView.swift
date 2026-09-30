@@ -53,7 +53,7 @@ struct PlannedWorkoutDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                 header
-                HeroMetricsCard(metrics: heroMetrics)
+                HeroMetricsRow(metrics: heroMetrics)
                 if let structure, !structure.steps.isEmpty {
                     PlannedStructureCard(structure: structure, accent: family.color)
                 } else if !exerciseBlocks.isEmpty {

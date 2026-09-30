@@ -140,7 +140,7 @@ final class WorkoutRecord {
     /// MAS for the same reason as `steadyHR20`: the reconstruction needs HRmax and
     /// HRrest, and keeping the raw profile lets a corrected HRmax re-resolve history.
     var paceHRProfileJSON: String = ""
-    /// Downsampled metric streams (`WorkoutStreams.encode`), the detail charts'
+    /// 1 Hz metric streams incl. the GPS track (`WorkoutStreams.encode`), the detail charts'
     /// data. Empty when the source delivered no streams for this activity.
     var streamsData: Data = Data()
     /// Value→seconds zone distribution (`ZoneHistogram`), kept so a threshold change
@@ -319,7 +319,7 @@ struct IngestedActivity: Sendable {
     /// Encoded max-mean power curve (`PowerCurve.encode`), "" when the source has
     /// no power stream for this activity.
     let powerCurveJSON: String
-    /// Downsampled metric streams (`WorkoutStreams.encode`), empty when the source
+    /// 1 Hz metric streams (`WorkoutStreams.encode`), empty when the source
     /// delivered none.
     let streamsData: Data
     /// Multisport legs (`WorkoutSegments.encode`), "" for a single-sport activity.

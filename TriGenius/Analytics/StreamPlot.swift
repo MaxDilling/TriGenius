@@ -161,17 +161,43 @@ nonisolated enum StreamPlot {
     /// phone averages minutes, the same ride in a Mac window averages far less, a
     /// 30-minute run averages seconds — and zooming in shrinks the bucket until,
     /// at the floor of one stored bin, the raw trace is back.
-    static func segments(values: [Double?], binSeconds: Int, metric: Metric,
-                         visibleSpan: Double, plotWidth: Double) -> [Segment] {
+    ///
+    /// Only the buckets overlapping `window` are built, plus one either side so
+    /// the trace runs off the plot's edge. They are counted from the run's start,
+    /// so panning shifts which buckets are drawn, never where they fall.
+    static func segments(runs: [[Sample]], binSeconds: Int, metric: Metric,
+                         visibleSpan: Double, plotWidth: Double,
+                         in window: ClosedRange<Double>) -> [Segment] {
         let bin = Double(binSeconds)
         let bucket = max(1, Int((visibleSpan * bucketPoints / max(plotWidth, 1) / bin).rounded()))
-        return runs(values: values, binSeconds: binSeconds, metric: metric).enumerated().map {
-            Segment(id: $0.offset, vertices: vertices(of: $0.element, bucket: bucket, bin: bin,
+        return runs.enumerated().compactMap { id, run in
+            let (lo, hi) = indices(of: run, in: window)
+            guard lo < hi else { return nil }
+            let from = max(lo / bucket - 1, 0) * bucket
+            let to = min(((hi - 1) / bucket + 2) * bucket, run.count)
+            return Segment(id: id, vertices: vertices(of: run[from..<to], bucket: bucket, bin: bin,
                                                       metric: metric))
         }
     }
 
-    typealias Sample = (offset: Double, value: Double)
+    struct Sample: Equatable {
+        let offset: Double
+        let value: Double
+    }
+
+    /// The index range of `run`'s samples inside `window` — offsets ascend, so
+    /// two binary searches instead of a scan of the whole workout.
+    private static func indices(of run: [Sample], in window: ClosedRange<Double>) -> (Int, Int) {
+        func firstIndex(from offset: Double) -> Int {
+            var lo = 0, hi = run.count
+            while lo < hi {
+                let mid = (lo + hi) / 2
+                if run[mid].offset < offset { lo = mid + 1 } else { hi = mid }
+            }
+            return lo
+        }
+        return (firstIndex(from: window.lowerBound), firstIndex(from: window.upperBound.nextUp))
+    }
 
     /// The stream as recorded, one sample per bin at its centre: every reading,
     /// held across the empty bins after it, and broken into runs by a real gap.
@@ -185,7 +211,7 @@ nonisolated enum StreamPlot {
             run = []
         }
         func sample(_ index: Int, _ value: Double) {
-            run.append(((Double(index) + 0.5) * bin, value))
+            run.append(Sample(offset: (Double(index) + 0.5) * bin, value: value))
         }
         for (i, value) in values.enumerated() {
             guard let value else { held += 1; continue }
@@ -206,13 +232,14 @@ nonisolated enum StreamPlot {
         return runs
     }
 
-    /// The recorded samples whose bin centre lies in `window`. Each stands for
-    /// one equal slice of time, so their plain mean is the window's
+    /// The recorded samples of `runs` whose bin centre lies in `window`. Each
+    /// stands for one equal slice of time, so their plain mean is the window's
     /// time-weighted average.
-    static func samples(values: [Double?], binSeconds: Int, metric: Metric,
-                        in window: ClosedRange<Double>) -> [Double] {
-        runs(values: values, binSeconds: binSeconds, metric: metric)
-            .joined().filter { window.contains($0.offset) }.map(\.value)
+    static func samples(runs: [[Sample]], in window: ClosedRange<Double>) -> [Double] {
+        runs.flatMap { run in
+            let (lo, hi) = indices(of: run, in: window)
+            return run[lo..<hi].map(\.value)
+        }
     }
 
     /// Metres covered in `window`: every recorded speed (m/s) times the bin it
@@ -220,11 +247,11 @@ nonisolated enum StreamPlot {
     /// read as standing still.
     static func distance(speeds: [Double?], binSeconds: Int, in window: ClosedRange<Double>) -> Double {
         let metric = Metric(axis: .linear(1), framing: .fromZero, zones: nil, bridgesGaps: false)
-        return samples(values: speeds, binSeconds: binSeconds, metric: metric, in: window)
+        return samples(runs: runs(values: speeds, binSeconds: binSeconds, metric: metric), in: window)
             .reduce(0, +) * Double(binSeconds)
     }
 
-    private static func vertices(of run: [(offset: Double, value: Double)], bucket: Int,
+    private static func vertices(of run: ArraySlice<Sample>, bucket: Int,
                                  bin: Double, metric: Metric) -> [Vertex] {
         // Bins are uniform, so counting them per zone weights by time. Reused
         // across buckets rather than allocated per vertex.
@@ -232,8 +259,8 @@ nonisolated enum StreamPlot {
         var vertices: [Vertex] = []
         vertices.reserveCapacity(run.count / bucket + 1)
 
-        for first in stride(from: 0, to: run.count, by: bucket) {
-            let last = min(first + bucket, run.count) - 1
+        for first in stride(from: run.startIndex, to: run.endIndex, by: bucket) {
+            let last = min(first + bucket, run.endIndex) - 1
             var sum = 0.0, a = Double.infinity, b = -Double.infinity
             for i in 0..<5 { zoneBins[i] = 0 }
             for i in first...last {
@@ -273,19 +300,32 @@ nonisolated enum StreamPlot {
     /// frame is widened to `minSpan` around its centre. Read from the raw bins
     /// of whatever stretch is passed, so resizing the plot never moves the axis.
     static func domain(values: some Collection<Double?>, metric: Metric) -> Domain {
-        let plots = values.compactMap { $0 }
-            .filter(metric.axis.isMoving).map(metric.axis.display).sorted()
-        guard let first = plots.first, let last = plots.last, last > 0 else {
+        let plots = values.compactMap { $0 }.filter(metric.axis.isMoving).map(metric.axis.display)
+        guard let first = plots.min(), let last = plots.max(), last > 0 else {
             return Domain(lo: 0, hi: 1, reversed: false)
         }
         if case .fromZero = metric.framing, !metric.axis.isInverting {
             return Domain(lo: 0, hi: last * 1.1, reversed: false)
         }
-        let top = metric.axis.isInverting ? plots[Int(0.98 * Double(plots.count - 1))] : last
+        let top = metric.axis.isInverting ? plots.sorted()[Int(0.98 * Double(plots.count - 1))] : last
         let widen = max(metric.minSpan - (top - first), 0) / 2
         let (lo, hi) = (first - widen, top + widen)
         let pad = max((hi - lo) * 0.15, hi * 0.02)
         return Domain(lo: max(lo - pad, 0), hi: hi + pad, reversed: metric.axis.isInverting)
+    }
+
+    /// Round elapsed-time steps the x axis ticks at, in seconds; past an hour,
+    /// whole hours.
+    private static let timeSteps: [Double] = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600]
+
+    /// X-axis ticks for an elapsed-time window: the finest round step that splits
+    /// it into at most five intervals, placed on multiples of that step — so a
+    /// label always names the exact moment under it.
+    static func timeTicks(in window: ClosedRange<Double>) -> (values: [Double], step: Double) {
+        let span = window.upperBound - window.lowerBound
+        let step = timeSteps.first { span <= $0 * 5 } ?? (span / 5 / 3600).rounded(.up) * 3600
+        let first = (window.lowerBound / step).rounded(.up) * step
+        return (Array(stride(from: first, through: window.upperBound, by: step)), step)
     }
 
     /// The vertex nearest an elapsed-time offset — what a scrub snaps to.

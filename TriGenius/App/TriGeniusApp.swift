@@ -196,6 +196,7 @@ struct RootTabView: View {
         // Tab bar on the phone, sidebar on iPad regular width and macOS — the wide
         // shell the dashboard's column layouts assume.
         .tabViewStyle(.sidebarAdaptable)
+        .background { MapWarmUp() }
         // A live strength workout runs over every tab: full screen, or collapsed
         // into the mini bar above the tab bar (a sheet on the Mac, which has none).
         #if os(iOS)

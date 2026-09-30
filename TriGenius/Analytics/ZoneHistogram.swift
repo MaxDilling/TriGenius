@@ -8,9 +8,9 @@ import Foundation
 // threshold change re-bucket a workout to exactly the seconds a full re-ingest would
 // produce, without keeping the raw stream.
 //
-// `streamsData` cannot stand in: it is downsampled to ~600 bins, and averaging a
-// spiky power stream inside a bin moves time out of z1/z5 into the middle zones —
-// a plausible-looking number that isn't the measured one.
+// `streamsData` cannot stand in: pace zones bucket grade-adjusted speed, which it
+// does not store — raw speed there would be a plausible-looking number that isn't
+// the measured one.
 
 nonisolated enum ZoneHistogram {
 
