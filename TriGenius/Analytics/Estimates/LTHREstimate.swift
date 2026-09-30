@@ -116,6 +116,8 @@ nonisolated enum LTHREstimate {
         let bpm: Double
         let confidence: EstimateConfidence
         let effortCount: Int
+        /// The newest effort the value rests on; nil for the population fraction.
+        let evidenceDate: Date?
     }
 
     /// Fraction of HRmax an effort must reach before it carries threshold information.
@@ -185,10 +187,12 @@ nonisolated enum LTHREstimate {
         }
         for effort in usable.reversed() {
             if let held = windowed(usable, hrMax: hrMax, gate: gate, endingAt: effort.date) {
-                return Estimate(bpm: held.bpm, confidence: .stale, effortCount: 0)
+                return Estimate(bpm: held.bpm, confidence: .stale, effortCount: 0,
+                                evidenceDate: held.evidenceDate)
             }
         }
-        return Estimate(bpm: fractionOfHRMax * hrMax, confidence: .rough, effortCount: 0)
+        return Estimate(bpm: fractionOfHRMax * hrMax, confidence: .rough, effortCount: 0,
+                        evidenceDate: nil)
     }
 
     private static func windowed(_ efforts: [Effort], hrMax: Double, gate: Gate,
@@ -215,6 +219,6 @@ nonisolated enum LTHREstimate {
               bpm >= minimumFractionOfHRMax * hrMax else { return nil }
         return Estimate(bpm: bpm,
                         confidence: gated.count >= minimumEfforts ? .anchored : .thin,
-                        effortCount: gated.count)
+                        effortCount: gated.count, evidenceDate: gated.map(\.date).max())
     }
 }

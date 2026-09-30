@@ -206,10 +206,10 @@ final class DataSyncCoordinator {
     ///
     /// A full year, so the Statistics charts can actually fill the 1Y range they
     /// offer, and so the threshold estimates resolve off a whole history rather than
-    /// a truncated one — `LTPaceEstimate` reads 90 days and `LTHREstimate` 180, and a
-    /// window that runs out mid-series makes the estimate step for want of evidence
-    /// in a way that reads as adaptation. Comfortably past the 42-day CTL warm-up the
-    /// backfill originally existed for.
+    /// a truncated one — the filters calibrate over their first eight weeks and
+    /// `LTHREstimate` reads 365 days, and a window that runs out mid-series makes the
+    /// estimate step for want of evidence in a way that reads as adaptation. Comfortably
+    /// past the 42-day CTL warm-up the backfill originally existed for.
     static let deepHistoryDays = 365
 
     /// Pull a deep slice of history (`deepHistoryDays`) into the local database, so

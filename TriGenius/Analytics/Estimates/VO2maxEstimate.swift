@@ -90,8 +90,9 @@ nonisolated enum VO2maxEstimate {
     /// A population curve, so its uncertainty is as large as the drift itself: an athlete
     /// who kept training through a riding break reads back up within a few rides.
     static let detrainSD = 1.0
-    /// The first weeks are the filter finding a new athlete — the level starts from a
-    /// population constant, not from them.
+    /// The first weeks the filter answers are it finding a new athlete — `.thin`, counted
+    /// from the day it first answers, not from the first session: a sparse runner's fifth
+    /// observation can come months after the first.
     static let calibrationDays = 56.0
     /// Beyond this the level rests on no ride newer than a training block.
     static let staleDays = 42.0
@@ -124,17 +125,20 @@ nonisolated enum VO2maxEstimate {
         detrainAmplitude * max(0, exp(-rhythmDays / detrainDays) - exp(-idleDays / detrainDays))
     }
 
-    /// The filtered level through an athlete's rides. A causal filter: the value at a
-    /// date uses only rides up to it, which is what the athlete would have been shown.
+    /// The filtered level through an athlete's rides — or runs, for running MAS
+    /// (`LTPaceEstimate.track`). A causal filter: the value at a date uses only sessions up
+    /// to it, which is what the athlete would have been shown.
     struct Track: Sendable {
-        /// Ride times, days since 1970, and the log level and its variance after each.
+        /// Observation times, days since 1970, and the log level and its variance after each.
         let days: [Double]
         let level: [Double]
         let variance: [Double]
         /// Every session of any sport, ascending — idle time counts from the latest.
         let sessions: [Double]
-        /// The athlete's ride noise (log variance per ride), fitted on their own rides.
+        /// The athlete's noise per observation (log variance), fitted on their own sessions.
         let rideNoise: Double
+        /// Log gap added to the filtered level: `VO2maxEstimate.level` for rides, 0 for runs.
+        let offset: Double
 
         /// log VO2max (ml/kg/min) at `date` with its sd, or nil before `minimumRides`.
         func state(at date: Date) -> (log: Double, sd: Double)? {
@@ -144,13 +148,20 @@ nonisolated enum VO2maxEstimate {
             let lastSession = sessions[max(VO2maxEstimate.count(sessions, atMost: t) - 1, 0)]
             let drift = detraining(idleDays: t - max(days[i], lastSession))
             let v = variance[i] + processVariancePerDay * (t - days[i]) + (detrainSD * drift) * (detrainSD * drift)
-            return (level[i] + VO2maxEstimate.level - drift, v.squareRoot())
+            return (level[i] + offset - drift, v.squareRoot())
+        }
+
+        /// The newest observation the level at `date` rests on — what a hand-entered value
+        /// is weighed against (`PerformanceHistory`).
+        func lastObservation(at date: Date) -> Date? {
+            let i = VO2maxEstimate.count(days, atMost: VO2maxEstimate.day(date)) - 1
+            return i >= 0 ? Date(timeIntervalSince1970: days[i] * 86_400) : nil
         }
 
         func confidence(at date: Date) -> EstimateConfidence {
             let t = VO2maxEstimate.day(date)
             let i = max(VO2maxEstimate.count(days, atMost: t) - 1, 0)
-            if t - days[0] < calibrationDays { return .thin }
+            if t - days[minimumRides - 1] < calibrationDays { return .thin }
             return t - days[i] > staleDays ? .stale : .anchored
         }
     }
@@ -163,8 +174,7 @@ nonisolated enum VO2maxEstimate {
     /// session, any sport, so running through a riding break does not detrain.
     static func track(rides: [Ride], sessions: [Date], hrMax: Double, hrMaxDate: Date,
                       hrRest: Double, massKg: Double) -> Track? {
-        var t: [Double] = [], z: [Double] = []
-        for ride in rides.sorted(by: { $0.date < $1.date }) {
+        let observations = rides.compactMap { ride -> (date: Date, log: Double)? in
             let hm = Self.hrMax(hrMax, measured: hrMaxDate, on: ride.date)
             let logs = durations.compactMap { d in
                 ride.profile[d].flatMap {
@@ -172,10 +182,18 @@ nonisolated enum VO2maxEstimate {
                             hrRest: hrRest, massKg: massKg)
                 }
             }.map(log)
-            guard !logs.isEmpty else { continue }
-            t.append(day(ride.date))
-            z.append(logs.reduce(0, +) / Double(logs.count))
+            return logs.isEmpty ? nil : (ride.date, logs.reduce(0, +) / Double(logs.count))
         }
+        return track(observations: observations, sessions: sessions, offset: level)
+    }
+
+    /// The filter over one log observation per session, or nil below `minimumRides` of
+    /// them. The source supplies only the observations — a ride's mean effort reading, a
+    /// run's best MAS — and `offset`; the filter is the same for both.
+    static func track(observations: [(date: Date, log: Double)], sessions: [Date],
+                      offset: Double) -> Track? {
+        let sorted = observations.sorted { $0.date < $1.date }
+        let t = sorted.map { day($0.date) }, z = sorted.map(\.log)
         guard z.count >= minimumRides else { return nil }
         let train = Array(Set(t + sessions.map(day))).sorted()
         let drift = t.indices.map { i -> Double in
@@ -184,7 +202,7 @@ nonisolated enum VO2maxEstimate {
         }
         let noise = exp(minimizeBounded(rideNoiseBounds) { run(t, z, drift, rideNoise: exp($0)).loss })
         let (x, p, _) = run(t, z, drift, rideNoise: noise)
-        return Track(days: t, level: x, variance: p, sessions: train, rideNoise: noise)
+        return Track(days: t, level: x, variance: p, sessions: train, rideNoise: noise, offset: offset)
     }
 
     /// The Kalman pass: level + offset as a 2×2 covariance `[[a, b], [b, c]]`, an
@@ -322,7 +340,7 @@ nonisolated enum VO2maxEstimate {
     /// running equation's base *is* `vo2Rest`). This only changes the unit, so the run
     /// threshold and the run VO2max can never describe two different athletes.
     ///
-    /// Derivation: `ref/threshold_lab/running/vo2max.py`.
+    /// Derivation: `ref/threshold_lab/running/FINDINGS.md` §4.6.
     static func running(mas: Double) -> Double? {
         guard mas > 0 else { return nil }
         return acsmRunSlope * mas * 60 + vo2Rest

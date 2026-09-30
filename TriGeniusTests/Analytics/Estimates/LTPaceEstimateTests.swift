@@ -2,9 +2,9 @@ import Foundation
 import Testing
 @testable import TriGenius
 
-// Pins `LTPaceEstimate`. The band, the p75 aggregation, the 0.799 fraction and the
-// flat carry-forward are the spec — see `ref/ltpace_lab/FINDINGS.md` for how each was
-// measured. Expected values are hand-computed from the formulas.
+// Pins `LTPaceEstimate`. The band, the bucket gate, the per-run best and the filter are the
+// spec — see `ref/threshold_lab/running/FINDINGS.md` §8 for how each was measured. Expected
+// values are hand-computed from the formulas, the filter's from the lab reference.
 struct LTPaceEstimateTests {
 
     private let hrMax = 206.0, hrRest = 48.0   // reserve 158 bpm
@@ -12,13 +12,6 @@ struct LTPaceEstimateTests {
     /// 1 Hz `(value, seconds)` samples, as the sources shape them for zone bucketing.
     private func flat(_ value: Double, minutes: Int) -> [NormalizedStream.Sample] {
         (0..<(minutes * 60)).map { _ in (value: value, seconds: 1.0) }
-    }
-
-    private func day(_ ago: Int) -> Date { Date().addingTimeInterval(-Double(ago) * 86_400) }
-
-    private func runs(_ speeds: [Double], count: Int,
-                      everyDays: Int = 5) -> [(date: Date, speeds: [Double])] {
-        (0..<count).map { (date: day($0 * everyDays), speeds: speeds) }
     }
 
     // MARK: profile
@@ -64,111 +57,78 @@ struct LTPaceEstimateTests {
         #expect(p == [170: 3.0, 150: 3.0])
     }
 
-    // MARK: maxAerobicSpeed
+    // MARK: reading
 
-    @Test func masScalesSpeedByTheUnusedHeartRateReserve() {
-        // 3.2 * 158 / (170 - 48)
-        let speeds = LTPaceEstimate.aerobicSpeeds(profile: [170: 3.2], hrMax: hrMax, hrRest: hrRest)
-        #expect(abs(speeds[0] - 4.144262295081967) < 1e-12)
+    @Test func aRunReadsItsFastestInBandBucketScaledByTheUnusedReserve() {
+        // max(3.2 * 158 / (170 - 48), 3.3 * 158 / (175 - 48)) = max(4.14426, 4.10551)
+        let mas = LTPaceEstimate.reading(profile: [170: 3.2, 175: 3.3], hrMax: hrMax, hrRest: hrRest)
+        #expect(abs(mas! - 3.2 * 158 / 122) < 1e-12)
     }
 
-    @Test func everyInBandBucketContributes() {
-        // Not just the run's best: pooling every bucket is what keeps one session
-        // from deciding the answer.
-        let speeds = LTPaceEstimate.aerobicSpeeds(profile: [170: 3.2, 180: 3.3],
-                                                  hrMax: hrMax, hrRest: hrRest).sorted()
-        #expect(speeds.count == 2)
+    @Test func aRunNeedsTwoInBandBuckets() {
+        // Band is 164.8 - 195.7 bpm at HRmax 206: 150 and 200 are outside however fast they
+        // were, which leaves one bucket — one minute is not an observation.
+        #expect(LTPaceEstimate.reading(profile: [150: 4.5, 170: 3.2, 200: 5.0],
+                                       hrMax: hrMax, hrRest: hrRest) == nil)
     }
 
-    @Test func bucketsOutsideTheBandDoNotCount() {
-        // Band is 164.8 - 195.7 bpm at HRmax 206; an easy 150 bpm bucket is excluded
-        // however fast it was, and 200 bpm is above the ceiling.
-        #expect(LTPaceEstimate.aerobicSpeeds(profile: [150: 4.5, 200: 5.0],
-                                             hrMax: hrMax, hrRest: hrRest).isEmpty)
+    @Test func missingRestingHeartRateYieldsNoReading() {
+        #expect(LTPaceEstimate.reading(profile: [170: 3.2, 175: 3.3], hrMax: hrMax, hrRest: 0) == nil)
     }
 
-    @Test func missingRestingHeartRateYieldsNoEstimate() {
-        #expect(LTPaceEstimate.aerobicSpeeds(profile: [170: 3.2],
-                                             hrMax: hrMax, hrRest: 0).isEmpty)
-    }
-
-    // MARK: estimate
-
-    /// The athlete's own fraction, as `snapshot(asOf:)` derives it from LTHR. Pinned
-    /// rather than referenced so a change to the constant shows up here as a failure.
-    private let fraction = 0.8   // 0.828 %HRR at threshold / 1.035 pool inflation
-
-    @Test func aFullWindowResolvesToTheQuantileOfTheReconstructions() {
-        // Seven runs of one identical best: the quantile is that value, and the LT speed
-        // is 0.8 of it (3.2 m/s = 312.5 s/km), snapped to the 1 s/km grid -> 313.
-        let est = LTPaceEstimate.estimate(runs: runs([4.0], count: 7), asOf: Date())!
-        #expect(est.masMps == 4.0)
-        #expect(est.confidence == .anchored)
-        #expect(abs(1000 / LTPaceEstimate.ltSpeed(mas: est.masMps, fractionOfMAS: fraction)! - 313) < 1e-9)
-    }
-
-    /// The p75 index is `0.75 x (n - 1)`, so a short window points the "quantile" at one
-    /// or two sessions. It still answers — that is the best evidence there is — but it
-    /// must not be reported as though a full window stood behind it.
-    @Test func aWindowBelowSevenRunsAnswersAsThin() {
-        for count in 3 ... 6 {
-            #expect(LTPaceEstimate.estimate(runs: runs([4.0], count: count),
-                                            asOf: Date())?.confidence == .thin)
-        }
-    }
-
-    @Test func fewerThanTheGateYieldsNothing() {
-        #expect(LTPaceEstimate.estimate(runs: runs([4.0], count: 2), asOf: Date()) == nil)
-    }
-
-    @Test func oneSessionCannotCarryAWindowHoweverManyBucketsItHolds() {
-        let single = [(date: day(1), speeds: Array(repeating: 4.0, count: 50))]
-        #expect(LTPaceEstimate.estimate(runs: single, asOf: Date()) == nil)
-    }
-
-    @Test func eachRunContributesOnlyItsBest() {
-        // One run holding a fast bucket cannot outvote the rest by bucket count: the
-        // quantile runs across sessions, so six runs at 4.0 and one at 9.0 give
-        // q0.75 of {4,4,4,4,9} = 4.0 -> 313, not something pulled up by the outlier.
-        let skewed = [(date: day(1), speeds: [9.0, 4.0])]
-            + (2..<6).map { (date: day($0 * 5), speeds: [Double]([4.0])) }
-        let est = LTPaceEstimate.estimate(runs: skewed, asOf: Date())!
-        #expect(est.masMps == 4.0)
-    }
-
-    @Test func runsOlderThanTheWindowDoNotCount() {
-        // Seven runs 50 days apart span 300 days, so no 90-day window anywhere in that
-        // history ever holds three — not the current one, and not one to carry forward.
-        #expect(LTPaceEstimate.estimate(runs: runs([4.0], count: 7, everyDays: 50),
-                                        asOf: Date()) == nil)
-    }
-
-    @Test func theValueIsPublishedOnThePaceGrid() {
-        let est = LTPaceEstimate.estimate(runs: runs([4.0], count: 5), asOf: Date())!
-        let speed = LTPaceEstimate.ltSpeed(mas: est.masMps, fractionOfMAS: fraction)!
-        #expect((1000 / speed).truncatingRemainder(dividingBy: LTPaceEstimate.paceGridSeconds) == 0)
-    }
-
-    @Test func theFractionIsDerivedFromTheAthletesOwnLTHR() {
-        // Max: (176 - 48) / (206 - 48) / 1.035 = 0.78267...
+    @Test func theFractionIsTheReserveHeldAtLTHR() {
+        // Max: (176 - 48) / (206 - 48) — no level constant divides it.
         let f = LTPaceEstimate.fractionOfMAS(lthr: 176, hrRest: 48, hrMax: 206)!
-        #expect(abs(f - 128.0 / 158.0 / 1.035) < 1e-12)
+        #expect(abs(f - 128.0 / 158.0) < 1e-12)
         // Nonsense inputs yield no fraction rather than a plausible-looking number.
         #expect(LTPaceEstimate.fractionOfMAS(lthr: 210, hrRest: 48, hrMax: 206) == nil)
         #expect(LTPaceEstimate.fractionOfMAS(lthr: 176, hrRest: 0, hrMax: 206) == nil)
     }
 
-    // MARK: carry-forward
+    @Test func theValueIsPublishedOnThePaceGrid() {
+        // 4.0 * 0.8 = 3.2 m/s = 312.5 s/km, snapped to the 1 s/km grid -> 313.
+        #expect(abs(1000 / LTPaceEstimate.ltSpeed(mas: 4.0, fractionOfMAS: 0.8)! - 313) < 1e-9)
+    }
 
-    @Test func aThinnedWindowCarriesTheLastSolidValueForwardUnchanged() {
-        // Five runs ending 100 days ago: no window holds enough *now*, so the value
-        // that stood then is held exactly as it stood — 313 s/km, the same number the
-        // full window gave. Nothing may move it, because nothing measured it.
-        let runs = (0..<5).map { (date: day(100 + $0 * 5), speeds: [Double]([4.0])) }
-        let est = LTPaceEstimate.estimate(runs: runs, asOf: Date())!
-        #expect(est.masMps == 4.0)
-        // Memory, not measurement — the screen has to be able to say so.
-        #expect(est.confidence == .stale)
+    // MARK: the filter
+
+    private let t0 = Date(timeIntervalSince1970: 1_000_000)
+    private func day(_ d: Double) -> Date { t0.addingTimeInterval(d * 86_400) }
+
+    /// Eight runs three days apart, a 13-day gap before the seventh, two in-band buckets
+    /// each; sessions of another sport on days 19 and 22 fall inside the gap.
+    private var runs: [LTPaceEstimate.Run] {
+        let fast = [3.30, 3.45, 3.25, 3.40, 3.20, 3.50, 3.35, 3.42]
+        return (0 ..< 8).map { k in
+            .init(date: day(Double(3 * k + (k >= 6 ? 10 : 0))),
+                  profile: [160: fast[k], 166: fast[k] + 0.12])
+        }
+    }
+
+    private func track(_ runs: [LTPaceEstimate.Run]) -> VO2maxEstimate.Track? {
+        LTPaceEstimate.track(runs: runs, sessions: [day(19), day(22)], hrMax: 190,
+                             hrMaxDate: day(30), hrRest: 50)
+    }
+
+    @Test func filterMatchesTheLabReference() throws {
+        let track = try #require(track(runs))
+        #expect(abs(track.rideNoise - 0.0005501488549304128) < 1e-12)
+        for (d, log, sd) in [(12.0, 1.4428074340439363, 0.021354772687405734),
+                             (36.0, 1.4515618310710385, 0.022432400215572537),
+                             (80.0, 1.415465768653385, 0.04597975969370397)] {
+            let state = try #require(track.state(at: day(d)))
+            #expect(abs(state.log - log) < 1e-10)
+            #expect(abs(state.sd - sd) < 1e-10)
+        }
+    }
+
+    @Test func runsWithoutAnObservationDoNotCount() throws {
+        // Five runs, one of them holding a single in-band bucket: four observations, below
+        // the filter's five.
+        var five = Array(runs.prefix(5))
+        five[2] = .init(date: five[2].date, profile: [160: 3.25])
+        #expect(track(five) == nil)
+        #expect(track(Array(runs.prefix(5))) != nil)
     }
 
     // MARK: codec

@@ -107,8 +107,8 @@ struct VO2maxEstimateTests {
 
     @Test func confidenceCountsCalibrationAndStaleness() throws {
         let track = try #require(track(rides))
-        #expect(track.confidence(at: day(40)) == .thin)       // < 56 days of rides
-        #expect(track.confidence(at: day(60)) == .anchored)   // last ride day 31
+        #expect(track.confidence(at: day(40)) == .thin)       // < 56 days since the 5th ride, day 12
+        #expect(track.confidence(at: day(70)) == .anchored)   // 58 days since; last ride day 31
         #expect(track.confidence(at: day(80)) == .stale)      // 49 days without a ride
     }
 

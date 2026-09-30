@@ -123,7 +123,7 @@ struct AutomaticCalculationView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
-                Text("Older and lower-cost watches don't measure FTP or a threshold, but they do report the inputs to work them out. Each calculation **replaces** the synced value while switched on — turn one on when that value is missing, stale or a placeholder. A value you entered by hand is never replaced.")
+                Text("Older and lower-cost watches don't measure FTP or a threshold, but they do report the inputs to work them out. Each calculation **replaces** the synced value while switched on — turn one on when that value is missing, stale or a placeholder. A value you entered by hand stands until newer training gives a calculated one.")
                     .font(.subheadline).foregroundStyle(.secondary)
 
                 VStack(alignment: .leading, spacing: Theme.Spacing.m) {
@@ -218,6 +218,10 @@ struct AutomaticCalculationView: View {
                 .font(.caption)
                 .foregroundStyle(row.confidence == nil || row.confidence == .anchored
                                  ? Color.accentColor : Color.orange)
+        } else if row.value != nil, snapshot.handEnteredKeys.contains(row.metricKey) {
+            Label("Entered by you" + (row.calculationOn ? " — until newer training gives a calculated value" : ""),
+                  systemImage: "hand.point.up.left")
+                .font(.caption).foregroundStyle(.secondary)
         } else if row.value != nil {
             Label("From \(settings.metricsSource.displayName)"
                   + (row.calculationOn ? " — not enough data to calculate it yet" : ""),
@@ -285,7 +289,7 @@ struct AutomaticCalculationView: View {
                 }
             }
             .contentCard()
-            Text("How much of your aerobic ceiling you hold at threshold. This one really is personal — athletes differ enough here to move threshold pace by several seconds per kilometre — so it is derived from your own threshold heart rate rather than assumed. Set it by hand only if you have run a 30-minute threshold test: take the share of your heart-rate reserve you held and divide by 1.035.")
+            Text("How much of your aerobic ceiling you hold at threshold. This one really is personal — athletes differ enough here to move threshold pace by several seconds per kilometre — so it is derived from your own threshold heart rate rather than assumed. Set it by hand only if you have run a 30-minute threshold test: take the share of your heart-rate reserve you held over its last 20 minutes.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
     }

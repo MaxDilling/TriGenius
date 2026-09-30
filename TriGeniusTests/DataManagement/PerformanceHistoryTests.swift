@@ -273,83 +273,73 @@ struct PerformanceHistoryTests {
 
     // MARK: LT pace from reconstructed MAS
 
-    /// A run carrying one settled heart-rate bucket. `peakHR` clears the 206 bpm
-    /// maximum every fixture below uses.
-    private func paceRun(_ date: Date, _ profile: [Int: Double]) -> PerformanceHistory.ActivityEvidence {
-        .init(date: date, steadyHR20: 0, peakHR: 190, paceProfile: profile, family: .run)
+    /// A run carrying two settled in-band heart-rate buckets — one observation. `peakHR`
+    /// clears the 206 bpm maximum every fixture below uses.
+    private func paceRun(_ date: Date, _ speed: Double,
+                         family: SportFamily = .run) -> PerformanceHistory.ActivityEvidence {
+        .init(date: date, steadyHR20: 0, peakHR: 190, paceProfile: [170: speed, 175: speed - 0.1],
+              family: family)
     }
 
-    /// Five runs at 3.0 m/s, then five at 3.2 m/s, all at 170 bpm — enough to fill the
-    /// five-run window twice over at two distinct levels, so the series has a shape to
-    /// compare rather than one point.
+    /// Runs five days apart from 92 days to a week ago, 3.0 m/s until 40 days ago and 3.2
+    /// after — the filter answers from the fifth (72 days ago), so it is past its eight
+    /// weeks of calibration today, at two levels.
     private var pacedRuns: [PerformanceHistory.ActivityEvidence] {
-        [80.0, 75, 70, 65, 60].map { paceRun(ago($0), [170: 3.0]) }
-        + [40.0, 35, 30, 25, 20].map { paceRun(ago($0), [170: 3.2]) }
+        stride(from: 92.0, through: 7, by: -5).map { paceRun(ago($0), $0 > 40 ? 3.0 : 3.2) }
     }
 
-    /// A triathlon or brick leg has a pace stream and a heart-rate stream like any
-    /// run, and neither the estimator's steady-state assumption nor the pool the
-    /// inflation constant was calibrated on: after hours of prior work heart rate no
-    /// longer tracks the metabolic cost, so `MAS = v / %HRR` reads high. One race leg
-    /// moved a real athlete's peak by 12 s/km.
-    @Test func aMultisportLegIsNotEvidenceForRunningLTPace() {
-        func pace(_ extra: [PerformanceHistory.ActivityEvidence]) -> Double {
-            PerformanceHistory(
-                byKey: ["max_hr": [entry(ago(400), 206)],
-                        "resting_hr": [entry(ago(400), 48)],
-                        "lactate_threshold_hr": [entry(ago(300), 184)]],
-                estimateFTPFromCP: false,
-                estimateLTPaceFromRuns: true,
-                evidence: [40.0, 35, 30].map { paceRun(ago($0), [170: 3.0]) } + extra)
-                .snapshot(asOf: now).lactateThrPaceSeconds!.rounded()
-        }
-        // Three runs at 3.0 m/s and 170 bpm answer 5:09 /km. The race leg runs the same
-        // arithmetic to 5.0 * 158 / 122 = 6.48 m/s of MAS, which would drag q0.75 to
-        // 4:25 — a minute of downhill in a race deciding the athlete's threshold.
-        #expect(pace([]) == 309)
-        #expect(pace([.init(date: ago(21), steadyHR20: 0, peakHR: 190,
-                            paceProfile: [170: 5.0], family: .other)]) == 309)
-    }
-
-    /// Both run thresholds read one reconstruction, so they can never describe two
-    /// different athletes — a second aggregation over the same pool could.
-    @Test func runningVO2maxAndThresholdPaceReadTheSameReconstruction() {
-        let snap = PerformanceHistory(
-            byKey: ["max_hr": [entry(ago(400), 206)],
-                    "resting_hr": [entry(ago(400), 48)],
-                    "lactate_threshold_hr": [entry(ago(300), 184)]],
-            estimateFTPFromCP: false,
-            estimateLTPaceFromRuns: true,
-            estimateRunningVO2maxFromRuns: true,
-            evidence: pacedRuns).snapshot(asOf: now)
-        // The window's p75 reconstruction is 3.2 * 158 / 122 = 4.1443 m/s of MAS. As a
-        // pace that is 4.1443 * 0.83165 -> 4:50 /km; as oxygen uptake it is
-        // 0.2 * 4.1443 * 60 + 3.5 = 53.2 ml/kg/min.
-        #expect(snap.lactateThrPaceSeconds!.rounded() == 290)
-        #expect(((snap.vo2maxRunning! * 10).rounded() / 10) == 53.2)
-        #expect(snap.vo2maxRunningIsEstimated)
-        #expect(snap.vo2maxRunningConfidence == .anchored)
-    }
-
-    private func ltPaceSeries(lthr: [PerformanceHistory.Entry]) -> [Double] {
+    private func runHistory(_ evidence: [PerformanceHistory.ActivityEvidence],
+                            lthr: [PerformanceHistory.Entry]) -> PerformanceHistory {
         PerformanceHistory(
             byKey: ["max_hr": [entry(ago(400), 206)],
                     "resting_hr": [entry(ago(400), 48)],
                     "lactate_threshold_hr": lthr],
             estimateFTPFromCP: false,
             estimateLTPaceFromRuns: true,
-            evidence: pacedRuns)
-            .estimatedSeries("lactate_threshold_speed")
-            .map { (1000 / $0.value).rounded() }
+            estimateRunningVO2maxFromRuns: true,
+            evidence: evidence)
     }
 
-    @Test func theLTPaceSeriesTracksTheWindowedQuantileOfReconstructedMAS() {
-        // Reserve 206 - 48 = 158, so 3.0 m/s held at 170 bpm reconstructs
-        // 3.0 * 158 / 122 = 3.8852 m/s of MAS and 3.2 m/s gives 4.1443. The fraction is
-        // (184 - 48) / 158 / 1.035 = 0.83165, and the p75 across the window walks
-        // 3.8852 -> 4.0148 -> 4.1443 as the faster runs displace the slower ones:
-        // 5:09, 5:00, then 4:50 /km, held to today.
-        #expect(ltPaceSeries(lthr: [entry(ago(300), 184)]) == [309, 300, 290, 290])
+    /// (184 - 48) / (206 - 48): the reserve held at the fixtures' LTHR.
+    private let fraction = 136.0 / 158.0
+
+    /// A triathlon or brick leg has a pace stream and a heart-rate stream like any run, but
+    /// after hours of prior work heart rate no longer tracks the metabolic cost, so
+    /// `MAS = v / %HRR` reads high. One race leg moved a real athlete's peak by 12 s/km.
+    @Test func aMultisportLegIsNotEvidenceForRunningLTPace() {
+        func pace(_ extra: [PerformanceHistory.ActivityEvidence]) -> Double? {
+            runHistory(pacedRuns + extra, lthr: [entry(ago(300), 184)])
+                .snapshot(asOf: now).lactateThrPaceSeconds
+        }
+        #expect(pace([]) != nil)
+        #expect(pace([paceRun(ago(3), 5.0, family: .other)]) == pace([]))
+    }
+
+    /// Both run thresholds read one filtered MAS, so they can never describe two different
+    /// athletes: the VO2max is its ACSM cost, the pace its share at threshold.
+    @Test func runningVO2maxAndThresholdPaceReadTheSameReconstruction() throws {
+        let snap = runHistory(pacedRuns, lthr: [entry(ago(300), 184)]).snapshot(asOf: now)
+        let mas = (try #require(snap.vo2maxRunning) - 3.5) / (0.2 * 60)
+        #expect(snap.lactateThrPaceSeconds == 1000 / LTPaceEstimate.ltSpeed(mas: mas, fractionOfMAS: fraction)!)
+        #expect(snap.vo2maxRunningIsEstimated)
+        #expect(snap.vo2maxRunningConfidence == .anchored)
+    }
+
+    private func ltPaceSeries(lthr: [PerformanceHistory.Entry]) -> [MetricPoint] {
+        runHistory(pacedRuns, lthr: lthr).estimatedSeries("lactate_threshold_speed")
+    }
+
+    @Test func theLTPaceSeriesIsTheFilterAtEveryDate() throws {
+        let runs = pacedRuns.map { LTPaceEstimate.Run(date: $0.date, profile: $0.paceProfile) }
+        let track = try #require(LTPaceEstimate.track(runs: runs, sessions: [], hrMax: 206,
+                                                      hrMaxDate: ago(400), hrRest: 48))
+        let series = ltPaceSeries(lthr: [entry(ago(300), 184)])
+        for point in series {
+            let state = try #require(track.state(at: point.date))
+            #expect(point.value == LTPaceEstimate.ltSpeed(mas: exp(state.log), fractionOfMAS: fraction))
+        }
+        // The faster block moves it: the pace today is quicker than the first answer.
+        #expect(series.last!.value > series.first!.value)
     }
 
     /// The MAS fraction is a property of the athlete, so it sets the *level* of the
@@ -358,28 +348,70 @@ struct PerformanceHistoryTests {
     /// athlete's watch published 176 -> 184 -> 182 bpm, which is 6.8 % of fraction and
     /// ~20 s/km of movement that no run ever showed.
     @Test func aMovingThresholdHRDoesNotReshapeTheLTPaceSeries() {
-        #expect(ltPaceSeries(lthr: [entry(ago(300), 176), entry(ago(100), 184)])
-                == ltPaceSeries(lthr: [entry(ago(300), 184)]))
+        #expect(ltPaceSeries(lthr: [entry(ago(300), 176), entry(ago(100), 184)]).map(\.value)
+                == ltPaceSeries(lthr: [entry(ago(300), 184)]).map(\.value))
     }
 
-    /// Once no window holds enough runs the last value that did is republished —
-    /// unchanged, and flagged, because the chart draws anything but a full window
-    /// dashed and a solid line would make memory read as a measurement.
-    @Test func aThinnedWindowIsCarriedForwardAndMarked() {
+    /// Runs that stopped long ago still answer — marked stale, and lower by the detraining
+    /// the filter charges for the months without a session.
+    @Test func longPastRunsAnswerStaleAndDetrained() {
+        let series = runHistory([185.0, 180, 175, 170, 165, 160, 155, 150, 145, 140, 135, 130]
+                                    .map { paceRun(ago($0), 3.0) },
+                                lthr: [entry(ago(300), 184)])
+            .estimatedSeries("lactate_threshold_speed")
+        #expect(series.last?.confidence == .stale)
+        #expect(series.last!.value < series.map(\.value).max()!)
+    }
+
+    /// While the estimate cannot answer yet, the synced reading stands in — drawn dashed,
+    /// because it is the watch's model and not ours. Once the estimate answers it is not a
+    /// stand-in.
+    @Test func aSyncedReadingStandingInForTheEstimateIsProvisional() throws {
         let series = PerformanceHistory(
             byKey: ["max_hr": [entry(ago(400), 206)],
                     "resting_hr": [entry(ago(400), 48)],
-                    "lactate_threshold_hr": [entry(ago(300), 184)]],
+                    "vo2max_running": [entry(ago(120), 50)]],
             estimateFTPFromCP: false,
-            estimateLTPaceFromRuns: true,
-            // Seven runs, all long past the 90-day window: the pool was full once and
-            // nothing qualifies today.
-            evidence: [180.0, 175, 170, 165, 160, 155, 150].map { paceRun(ago($0), [170: 3.0]) })
-            .estimatedSeries("lactate_threshold_speed")
-        #expect(series.contains { $0.confidence == .anchored })
-        #expect(series.last?.confidence == .stale)
-        // Held at the 5:09 /km the full window gave, not decayed away from it.
-        #expect(series.allSatisfy { (1000 / $0.value).rounded() == 309 })
+            estimateRunningVO2maxFromRuns: true,
+            evidence: pacedRuns)
+            .estimatedSeries("vo2max_running")
+        let first = try #require(series.first)
+        #expect(!first.isEstimated && first.isStandIn && first.isProvisional)
+        #expect(series.last.map { $0.isEstimated && !$0.isStandIn } == true)
+    }
+
+    /// HRmax is the athlete's input: a hand-entered value stands over the one the watch
+    /// keeps re-reporting, however recent that is.
+    @Test func aManualMaxHRIsNotReplacedByALaterSyncedOne() {
+        func maxHR(_ readings: [PerformanceHistory.Entry], asOf date: Date) -> Int? {
+            PerformanceHistory(byKey: ["max_hr": readings], estimateFTPFromCP: false)
+                .snapshot(asOf: date).maxHR
+        }
+        let manual = entry(ago(100), 204, rank: PerformanceHistory.manualRank)
+        #expect(maxHR([entry(ago(300), 206), manual, entry(ago(10), 206)], asOf: now) == 204)
+        // Before the athlete's value was entered, the synced one is all there is.
+        #expect(maxHR([entry(ago(300), 206), manual, entry(ago(10), 206)], asOf: ago(200)) == 206)
+    }
+
+    /// A hand-entered value stands until the estimate rests on evidence newer than it: a
+    /// threshold ride after an old entry moves the value on, a correction entered after the
+    /// ride holds. Before any qualifying ride the entry is all there is.
+    @Test func aManualCyclingLTHRStandsUntilANewerTestRide() {
+        func lthr(manualDaysAgo: Double, asOf date: Date) -> (Int?, Bool) {
+            let snap = PerformanceHistory(
+                byKey: ["max_hr": [entry(ago(400), 204)],
+                        "lactate_threshold_hr_cycling": [entry(ago(manualDaysAgo), 165,
+                                                               rank: PerformanceHistory.manualRank)]],
+                estimateFTPFromCP: false,
+                estimateCyclingLTHRFromRides: true,
+                evidence: [.init(date: ago(30), steadyHR20: 0, peakHR: 185,
+                                 submaxProfile: [1200: (watts: 297, hr: 171)], family: .bike)])
+                .snapshot(asOf: date)
+            return (snap.cyclingLactateThrHR, snap.cyclingLactateThrHRIsEstimated)
+        }
+        #expect(lthr(manualDaysAgo: 60, asOf: ago(45)) == (165, false))   // no ride yet
+        #expect(lthr(manualDaysAgo: 60, asOf: now) == (171, true))        // the test is newer
+        #expect(lthr(manualDaysAgo: 10, asOf: now) == (165, false))       // the entry is newer
     }
 
     @Test func aCyclingEffortDoesNotSetTheRunningLTHR() {
