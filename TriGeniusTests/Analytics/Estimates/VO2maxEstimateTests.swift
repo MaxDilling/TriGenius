@@ -25,11 +25,11 @@ struct VO2maxEstimateTests {
     }
 
     @Test func longerEffortsAreNormalisedUpToTheReference() {
-        // The same power and heart rate held for 1200 s reports a *lower* VO2max,
-        // because HR has drifted; the normalisation is what makes the two comparable.
+        // Within a ride a 1200 s effort reads lower than a 480 s one, because HR has
+        // drifted; the normalisation scales it up: 60.2389 * (1200/480)^0.080 = 64.8205.
         let long = VO2maxEstimate.Effort(date: now, seconds: 1200, watts: 250, heartRate: 160)
         let r = VO2maxEstimate.readings(efforts: [long], hrMax: hrMax, hrRest: hrRest, massKg: mass)
-        #expect(abs(r[0].vo2max - 55.98117865436648) < 1e-12)
+        #expect(abs(r[0].vo2max - 64.8205093686543) < 1e-12)
     }
 
     @Test func effortsOutsideTheReserveBandDoNotCount() {

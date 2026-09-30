@@ -52,7 +52,8 @@ nonisolated enum VO2maxEstimate {
     /// Two efforts of different length from the same ride do not report the same VO2max:
     /// the estimate falls with duration, because heart rate still lags at 8 minutes and
     /// has drifted by 30. Fitted within rides, so ride-to-ride fitness cannot contaminate
-    /// the slope. Without it every aggregate is decided by the shortest bin.
+    /// the slope. Without it every aggregate is decided by the shortest bin. Undoing the
+    /// fall scales a long effort *up* to the reference — the exponent is positive.
     static let durationReference = 480.0
     static let durationExponent = 0.080
 
@@ -195,7 +196,7 @@ nonisolated enum VO2maxEstimate {
             guard hrReserveBand.contains(hrr) else { return nil }
             let cost = acsmSlope * e.watts / massKg + acsmBase
             let full = vo2Rest + (cost - vo2Rest) / hrr
-            return (e.date, full * pow(Double(e.seconds) / durationReference, -durationExponent))
+            return (e.date, full * pow(Double(e.seconds) / durationReference, durationExponent))
         }
     }
 
