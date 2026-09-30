@@ -47,7 +47,7 @@ final class ATPToolHandler: CoachToolHandler {
             ),
             ToolDefinition(
                 name: "set_atp_event",
-                description: "Add a race/event (omit event_id) or update an existing one (pass its event_id from get_atp). On update, only the fields you pass change. The engine re-periodizes around A/B events.",
+                description: "Add a race/event (omit event_id) or update an existing one (pass its event_id from get_atp). On update, only the fields you pass change. The engine re-periodizes around A/B events. Every event also appears as a planned race workout (get_workouts) whose expected TSS counts toward its week — derived from the legs, goal times and effort.",
                 parameters: [
                     "type": "object",
                     "properties": [
@@ -59,7 +59,24 @@ final class ATPToolHandler: CoachToolHandler {
                         "priority": ["type": "string", "enum": ["A", "B", "C"],
                                      "description": "A = goal race (anchors periodization + taper), B = secondary, C = training race (ignored by the engine). The engine doesn't validate A-race spacing — read_knowledge('trainingplan') before adding a second A event close to an existing one."],
                         "target_ctl": ["type": "number", "description": "Target fitness (CTL) on race day (target_ctl methodology)."],
-                        "notes": ["type": "string", "description": "Optional free-text context for the coach."]
+                        "notes": ["type": "string", "description": "Optional free-text context for the coach."],
+                        "start_time": ["type": "string", "description": "Race start time (HH:MM, 24 h)."],
+                        "effort": ["type": "string", "enum": RaceEffort.allCases.map(\.rawValue),
+                                   "description": "How hard the athlete means to race: race = all out, controlled = held back (a training race), easy = just jogging along. Default race."],
+                        "legs": [
+                            "type": "array",
+                            "description": "The race's legs in race order — a triathlon exactly swim, bike, run; a running race one run leg; a cycling race one bike leg; other one other leg. Replaces all legs. Omit to keep them (a new event or a changed event_type starts from the type's standard distances).",
+                            "items": [
+                                "type": "object",
+                                "properties": [
+                                    "sport": ["type": "string", "enum": ["swim", "bike", "run", "other"]],
+                                    "distance_km": ["type": "number", "description": "Leg distance in km (swim too, e.g. 1.5)."],
+                                    "goal_time": ["type": "string", "description": "Optional goal time for this leg as H:MM:SS, e.g. 1:45:00."],
+                                    "intensity_factor": ["type": "number", "description": "Optional intended IF for this leg (e.g. 0.75). Only when the athlete states it — otherwise the goal time and effort set it."]
+                                ],
+                                "required": ["sport"]
+                            ]
+                        ]
                     ],
                     "required": []
                 ]
@@ -155,13 +172,63 @@ final class ATPToolHandler: CoachToolHandler {
             return "A new event needs name, date, event_type and priority."
         }
 
+        let effortToken = Coerce.token(Coerce.string(args["effort"]))
+        if !effortToken.isEmpty && RaceEffort(rawValue: effortToken) == nil {
+            return "Invalid effort — use race, controlled or easy."
+        }
+        var startMinute = existing?.startMinute
+        if let time = Coerce.string(args["start_time"]) {
+            guard let minutes = RaceLeg.minutes(fromClock: time), minutes < 24 * 60 else { return "Invalid start_time — use HH:MM." }
+            startMinute = Int(minutes)
+        }
+        let legs: [RaceLeg]
+        if let raw = args["legs"] as? [[String: Any]] {
+            switch Self.parseLegs(raw, type: type) {
+            case .success(let parsed): legs = parsed
+            case .failure(let error): return error.message
+            }
+        } else {
+            legs = existing.flatMap { $0.eventType == type ? $0.legs : nil } ?? type.defaultLegs
+        }
+
         let event = ATPEventInput(
             id: existing?.id ?? id ?? newEventID(),
             name: name, date: date, eventType: type, priority: prio,
             targetCTL: Coerce.double(args["target_ctl"]) ?? existing?.targetCTL,
-            notes: Coerce.string(args["notes"]) ?? existing?.notes ?? "")
+            notes: Coerce.string(args["notes"]) ?? existing?.notes ?? "",
+            startMinute: startMinute,
+            effort: RaceEffort(rawValue: effortToken) ?? existing?.effort ?? .race,
+            legs: legs)
         store.upsertATPEvent(event)
         return Self.reportJSON(message: "\(existing == nil ? "Event added" : "Event updated") (id \(event.id)).")
+    }
+
+    private struct LegError: Error { let message: String }
+
+    /// Validate the coach's `legs` against the event type's leg sports, in order.
+    private static func parseLegs(_ raw: [[String: Any]], type: ATPEventType) -> Result<[RaceLeg], LegError> {
+        let sports = type.defaultLegs.map(\.sport)
+        guard raw.map({ SportFamily(rawValue: Coerce.token(Coerce.string($0["sport"]))) }) == sports.map(Optional.some) else {
+            return .failure(LegError(message: "legs for \(type.rawValue) must be exactly: \(sports.map(\.rawValue).joined(separator: ", "))."))
+        }
+        var legs: [RaceLeg] = []
+        for (sport, dict) in zip(sports, raw) {
+            var leg = RaceLeg(sport: sport, distanceMeters: max(0, (Coerce.double(dict["distance_km"]) ?? 0) * 1000))
+            if let goal = Coerce.string(dict["goal_time"]) {
+                guard let minutes = RaceLeg.minutes(fromClock: goal), minutes > 0 else {
+                    return .failure(LegError(message: "Invalid goal_time '\(goal)' — use H:MM:SS."))
+                }
+                leg.goalMinutes = minutes
+            }
+            if let factor = Coerce.double(dict["intensity_factor"]) {
+                guard TSSConstants.ifRange.contains(factor) else {
+                    return .failure(LegError(message: "intensity_factor must lie within \(TSSConstants.ifRange.lowerBound)–\(TSSConstants.ifRange.upperBound)."))
+                }
+                leg.intensityFactor = factor
+            }
+            legs.append(leg)
+        }
+        return .success(legs)
     }
 
     /// A short, token-cheap event id (6 chars, a–z0–9), unique among current events.
@@ -272,6 +339,17 @@ final class ATPToolHandler: CoachToolHandler {
                                 "discipline": e.eventType.discipline.rawValue, "event_type": e.eventType.rawValue]
         if let t = e.targetCTL { d["target_ctl"] = Int(t) }
         if !e.notes.isEmpty { d["notes"] = e.notes }
+        if let m = e.startMinute { d["start_time"] = String(format: "%02d:%02d", m / 60, m % 60) }
+        d["effort"] = e.effort.rawValue
+        let loads = RaceLoad.legs(e.legs, effort: e.effort, thresholds: TrainingDataStore.shared.latestSnapshot())
+        d["legs"] = zip(e.legs, loads).map { leg, load -> [String: Any] in
+            var l: [String: Any] = ["sport": leg.sport.rawValue, "distance_km": leg.distanceMeters / 1000,
+                                    "expected_time": RaceLeg.clock(minutes: load.minutes), "expected_tss": Int(load.tss.rounded()),
+                                    "intensity_factor": (load.intensityFactor * 100).rounded() / 100]
+            if let g = leg.goalMinutes { l["goal_time"] = RaceLeg.clock(minutes: g) }
+            return l
+        }
+        d["expected_tss"] = Int(loads.reduce(0) { $0 + $1.tss }.rounded())
         return d
     }
 
@@ -312,6 +390,9 @@ final class ATPToolHandler: CoachToolHandler {
             for e in upcoming {
                 var s = "• [\(e.priority.rawValue)] \(e.name) — \(e.eventType.discipline.label)/\(e.eventType.label) on \(iso(e.date))"
                 if let t = e.targetCTL { s += " (target CTL \(Int(t)))" }
+                let tss = RaceLoad.legs(e.legs, effort: e.effort, thresholds: TrainingDataStore.shared.latestSnapshot())
+                    .reduce(0) { $0 + $1.tss }
+                if tss > 0 { s += ", expected ~\(Int(tss.rounded())) TSS (\(e.effort.label.lowercased()))" }
                 lines.append("  " + s)
             }
         }

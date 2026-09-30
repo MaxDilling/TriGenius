@@ -80,18 +80,21 @@ struct PlannedWorkoutDetailView: View {
             if family == .strength, !workout.isCompleted, !exerciseBlocks.isEmpty {
                 ToolbarItem(placement: .primaryAction) { startButton }
             }
-            ToolbarItem(placement: .primaryAction) {
-                Button() { editor = .edit(workout) } label: {
-                    Label("Edit", systemImage: "pencil")
-                }
-            }
-            ToolbarItem {
-                Menu {
-                    Button(role: .destructive) { confirmDelete = true } label: {
-                        Label("Delete workout", systemImage: "trash")
+            // A race follows its event — it is edited and deleted in the Plan tab.
+            if workout.source != TrainingDataStore.raceSource {
+                ToolbarItem(placement: .primaryAction) {
+                    Button() { editor = .edit(workout) } label: {
+                        Label("Edit", systemImage: "pencil")
                     }
-                } label: {
-                    Label("More", systemImage: "ellipsis.circle")
+                }
+                ToolbarItem {
+                    Menu {
+                        Button(role: .destructive) { confirmDelete = true } label: {
+                            Label("Delete workout", systemImage: "trash")
+                        }
+                    } label: {
+                        Label("More", systemImage: "ellipsis.circle")
+                    }
                 }
             }
         }

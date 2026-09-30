@@ -150,7 +150,9 @@ There is deliberately **no `.multisport` `SportFamily` case**: the family is the
 
 Segment-aware readers: `TrainingVolume.weeklyBuckets` (which is what feeds sport share), `WeeklyTarget.projection`'s completed loop, `TrainingLoadAnalytics.longest(in:family:)`, and `ZoneDistribution.aggregate(records:source:family:)` — the last takes the discipline as a parameter and applies it *per details dict*, so only the matching leg of a session counts.
 
-The `WorkoutRecord` display bridge (`PlannedWorkoutStructure.swift`) is `@MainActor` — it feeds the estimators the store's cached `latestSnapshot()`. `resolvedTargetTL`/`plannedDurationMinutes`/`plannedDistance` are the single planned-value resolvers every reader (rows, weekly targets, PMC forecast, insights) goes through.
+The `WorkoutRecord` display bridge (`PlannedWorkoutStructure.swift`) is `@MainActor` — it feeds the estimators the store's cached `latestSnapshot()`. `resolvedTargetTL`/`plannedDurationMinutes`/`plannedDistance` are the single planned-value resolvers every reader (rows, weekly targets, PMC forecast, insights) goes through; per-sport readers iterate `plannedContributions`, the planned counterpart of `sportContributions`. A race slot resolves all of them from `RaceLoad` (see `docs/store.md`).
+
+**`RaceLoad`** — a planned race's expected duration + TL per leg: duration is the goal time, else distance ÷ speed (threshold speed × IF for swim/run; the flat 28 km/h for bike, which has no threshold speed); IF is the athlete's own value, else goal pace ÷ threshold pace (swim/run), else `TSSConstants.raceAllOutIF` at the race's **total** duration × the effort share — a leg of a long race is paced for the whole race. IF and total duration are solved by 4 fixed-point rounds. A leg on the curve marks the load estimated (`~`).
 
 ## `Shared/Charts/` — the reusable chart layer
 

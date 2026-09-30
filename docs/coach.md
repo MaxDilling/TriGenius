@@ -44,7 +44,7 @@ Each successful mutation emits a **`ChatCard`** (`Shared/ChatCards/` — model, 
 The coach's window onto the season plan, composable so each call touches one concern (the engine re-periodizes after any change):
 - `get_atp` — config, events **with ids**, pinned weeks, current period + this week's TL, next-A projection; `detail:true` adds the week-by-week upcoming schedule.
 - `set_atp` — merge-update the methodology/volume config only.
-- `set_atp_event` — upsert one race (omit `event_id` to add; merge-update). `delete_atp_event` removes.
+- `set_atp_event` — upsert one race (omit `event_id` to add; merge-update): besides type/priority/target CTL, `start_time`, `effort` (race/controlled/easy) and `legs` (per leg distance, optional goal time + IF, validated against the type's leg sports; a new or re-typed event starts from `ATPEventType.defaultLegs`). Events report each leg's expected time/IF/TL. `delete_atp_event` removes. A race also shows up in `get_workouts` as a planned row with `race_event_id` + expected load, which the plan-CRUD tools refuse.
 - `pin_atp_week`/`unpin_atp_week` — write/clear an `ATPWeekOverride` locking a week's TL (`tl 0` = rest).
 
 All read/write `TrainingDataStore`'s ATP API; the coach supplies events + params, never weekly numbers. `get_atp` returns JSON; mutating tools return the same state plus a `message`. `promptSection()` injects a compact ATP summary each turn. The ATP is the **single** source of truth for season planning — no separate phase model.

@@ -292,7 +292,7 @@ final class CalendarViewModel {
     /// triggers the view reload.
     func move(workoutID: String, to newDay: Date, segment: TimeOfDaySegment? = nil) {
         let targetDay = cal.startOfDay(for: newDay)
-        guard let record = scheduledRecord(id: workoutID) else { return }
+        guard let record = scheduledRecord(id: workoutID), record.source != TrainingDataStore.raceSource else { return }
         let dayChanged = cal.startOfDay(for: record.date) != targetDay
         let minuteChanged = segment != nil && record.startMinute != segment?.anchorMinute
         guard dayChanged || minuteChanged else { return }

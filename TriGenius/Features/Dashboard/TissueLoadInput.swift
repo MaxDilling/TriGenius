@@ -36,7 +36,9 @@ extension TissueCardModel.Input {
                           durationMinutes: Int(plan.plannedDurationMinutes.rounded()), isPlanned: true,
                           dose: plan.family == .strength
                               ? TissueSession.strength(StrengthSets.plannedSets(WorkoutPayloadBuilder.parseSteps(plan.stepsJSON) ?? []))
-                              : TissueSession.endurance(plan.family, tl: plan.resolvedTargetTSS))
+                              : plan.plannedContributions.reduce(into: [:]) { sum, leg in
+                                  sum.merge(TissueSession.endurance(leg.family, tl: leg.tss), uniquingKeysWith: +)
+                              })
         }
 
         let period = atpPlan?.weeks.first { week in

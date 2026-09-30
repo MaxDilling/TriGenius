@@ -382,34 +382,58 @@ extension WorkoutRecord {
                                      thresholds: TrainingDataStore.shared.latestSnapshot())
     }
 
+    /// A race slot's expected load per leg (`RaceLoad`), resolved from its ATP event
+    /// against the current thresholds; nil for every other plan.
+    @MainActor var raceLoad: [RaceLegLoad]? {
+        guard source == TrainingDataStore.raceSource,
+              let event = TrainingDataStore.shared.atpEvent(id: String(id.dropFirst("race:".count))) else { return nil }
+        return RaceLoad.legs(event.legs, effort: event.effort, thresholds: TrainingDataStore.shared.latestSnapshot())
+    }
+
+    /// What this plan contributes to each sport — itself, or one entry per race leg.
+    /// The planned counterpart of `sportContributions`.
+    @MainActor var plannedContributions: [(family: SportFamily, tss: Double, distanceKm: Double, durationMinutes: Double)] {
+        if let legs = raceLoad { return legs.map { ($0.sport, $0.tss, $0.distanceMeters / 1000, $0.minutes) } }
+        return [(family, resolvedTargetTSS, (plannedDistance?.meters ?? 0) / 1000, plannedDurationMinutes)]
+    }
+
     /// Best planned duration in minutes. Prefers the structure-derived estimate,
     /// which converts distance-prescribed steps (e.g. a "4 km @ 5:40/km" interval)
     /// into time — something the stored `targetDurationMinutes` can't capture, so
     /// for mixed time+distance sessions it would otherwise undercount. Falls back
     /// to the explicit target when there is no structure.
     @MainActor var plannedDurationMinutes: Double {
+        if let legs = raceLoad { return legs.reduce(0) { $0 + $1.minutes } }
         if let estimated = structure?.estimatedDurationMinutes, estimated > 0 { return estimated }
         return targetDurationMinutes
     }
 
     /// True when the planned TSS was built from default IFs (flat duration
-    /// heuristic, or a structure whose steps carry no intensity target) rather
-    /// than resolved power/pace/HR targets — the UI prefixes those with "~".
-    @MainActor var isEstimatedTSS: Bool { structure?.hasIntensityTargets != true }
+    /// heuristic, a structure whose steps carry no intensity target, a race leg on
+    /// the race curve) rather than resolved targets — the UI prefixes those with "~".
+    @MainActor var isEstimatedTSS: Bool {
+        if let legs = raceLoad { return legs.contains(where: \.isEstimated) }
+        return structure?.hasIntensityTargets != true
+    }
 
-    /// Planned TSS — the stored target, else the structure-shaped estimate, else
-    /// the flat duration heuristic.
+    /// Planned TSS — a race's expected load, else the stored target, else the
+    /// structure-shaped estimate, else the flat duration heuristic.
     @MainActor var resolvedTargetTSS: Double {
-        targetTSS ?? structure?.estimatedTSS
+        if let legs = raceLoad { return legs.reduce(0) { $0 + $1.tss }.rounded() }
+        return targetTSS ?? structure?.estimatedTSS
             ?? WeeklyTargets.estimatedTSS(family: family, minutes: targetDurationMinutes)
     }
 
-    /// Planned distance for the workout, with how it was derived: the structured
-    /// steps when present (exact for distance-prescribed steps, pace-derived
-    /// otherwise), else duration × the discipline's assumed speed — the same
-    /// assumption the TSS fallback uses. Nil for sessions with no meaningful
-    /// distance (strength/other, or no steps and no duration).
+    /// Planned distance for the workout, with how it was derived: a race's leg
+    /// distances, the structured steps when present (exact for distance-prescribed
+    /// steps, pace-derived otherwise), else duration × the discipline's assumed
+    /// speed — the same assumption the TSS fallback uses. Nil for sessions with no
+    /// meaningful distance (strength/other, or no steps and no duration).
     @MainActor var plannedDistance: PlannedDistance? {
+        if let legs = raceLoad {
+            let meters = legs.reduce(0) { $0 + $1.distanceMeters }
+            return meters > 0 ? PlannedDistance(meters: meters, source: .fixed) : nil
+        }
         if let s = structure, let m = s.totalDistanceMeters, m > 0, let src = s.distanceSource {
             return PlannedDistance(meters: m, source: src)
         }

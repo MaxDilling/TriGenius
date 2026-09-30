@@ -196,6 +196,7 @@ final class DataSyncCoordinator {
         for source in ordered {
             if await sync(source: source) == nil { allSucceeded = false }
         }
+        store.syncRaceSlots()
         return allSucceeded
     }
 
@@ -554,12 +555,20 @@ final class DataSyncCoordinator {
     }
 
     private func plannedRow(_ rec: WorkoutRecord) -> [String: Any] {
-        [
+        var row: [String: Any] = [
             "workout_id": rec.id,
             "date": DateFormatter.ymd.string(from: rec.date),
             "sport": rec.sport,
-            "workout_data": WorkoutPayloadBuilder.workoutData(from: rec)
         ]
+        if rec.raceLoad != nil {
+            row["name"] = rec.name
+            row["race_event_id"] = String(rec.id.dropFirst("race:".count))
+            row["expected_tss"] = Int(rec.resolvedTargetTSS)
+            row["expected_minutes"] = Int(rec.plannedDurationMinutes.rounded())
+        } else {
+            row["workout_data"] = WorkoutPayloadBuilder.workoutData(from: rec)
+        }
+        return row
     }
 
     // MARK: - Write-target reconciliation (no plan lost on target switch)
@@ -591,7 +600,12 @@ final class DataSyncCoordinator {
     // The single write path for planned workouts, shared by the coach's scheduling
     // tools and the calendar's workout editor: every write lands in the local store
     // first (source of truth), then pushes to the active write target. A failed push
-    // keeps the local plan; `reconcileWriteTarget` re-pushes it.
+    // keeps the local plan; `reconcileWriteTarget` re-pushes it. A race slot is not a
+    // plan here — it follows its ATP event (`TrainingDataStore.syncRaceSlots`).
+
+    private func editablePlan(id: String) -> WorkoutRecord? {
+        store.scheduledWorkout(id: id).flatMap { $0.source == TrainingDataStore.raceSource ? nil : $0 }
+    }
 
     /// Create a locally-owned plan from a raw `workout_data` dict (run through
     /// `WorkoutNormalizer` here — the one normalization path) and push it to the
@@ -621,7 +635,7 @@ final class DataSyncCoordinator {
     /// edits leave the stored plan untouched.
     func updatePlan(id: String, workoutData raw: [String: Any]) async -> PlanWriteResult? {
         let writeTarget = AppSettings.storedWriteTarget()
-        guard let existing = store.scheduledWorkout(id: id) else { return nil }
+        guard let existing = editablePlan(id: id) else { return nil }
         let editsSteps = raw["steps"] != nil
         // Normalize the stored plan overlaid with the edits — never the partial
         // dict alone, or the normalizer invents defaults ("Other", pool length,
@@ -668,7 +682,7 @@ final class DataSyncCoordinator {
     /// unchanged). Returns nil when no plan with `id` exists.
     func movePlan(id: String, to date: Date) async -> PlanWriteOutcome? {
         let writeTarget = AppSettings.storedWriteTarget()
-        guard let rec = store.scheduledWorkout(id: id) else { return nil }
+        guard let rec = editablePlan(id: id) else { return nil }
         let fromDate = DateFormatter.ymd.string(from: rec.date)
         let toDate = DateFormatter.ymd.string(from: date)
         store.moveScheduledWorkout(id: id, to: date)
@@ -691,14 +705,15 @@ final class DataSyncCoordinator {
     /// Delete a planned workout locally and from *every* write target it was pushed
     /// to — not just the active one. A plan pushed to Garmin while the write target
     /// is now the Apple Watch would otherwise be orphaned on Garmin.
-    func deletePlan(id: String) async {
-        if let rec = store.scheduledWorkout(id: id) {
-            for wt in WriteTarget.allCases {
-                guard let ext = rec.externalId(for: wt) else { continue }
-                _ = await WorkoutTargetFactory.make(wt).delete(externalId: ext)
-            }
+    @discardableResult
+    func deletePlan(id: String) async -> Bool {
+        guard let rec = editablePlan(id: id) else { return false }
+        for wt in WriteTarget.allCases {
+            guard let ext = rec.externalId(for: wt) else { continue }
+            _ = await WorkoutTargetFactory.make(wt).delete(externalId: ext)
         }
         store.deleteScheduledWorkout(id: id)
+        return true
     }
 
     /// Record a finished live strength session as the completed half of its plan:
@@ -732,7 +747,7 @@ final class DataSyncCoordinator {
     /// canonical `workout_data` the diff compares — always the *stored* state,
     /// never the tool's request.
     func plannedSnapshot(id: String) -> (name: String, sport: String, date: Date, workoutData: [String: Any])? {
-        guard let rec = store.scheduledWorkout(id: id) else { return nil }
+        guard let rec = editablePlan(id: id) else { return nil }
         return (rec.name, rec.sport, rec.date, WorkoutPayloadBuilder.workoutData(from: rec))
     }
 
@@ -744,9 +759,7 @@ final class DataSyncCoordinator {
     func applyUndo(_ undo: ChatCard.PlanUndo) async -> Bool {
         switch undo {
         case .deletePlan(let id):
-            guard store.scheduledWorkout(id: id) != nil else { return false }
-            await deletePlan(id: id)
-            return true
+            return await deletePlan(id: id)
         case .restorePlan(let id, let json):
             guard let data = WorkoutPayloadBuilder.parseWorkoutData(json) else { return false }
             if case .success = await updatePlan(id: id, workoutData: data) { return true }

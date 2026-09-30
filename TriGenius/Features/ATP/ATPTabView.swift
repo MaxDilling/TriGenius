@@ -17,10 +17,10 @@ struct ATPTabView: View {
     @State private var startingCTL = 50.0
     @State private var weeklyAverageTSS = 500.0
     @State private var maxRampRate = 7.0
-    @State private var events: [EventDraft] = []
+    @State private var events: [ATPEventInput] = []
 
     @State private var plan: ATPPlan?
-    @State private var editingEvent: EventDraft?
+    @State private var editingEvent: ATPEventInput?
     @State private var showingSetup = false
     @State private var loaded = false
 
@@ -150,8 +150,9 @@ struct ATPTabView: View {
         VStack(alignment: .leading, spacing: Theme.Spacing.m) {
             SectionHeading("Events") {
                 Button {
-                    editingEvent = EventDraft(id: UUID().uuidString, name: "", date: startDate,
-                                              eventType: .triOlympic, priority: .a, targetCTL: nil)
+                    editingEvent = ATPEventInput(id: UUID().uuidString, name: "", date: startDate,
+                                                 eventType: .triOlympic, priority: .a, targetCTL: nil, notes: "",
+                                                 legs: ATPEventType.triOlympic.defaultLegs)
                 } label: { Image(systemName: "plus") }
                     .buttonStyle(.glass)
                     .buttonBorderShape(.circle)
@@ -173,12 +174,12 @@ struct ATPTabView: View {
 
     /// What the list shows. Display only — `events` keeps every race, so the plan
     /// engine still periodises against past ones and `targetEvent` still resolves.
-    private var upcomingEvents: [EventDraft] {
+    private var upcomingEvents: [ATPEventInput] {
         let today = Calendar.current.startOfDay(for: Date())
         return events.filter { $0.date >= today }
     }
 
-    private func eventRow(_ e: EventDraft) -> some View {
+    private func eventRow(_ e: ATPEventInput) -> some View {
         HStack(spacing: Theme.Spacing.s) {
             Text(e.priority.rawValue)
                 .font(.caption.bold()).foregroundStyle(e.priority.tint)
@@ -197,7 +198,7 @@ struct ATPTabView: View {
     }
 
     /// The season's target race (last A event) — drives the suggested-volume hint.
-    private var targetEvent: EventDraft? { events.last { $0.priority == .a } }
+    private var targetEvent: ATPEventInput? { events.last { $0.priority == .a } }
 
     private func suggestionHint(_ text: String, apply: @escaping () -> Void) -> some View {
         HStack {
@@ -291,10 +292,7 @@ struct ATPTabView: View {
             weeklyAverageTSS = p.weeklyAverageTSS
             if let c = p.startingCTL { autoCTL = false; startingCTL = c } else { autoCTL = true }
         }
-        events = store.atpEvents().map {
-            EventDraft(id: $0.id, name: $0.name, date: $0.date, eventType: $0.eventType,
-                       priority: $0.priority, targetCTL: $0.targetCTL)
-        }
+        events = store.atpEvents()
         plan = ATPEngine.current()
     }
 
@@ -312,10 +310,8 @@ struct ATPTabView: View {
 
     /// Upsert one event to the store and re-periodize — each event edit takes effect
     /// immediately, no Save step (the config keeps its own Save in the gear sheet).
-    private func persistEvent(_ d: EventDraft) {
-        TrainingDataStore.shared.upsertATPEvent(ATPEventInput(
-            id: d.id, name: d.name, date: d.date, eventType: d.eventType,
-            priority: d.priority, targetCTL: d.targetCTL, notes: ""))
+    private func persistEvent(_ e: ATPEventInput) {
+        TrainingDataStore.shared.upsertATPEvent(e)
         plan = ATPEngine.current()
     }
 
@@ -326,21 +322,12 @@ struct ATPTabView: View {
     }
 }
 
-// MARK: - Event draft + editor
-
-struct EventDraft: Identifiable, Hashable {
-    let id: String
-    var name: String
-    var date: Date
-    var eventType: ATPEventType
-    var priority: ATPEventPriority
-    var targetCTL: Double?
-}
+// MARK: - Event editor
 
 private struct ATPEventEditSheet: View {
-    @State var draft: EventDraft
+    @State var draft: ATPEventInput
     let showTargetCTL: Bool
-    let onSave: (EventDraft) -> Void
+    let onSave: (ATPEventInput) -> Void
     /// Non-nil only when editing an existing event (offers a Delete button).
     let onDelete: (() -> Void)?
     @Environment(\.dismiss) private var dismiss
@@ -348,39 +335,77 @@ private struct ATPEventEditSheet: View {
     /// Discipline is derived from the type; changing it snaps to that discipline's first type.
     private var disciplineBinding: Binding<ATPEventDiscipline> {
         Binding(get: { draft.eventType.discipline },
-                set: { draft.eventType = ATPEventType.types(in: $0).first ?? draft.eventType })
+                set: { setType(ATPEventType.types(in: $0).first ?? draft.eventType) })
+    }
+
+    private var typeBinding: Binding<ATPEventType> {
+        Binding(get: { draft.eventType }, set: setType)
+    }
+
+    /// A new type starts from its standard legs.
+    private func setType(_ type: ATPEventType) {
+        guard type != draft.eventType else { return }
+        draft.eventType = type
+        draft.legs = type.defaultLegs
+    }
+
+    private var loads: [RaceLegLoad] {
+        RaceLoad.legs(draft.legs, effort: draft.effort, thresholds: TrainingDataStore.shared.latestSnapshot())
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                TextField("Name", text: $draft.name)
-                DatePicker("Date", selection: $draft.date, displayedComponents: .date)
-                Picker("Discipline", selection: disciplineBinding) {
-                    ForEach(ATPEventDiscipline.allCases, id: \.self) { Text($0.label).tag($0) }
-                }
-                Picker("Type", selection: $draft.eventType) {
-                    ForEach(ATPEventType.types(in: draft.eventType.discipline), id: \.self) {
-                        Text($0.label).tag($0)
+                Section {
+                    TextField("Name", text: $draft.name)
+                    DatePicker("Date", selection: $draft.date, displayedComponents: .date)
+                    LabeledContent("Start") {
+                        HStack {
+                            if draft.startMinute != nil {
+                                Button("Clear") { draft.startMinute = nil }.buttonStyle(.borderless)
+                            }
+                            DatePicker("Start", selection: startTime, displayedComponents: .hourAndMinute)
+                                .labelsHidden()
+                                .opacity(draft.startMinute == nil ? 0.5 : 1)
+                        }
+                    }
+                    Picker("Discipline", selection: disciplineBinding) {
+                        ForEach(ATPEventDiscipline.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    Picker("Type", selection: typeBinding) {
+                        ForEach(ATPEventType.types(in: draft.eventType.discipline), id: \.self) {
+                            Text($0.label).tag($0)
+                        }
+                    }
+                    Picker("Priority", selection: $draft.priority) {
+                        ForEach(ATPEventPriority.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    if showTargetCTL {
+                        numberField("Target CTL", value: $draft.targetCTL, format: .number)
+                        let s = ATPConstants.suggestedVolume(for: draft.eventType)
+                        HStack {
+                            Text("Suggested: \(Int(s.targetCTL.lowerBound))–\(Int(s.targetCTL.upperBound)) CTL")
+                                .font(.caption2).foregroundStyle(.secondary)
+                            Spacer()
+                            Button("Apply") { draft.targetCTL = ((s.targetCTL.lowerBound + s.targetCTL.upperBound) / 2).rounded() }
+                                .font(.caption2).buttonStyle(.borderless)
+                        }
                     }
                 }
-                Picker("Priority", selection: $draft.priority) {
-                    ForEach(ATPEventPriority.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                Section {
+                    Picker("Effort", selection: $draft.effort) {
+                        ForEach(RaceEffort.allCases, id: \.self) { Text($0.label).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                } header: {
+                    Text("Race")
+                } footer: {
+                    expectedLoad
                 }
-                .pickerStyle(.segmented)
-                if showTargetCTL {
-                    TextField("Target CTL", value: $draft.targetCTL, format: .number, prompt: Text("optional"))
-                        .multilineTextAlignment(.trailing)
-                        #if os(iOS)
-                        .keyboardType(.numberPad)
-                        #endif
-                    let s = ATPConstants.suggestedVolume(for: draft.eventType)
-                    HStack {
-                        Text("Suggested: \(Int(s.targetCTL.lowerBound))–\(Int(s.targetCTL.upperBound)) CTL")
-                            .font(.caption2).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Apply") { draft.targetCTL = ((s.targetCTL.lowerBound + s.targetCTL.upperBound) / 2).rounded() }
-                            .font(.caption2).buttonStyle(.borderless)
+                ForEach(draft.legs.indices, id: \.self) { i in
+                    Section(draft.legs.count > 1 ? draft.legs[i].sport.displayName : "Course") {
+                        legFields($draft.legs[i])
                     }
                 }
                 if let onDelete {
@@ -402,7 +427,67 @@ private struct ATPEventEditSheet: View {
             }
         }
         #if os(macOS)
-        .frame(minWidth: 420, minHeight: 380)
+        .frame(minWidth: 420, minHeight: 560)
         #endif
+    }
+
+    /// The race's expected load as the weekly target and PMC forecast count it;
+    /// "~" while any leg's IF comes from the race curve rather than the athlete.
+    private var expectedLoad: some View {
+        let loads = loads
+        let tss = loads.reduce(0) { $0 + $1.tss }
+        let minutes = loads.reduce(0) { $0 + $1.minutes }
+        let prefix = loads.contains(where: \.isEstimated) ? "~" : ""
+        return Text(tss > 0
+                    ? "Expected \(prefix)\(Int(tss.rounded())) TSS over \(durationHM(minutes)). Goal times and IF override the effort."
+                    : "Set a distance or goal time to estimate the race's load.")
+    }
+
+    @ViewBuilder
+    private func legFields(_ leg: Binding<RaceLeg>) -> some View {
+        let isSwim = leg.wrappedValue.sport == .swim
+        numberField(isSwim ? "Distance (m)" : "Distance (km)", value: Binding(
+            get: { leg.wrappedValue.distanceMeters > 0 ? leg.wrappedValue.distanceMeters / (isSwim ? 1 : 1000) : nil },
+            set: { leg.wrappedValue.distanceMeters = max(0, ($0 ?? 0) * (isSwim ? 1 : 1000)) }
+        ), format: .number)
+        LabeledContent("Goal time") {
+            TextField("", value: leg.goalMinutes, format: ClockFormat(), prompt: Text("h:mm:ss"))
+                .multilineTextAlignment(.trailing)
+                .monospacedDigit()
+                #if os(iOS)
+                .keyboardType(.numbersAndPunctuation)
+                #endif
+        }
+        numberField("Intensity factor", value: Binding(
+            get: { leg.wrappedValue.intensityFactor },
+            set: { leg.wrappedValue.intensityFactor = $0.map { min(max($0, TSSConstants.ifRange.lowerBound), TSSConstants.ifRange.upperBound) } }
+        ), format: .number.precision(.fractionLength(0...2)))
+    }
+
+    private var startTime: Binding<Date> {
+        Binding(
+            get: {
+                let m = draft.startMinute ?? 0
+                return Calendar.current.date(bySettingHour: m / 60, minute: m % 60, second: 0, of: draft.date) ?? draft.date
+            },
+            set: {
+                let c = Calendar.current.dateComponents([.hour, .minute], from: $0)
+                draft.startMinute = (c.hour ?? 0) * 60 + (c.minute ?? 0)
+            }
+        )
+    }
+}
+
+/// "H:MM:SS" ⇄ minutes. A value-bound field commits on submit, so a half-typed time
+/// isn't reformatted mid-entry.
+private struct ClockFormat: ParseableFormatStyle {
+    var parseStrategy: Strategy { Strategy() }
+    func format(_ minutes: Double) -> String { RaceLeg.clock(minutes: minutes) }
+
+    struct Strategy: ParseStrategy {
+        func parse(_ value: String) throws -> Double {
+            guard let minutes = RaceLeg.minutes(fromClock: value), minutes > 0 else { throw CocoaError(.formatting) }
+            return minutes
+        }
     }
 }

@@ -30,7 +30,7 @@ enum ATPEventPriority: String, Codable, Sendable, CaseIterable {
 
 /// Sport family an event belongs to. Picks which `ATPEventType` options apply;
 /// derived from the chosen type, never stored on its own.
-enum ATPEventDiscipline: String, Codable, Sendable, CaseIterable {
+nonisolated enum ATPEventDiscipline: String, Codable, Sendable, CaseIterable {
     case triathlon, cycling, running, other
 
     var label: String {
@@ -45,7 +45,7 @@ enum ATPEventDiscipline: String, Codable, Sendable, CaseIterable {
 
 /// Specific event type within a discipline — TrainingPeaks' per-discipline lists
 /// (ATP_TODO Appendix B). The duration bucket the suggested-volume helper keys on.
-enum ATPEventType: String, Codable, Sendable, CaseIterable {
+nonisolated enum ATPEventType: String, Codable, Sendable, CaseIterable {
     // Triathlon
     case triSprint = "tri_sprint"
     case triOlympic = "tri_olympic"
@@ -103,6 +103,70 @@ enum ATPEventType: String, Codable, Sendable, CaseIterable {
     static func types(in discipline: ATPEventDiscipline) -> [ATPEventType] {
         allCases.filter { $0.discipline == discipline }
     }
+
+    /// The legs a race of this type starts with. Distances only where the type fixes
+    /// them; a range type (5k–10k, road race, ultra) leaves 0 for the athlete to set.
+    var defaultLegs: [RaceLeg] {
+        let meters: [Double]
+        switch self {
+        case .triSprint: meters = [750, 20_000, 5_000]
+        case .triOlympic: meters = [1_500, 40_000, 10_000]
+        case .triHalf: meters = [1_900, 90_000, 21_097.5]
+        case .triFull: meters = [3_800, 180_000, 42_195]
+        case .halfMarathon: meters = [21_097.5]
+        case .marathon: meters = [42_195]
+        case .century: meters = [160_934]
+        default: meters = [0]
+        }
+        let sports: [SportFamily] = switch discipline {
+        case .triathlon: SportFamily.triathlon
+        case .cycling: [.bike]
+        case .running: [.run]
+        case .other: [.other]
+        }
+        return zip(sports, meters).map { RaceLeg(sport: $0, distanceMeters: $1) }
+    }
+}
+
+/// How hard the athlete means to race: all out, or deliberately held back (a
+/// training race, "just jogging along"). Scales the race IF (`RaceLoad`).
+nonisolated enum RaceEffort: String, Codable, Sendable, CaseIterable {
+    case race, controlled, easy
+
+    var label: String {
+        switch self {
+        case .race: "All out"
+        case .controlled: "Controlled"
+        case .easy: "Easy"
+        }
+    }
+}
+
+/// One leg of a race — the whole race for a single-sport event. Everything past the
+/// sport is the athlete's optional intent; `RaceLoad` fills what's missing.
+nonisolated struct RaceLeg: Codable, Sendable, Hashable {
+    var sport: SportFamily
+    /// 0 = not set.
+    var distanceMeters: Double = 0
+    var goalMinutes: Double?
+    var intensityFactor: Double?
+
+    enum CodingKeys: String, CodingKey {
+        case sport, distanceMeters = "distance_m", goalMinutes = "goal_minutes", intensityFactor = "intensity_factor"
+    }
+
+    /// "H:MM:SS" or "H:MM" → minutes.
+    static func minutes(fromClock s: String) -> Double? {
+        let parts = s.split(separator: ":").compactMap { Double($0) }
+        guard parts.count == s.split(separator: ":").count, (2...3).contains(parts.count) else { return nil }
+        return parts[0] * 60 + parts[1] + (parts.count == 3 ? parts[2] / 60 : 0)
+    }
+
+    /// Minutes → "H:MM:SS".
+    static func clock(minutes: Double) -> String {
+        let s = Int((minutes * 60).rounded())
+        return String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+    }
 }
 
 /// Singleton ATP config — "the thing that computes target TSS". One athlete ⇒ one
@@ -150,18 +214,38 @@ final class ATPEvent {
     var priority: ATPEventPriority = ATPEventPriority.c
     /// Target CTL on the event day (target-CTL methodology). Nil otherwise.
     var targetCTL: Double?
-    /// Free-text description; coach context. Detailed goals (time/place/PR) deferred.
+    /// Free-text description; coach context.
     var notes: String = ""
+    /// Start time, minutes after midnight (local). Nil → no time set.
+    var startMinute: Int?
+    /// Optional because SwiftData can't fill a new enum attribute on rows stored
+    /// before it existed — a non-optional one crashes the first read. Nil = all out.
+    var effort: RaceEffort?
+    /// `[RaceLeg]`, JSON-encoded; "" for an event saved before legs existed.
+    var legsJSON: String = ""
 
-    init(id: String = UUID().uuidString, name: String, date: Date, eventType: ATPEventType,
-         priority: ATPEventPriority, targetCTL: Double? = nil, notes: String = "") {
-        self.id = id
-        self.name = name
-        self.date = date
-        self.eventType = eventType
-        self.priority = priority
-        self.targetCTL = targetCTL
-        self.notes = notes
+    init(_ e: ATPEventInput) {
+        id = e.id
+        apply(e)
+    }
+
+    func apply(_ e: ATPEventInput) {
+        name = e.name
+        date = e.date
+        eventType = e.eventType
+        priority = e.priority
+        targetCTL = e.targetCTL
+        notes = e.notes
+        startMinute = e.startMinute
+        effort = e.effort
+        legsJSON = (try? JSONEncoder().encode(e.legs)).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+    }
+
+    var input: ATPEventInput {
+        let legs = legsJSON.data(using: .utf8).flatMap { try? JSONDecoder().decode([RaceLeg].self, from: $0) }
+        return ATPEventInput(id: id, name: name, date: date, eventType: eventType, priority: priority,
+                             targetCTL: targetCTL, notes: notes, startMinute: startMinute, effort: effort ?? .race,
+                             legs: legs ?? eventType.defaultLegs)
     }
 }
 
@@ -194,15 +278,18 @@ struct ATPParams: Sendable {
     let weeklyAverageTSS: Double
 }
 
-/// Sendable mirror of `ATPEvent`.
-struct ATPEventInput: Sendable, Identifiable {
+/// Sendable mirror of `ATPEvent`, and the event editor's draft.
+struct ATPEventInput: Sendable, Identifiable, Hashable {
     let id: String
-    let name: String
-    let date: Date
-    let eventType: ATPEventType
-    let priority: ATPEventPriority
-    let targetCTL: Double?
-    let notes: String
+    var name: String
+    var date: Date
+    var eventType: ATPEventType
+    var priority: ATPEventPriority
+    var targetCTL: Double?
+    var notes: String
+    var startMinute: Int? = nil
+    var effort: RaceEffort = .race
+    var legs: [RaceLeg] = []
 }
 
 /// Sendable mirror of `ATPWeekOverride`.

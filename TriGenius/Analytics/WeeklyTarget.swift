@@ -188,13 +188,12 @@ enum WeeklyTargets {
         referenceDate: Date = Date()
     ) -> [SportFamily: WeeklyTarget] {
         var planned: [SportFamily: WeeklyTarget] = [:]
-        for w in scheduled {
-            let family = SportFamily(sportKey: w.sport)
-            var t = planned[family] ?? WeeklyTarget(durationMinutes: 0, tss: 0)
-            t.durationMinutes += w.plannedDurationMinutes
-            t.tss += w.resolvedTargetTSS
-            t.distanceKm += (w.plannedDistance?.meters ?? 0) / 1000
-            planned[family] = t
+        for c in scheduled.flatMap(\.plannedContributions) {
+            var t = planned[c.family] ?? WeeklyTarget(durationMinutes: 0, tss: 0)
+            t.durationMinutes += c.durationMinutes
+            t.tss += c.tss
+            t.distanceKm += c.distanceKm
+            planned[c.family] = t
         }
 
         let weekStart = TrainingVolume.weekStart(of: referenceDate)
@@ -257,14 +256,13 @@ enum WeeklyTargets {
         // drops plans whose completion has landed, so a done session isn't
         // double-counted against the projection.
         let stillPlanned = store.openScheduledWorkouts(from: weekStart, to: weekEnd)
-        for w in stillPlanned {
-            let day = cal.startOfDay(for: w.date)
-            let family = SportFamily(sportKey: w.sport)
-            if day < todayStart { continue }                                   // past: can't still be done
-            var p = out[family] ?? WeeklyProjection()
-            p.projectedTSS += w.resolvedTargetTSS
-            if let d = w.plannedDistance { p.projectedKm += d.meters / 1000 }
-            out[family] = p
+        for w in stillPlanned where cal.startOfDay(for: w.date) >= todayStart {  // past: can't still be done
+            for c in w.plannedContributions {
+                var p = out[c.family] ?? WeeklyProjection()
+                p.projectedTSS += c.tss
+                p.projectedKm += c.distanceKm
+                out[c.family] = p
+            }
         }
 
         // Fold the completed actuals into the projected totals.

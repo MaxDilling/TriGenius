@@ -146,7 +146,7 @@ struct DeletePlannedWorkoutIntent: AppIntent {
         try await requestConfirmation(
             dialog: "Delete \"\(workout.name)\" on \(workout.date.formatted(date: .abbreviated, time: .omitted))?"
         )
-        await DataSyncCoordinator.shared.deletePlan(id: workout.id)
+        guard await DataSyncCoordinator.shared.deletePlan(id: workout.id) else { throw WorkoutIntentError.planNotFound }
         return .result(dialog: "Deleted \(workout.name).")
     }
 }

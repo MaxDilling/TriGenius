@@ -43,6 +43,20 @@ nonisolated enum TSSConstants {
     // Bracket 1.00 (finely structured) … 1.14 (single block). `ref/tss_lab` PORTING.
     static let plannedBikeIFUplift = 1.10
 
+    // MARK: Race intensity (planned races — `RaceLoad`)
+    //
+    // IF held when racing all out, by the race's TOTAL duration in hours: 1.00 at the
+    // one-hour threshold definition, ~0.94 for a 1:45 half marathon, ~0.85 for a 3:45
+    // marathon, ~0.79 over a 5.5 h half-distance and ~0.69 over an 11 h full-distance
+    // triathlon. Log-time interpolation between anchors, flat beyond the ends. Hand-set
+    // from coaching race-IF guidance — not yet checked against the athletes' races.
+    static let raceAllOutIF: [(hours: Double, intensity: Double)] = [
+        (0.25, 1.08), (0.5, 1.04), (1, 1.00), (2, 0.93), (4, 0.84), (8, 0.74), (12, 0.68),
+    ]
+    /// Share of the all-out IF a held-back race runs at (controlled, easy).
+    static let raceControlledShare = 0.90
+    static let raceEasyShare = 0.80
+
     // MARK: HR load fallback (completed activities without power/pace)
     //
     // An IF²-weighted load — `Σ (HR/LTHR)² · seconds` over the stored readings — times

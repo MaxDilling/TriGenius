@@ -55,15 +55,28 @@ enum PlannedTSS {
     /// Population typicals when the threshold is unmeasured; cycling/other have no
     /// threshold speed, so they always use the flat typical.
     static func assumedSpeedMPS(_ family: SportFamily, thresholds: PerformanceSnapshot) -> Double {
+        speedMPS(family, intensity: assumedIF(family), thresholds: thresholds)
+    }
+
+    /// Speed (m/s) at `intensity` × threshold speed; the same population typicals
+    /// as `assumedSpeedMPS` when the threshold is unmeasured or the sport has none.
+    static func speedMPS(_ family: SportFamily, intensity: Double, thresholds: PerformanceSnapshot) -> Double {
+        if let threshold = thresholdSpeedMPS(family, thresholds: thresholds) { return threshold * intensity }
         switch family {
-        case .swim:
-            if let css = thresholds.cssPaceSeconds, css > 0 { return 100.0 / css * assumedIF(.swim) }
-            return 100.0 / 120.0             // 2:00 / 100 m
-        case .run:
-            if let thr = thresholds.lactateThrPaceSeconds, thr > 0 { return 1000.0 / thr * assumedIF(.run) }
-            return 10_000.0 / 3600.0         // 10 km/h
+        case .swim: return 100.0 / 120.0     // 2:00 / 100 m
+        case .run:  return 10_000.0 / 3600.0 // 10 km/h
         case .bike: return 28_000.0 / 3600.0 // 28 km/h
         default:    return 2.0
+        }
+    }
+
+    /// Threshold speed (m/s) from CSS / threshold run pace; nil when unmeasured or
+    /// for a sport without one (cycling, other).
+    static func thresholdSpeedMPS(_ family: SportFamily, thresholds: PerformanceSnapshot) -> Double? {
+        switch family {
+        case .swim: thresholds.cssPaceSeconds.flatMap { $0 > 0 ? 100.0 / $0 : nil }
+        case .run:  thresholds.lactateThrPaceSeconds.flatMap { $0 > 0 ? 1000.0 / $0 : nil }
+        default:    nil
         }
     }
 
@@ -103,7 +116,7 @@ enum PlannedTSS {
             let ifValue = intensity(for: step, family: family, thresholds: thresholds)
             let secs = durationSeconds(for: step, family: family, thresholds: thresholds)
             guard secs > 0 else { continue }
-            total += ifValue * ifValue * (secs / 3600.0) * 100.0
+            total += load(intensity: ifValue, seconds: secs)
         }
         guard total > 0 else { return nil }
         return total.rounded()
@@ -238,7 +251,12 @@ enum PlannedTSS {
         }
     }
 
-    private static func clamp(_ value: Double) -> Double {
+    /// TSS of `seconds` held at `intensity` — 1 h at threshold ⇒ 100.
+    static func load(intensity: Double, seconds: Double) -> Double {
+        intensity * intensity * (seconds / 3600.0) * 100.0
+    }
+
+    static func clamp(_ value: Double) -> Double {
         min(max(value, ifRange.lowerBound), ifRange.upperBound)
     }
 

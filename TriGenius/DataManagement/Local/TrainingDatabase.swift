@@ -1852,18 +1852,10 @@ final class TrainingDataStore {
     /// save; no-op without a completion link.
     private func unfold(_ plan: WorkoutRecord) {
         guard let activityId = plan.externalRefs[Self.completedRefKey] else { return }
-        let activity = WorkoutRecord(
-            id: activityId,
-            source: activityId.components(separatedBy: ":").first ?? plan.source,
-            date: plan.date, sport: plan.sport,
-            name: SportFamily(sportKey: plan.sport).displayName,
-            startMinute: plan.startMinute,
-            isCompleted: true,
-            durationMinutes: plan.durationMinutes, distanceKm: plan.distanceKm,
-            tss: plan.tss, tssBasis: plan.tssBasis,
-            detailsJSON: plan.detailsJSON, powerCurveJSON: plan.powerCurveJSON,
-            streamsData: plan.streamsData
-        )
+        let activity = WorkoutRecord(id: activityId, source: "", date: plan.date, sport: "", name: "")
+        Self.applyCompleted(CompletedSection(plan), to: activity)
+        activity.source = activityId.components(separatedBy: ":").first ?? plan.source
+        activity.name = SportFamily(sportKey: plan.sport).displayName
         activity.overridesJSON = plan.overridesJSON
         context.insert(activity)
         plan.isCompleted = false
@@ -1876,6 +1868,12 @@ final class TrainingDataStore {
         plan.detailsJSON = ""
         plan.powerCurveJSON = ""
         plan.streamsData = Data()
+        plan.zoneHistogramData = Data()
+        plan.segmentsJSON = ""
+        plan.steadyHR20 = 0
+        plan.peakHR = 0
+        plan.paceHRProfileJSON = ""
+        plan.submaxProfileJSON = ""
         plan.overridesJSON = "{}"
         plan.setExternalRef(target: Self.completedRefKey, externalId: nil)
     }
@@ -2544,10 +2542,11 @@ extension TrainingDataStore {
     /// All ATP events, ascending by date.
     func atpEvents() -> [ATPEventInput] {
         let descriptor = FetchDescriptor<ATPEvent>(sortBy: [SortDescriptor(\.date, order: .forward)])
-        return ((try? context.fetch(descriptor)) ?? []).map {
-            ATPEventInput(id: $0.id, name: $0.name, date: $0.date, eventType: $0.eventType,
-                          priority: $0.priority, targetCTL: $0.targetCTL, notes: $0.notes)
-        }
+        return ((try? context.fetch(descriptor)) ?? []).map(\.input)
+    }
+
+    func atpEvent(id: String) -> ATPEventInput? {
+        (try? context.fetch(FetchDescriptor<ATPEvent>(predicate: #Predicate { $0.id == id })))?.first?.input
     }
 
     /// Insert a new event or update the existing one with the same id.
@@ -2555,18 +2554,11 @@ extension TrainingDataStore {
         let id = e.id
         if let record = (try? context.fetch(
             FetchDescriptor<ATPEvent>(predicate: #Predicate { $0.id == id })))?.first {
-            record.name = e.name
-            record.date = e.date
-            record.eventType = e.eventType
-            record.priority = e.priority
-            record.targetCTL = e.targetCTL
-            record.notes = e.notes
+            record.apply(e)
         } else {
-            context.insert(ATPEvent(id: e.id, name: e.name, date: e.date, eventType: e.eventType,
-                                    priority: e.priority, targetCTL: e.targetCTL, notes: e.notes))
+            context.insert(ATPEvent(e))
         }
-        try? context.save()
-        markChanged()
+        syncRaceSlots()
     }
 
     /// Remove an event by id. No-op if it's gone.
@@ -2574,8 +2566,63 @@ extension TrainingDataStore {
         guard let record = (try? context.fetch(
             FetchDescriptor<ATPEvent>(predicate: #Predicate { $0.id == id })))?.first else { return }
         context.delete(record)
+        syncRaceSlots()
+    }
+
+    // MARK: Race slots
+    //
+    // Every event owns one planned `WorkoutRecord` (`race:<event id>`, source
+    // `raceSource`), so weekly targets, the PMC forecast, the calendar and manual
+    // pairing see the race like any plan. The slot is derived from its event here
+    // and nowhere else: its load resolves from the event at read time
+    // (`WorkoutRecord.raceLoad`), plan CRUD refuses it, and it is never pushed to a
+    // write target.
+
+    static let raceSource = "race"
+
+    /// Bring every race slot in line with its event: create missing ones, carry
+    /// name/date/start time over, and drop the slots of deleted events — splitting a
+    /// linked activity back out first so it survives. Saves only on a change.
+    func syncRaceSlots() {
+        let source = Self.raceSource
+        var slots = Dictionary(
+            ((try? context.fetch(FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.source == source }))) ?? [])
+                .map { ($0.id, $0) },
+            uniquingKeysWith: { first, _ in first })
+        for event in (try? context.fetch(FetchDescriptor<ATPEvent>())) ?? [] {
+            let id = "race:\(event.id)"
+            let slot = slots.removeValue(forKey: id) ?? {
+                let rec = WorkoutRecord(id: id, source: source, date: event.date, sport: "", name: "", isPlanned: true)
+                context.insert(rec)
+                return rec
+            }()
+            let legs = event.input.legs
+            let sport = legs.count == 1 ? Self.sportKey(legs[0].sport) : "multi_sport"
+            if slot.sport != sport { slot.sport = sport }
+            if slot.name != event.name { slot.name = event.name }
+            if slot.notes != event.notes { slot.notes = event.notes }
+            if slot.plannedDate != event.date { slot.plannedDate = event.date }
+            if slot.plannedStartMinute != event.startMinute { slot.plannedStartMinute = event.startMinute }
+            if !slot.isCompleted, slot.date != event.date { slot.date = event.date }
+            if !slot.isCompleted, slot.startMinute != event.startMinute { slot.startMinute = event.startMinute }
+        }
+        for orphan in slots.values {
+            if orphan.isCompleted { unfold(orphan) }
+            context.delete(orphan)
+        }
+        guard context.hasChanges else { return }
         try? context.save()
         markChanged()
+    }
+
+    private static func sportKey(_ family: SportFamily) -> String {
+        switch family {
+        case .swim: "swimming"
+        case .bike: "cycling"
+        case .run: "running"
+        case .strength: "strength_training"
+        case .other: "other"
+        }
     }
 
     // MARK: Week overrides (sparse)
