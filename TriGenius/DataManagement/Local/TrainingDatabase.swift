@@ -431,7 +431,7 @@ nonisolated struct MetricPoint: Sendable, Identifiable {
     /// The mean of the trailing `days` at every point of a date-ordered series — the
     /// trend of a signal whose day-to-day noise swamps a first-to-last change. Dated
     /// like the points themselves, so the line spans exactly the readings it smooths.
-    static func rollingMeans(_ points: [MetricPoint], days: Int = 7) -> [MetricPoint] {
+    static func rollingMeans(_ points: [MetricPoint], days: Int = 28) -> [MetricPoint] {
         let window = Double(days) * 86_400
         var start = 0
         var sum = 0.0
