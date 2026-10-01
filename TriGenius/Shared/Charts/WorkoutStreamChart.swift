@@ -56,6 +56,12 @@ struct WorkoutStreamModel: Equatable, Identifiable {
     }
 
     var id: String { kind.rawValue }
+    /// This metric's time in zone, nil where it has no zone model or no time in one.
+    var zoneDistribution: ZoneDistributionModel? {
+        guard let metric = kind.zoneMetric, let zoneSeconds, zoneSeconds.contains(where: { $0 > 0 })
+        else { return nil }
+        return ZoneDistributionModel(metric: metric, seconds: zoneSeconds, bounds: zones)
+    }
     var title: String { basis.map { "\(kind.label) · \($0)" } ?? kind.label }
     /// Elapsed seconds the stored bins cover.
     var spanSeconds: Double { Double(values.count * binSeconds) }
@@ -376,8 +382,12 @@ struct WorkoutStreamChart: View {
     let height: CGFloat?
     let zoom: Binding<Zoom>?
     /// The zone the pointer is resting on in the ribbon, reported up so a host
-    /// can spell it out. Nil whenever the trace itself is being scrubbed.
+    /// can spell it out. Nil whenever the trace itself is being scrubbed. The
+    /// ribbon is drawn only for a host that binds this.
     let highlight: Binding<Int?>?
+    /// A zone picked outside the chart — the card's time-in-zone bar — whose
+    /// stretches are shaded full height.
+    let shadedZone: Int?
     let reading: Binding<Reading?>?
 
     @State private var scrubOffset: Double?
@@ -421,13 +431,15 @@ struct WorkoutStreamChart: View {
 
     init(model: WorkoutStreamModel, overlay: WorkoutStreamModel? = nil, bands: [Band] = [],
          height: CGFloat? = 140, zoom: Binding<Zoom>? = nil,
-         highlight: Binding<Int?>? = nil, reading: Binding<Reading?>? = nil) {
+         highlight: Binding<Int?>? = nil, shadedZone: Int? = nil,
+         reading: Binding<Reading?>? = nil) {
         self.model = model
         self.overlay = overlay
         self.bands = bands
         self.height = height
         self.zoom = zoom
         self.highlight = highlight
+        self.shadedZone = shadedZone
         self.reading = reading
     }
 
@@ -629,32 +641,35 @@ struct WorkoutStreamChart: View {
                 .onGeometryChange(for: CGSize.self) { $0.size } action: { plotSize = $0 }
         }
         .frame(height: height)
-        .chartScrubbing($scrubOffset, footer: Self.ribbonFraction(Self.ribbonTouchPoints,
-                                                                  in: plotSize.height),
+        .chartScrubbing($scrubOffset,
+                        footer: highlight == nil ? 0 : Self.ribbonFraction(Self.ribbonTouchPoints,
+                                                                           in: plotSize.height),
                         inFooter: $onRibbon) {
             StreamPlot.nearest(to: $0, in: segments)?.offset
         }
     }
 
     /// The zone timeline as a ribbon along the bottom of the plot, and — while
-    /// the pointer rests on one of its colours — every *other* stretch of that
-    /// same zone shaded full height, so a glance answers "where else did I ride
-    /// this hard?".
+    /// the pointer rests on one of its colours, or a host picked a zone — every
+    /// stretch of that zone shaded full height, so a glance answers "where else
+    /// did I ride this hard?".
     @ChartContentBuilder private func zoneMarks(_ runs: [StreamPlot.Run],
                                                 in yDomain: StreamPlot.Domain) -> some ChartContent {
-        let highlight = highlightedZone
+        let shaded = highlightedZone ?? shadedZone
         ForEach(runs) { run in
             if let zone = run.zone {
-                if zone == highlight {
+                if zone == shaded {
                     RectangleMark(xStart: .value("From", run.start), xEnd: .value("To", run.end))
                         .foregroundStyle(Theme.Palette.zones[zone].opacity(0.18))
                 }
-                RectangleMark(xStart: .value("From", run.start), xEnd: .value("To", run.end),
-                              yStart: .value(model.kind.label, yDomain.floor),
-                              yEnd: .value(model.kind.label, yDomain.fromFloor(
-                                  Self.ribbonFraction(Self.ribbonPoints, in: plotSize.height))))
-                    .foregroundStyle(Theme.Palette.zones[zone]
-                        .opacity(highlight == nil || zone == highlight ? 1 : 0.35))
+                if highlight != nil {
+                    RectangleMark(xStart: .value("From", run.start), xEnd: .value("To", run.end),
+                                  yStart: .value(model.kind.label, yDomain.floor),
+                                  yEnd: .value(model.kind.label, yDomain.fromFloor(
+                                      Self.ribbonFraction(Self.ribbonPoints, in: plotSize.height))))
+                        .foregroundStyle(Theme.Palette.zones[zone]
+                            .opacity(shaded == nil || zone == shaded ? 1 : 0.35))
+                }
             }
         }
     }

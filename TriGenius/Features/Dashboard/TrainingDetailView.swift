@@ -305,7 +305,7 @@ struct TrainingDetailView: View {
             if legs.isEmpty {
                 strengthCard(details)
                 activityCard(details)
-                zonesCard(details)
+                zonesCard(details, charted: charts.whole)
                 feelCard
                 streamsSection(charts.whole)
                 swimSection(details)
@@ -341,7 +341,7 @@ struct TrainingDetailView: View {
                                                    leg.segment.distanceKm, family: leg.segment.family,
                                                    basis: leg.segment.tssBasis))
             activityCard(leg.segment.details, title: "\(leg.name) · Metrics")
-            zonesCard(leg.segment.details)
+            zonesCard(leg.segment.details, charted: legCharts(leg))
         } else {
             if legs.isEmpty {
                 if hasRoute { routeHeader() } else { header.cardSurface() }
@@ -351,7 +351,7 @@ struct TrainingDetailView: View {
             plannedStructureCard
             activityCard(details, title: legs.isEmpty ? "Activity" : "Metrics", extra: transitionsRow)
             feelCard
-            zonesCard(details)
+            zonesCard(details, charted: legs.isEmpty ? charts.whole : [])
                 .frame(maxHeight: legs.isEmpty ? .infinity : nil, alignment: .top)
         }
         // The splits card is the race's index — it stays on every tab.
@@ -672,12 +672,19 @@ struct TrainingDetailView: View {
     }
 
     // MARK: Zones — time-in-zone distribution, per metric this workout recorded
+    //
+    // A metric with a stream chart carries its bar in that chart's card; this
+    // card holds the rest — a workout stored without streams, a race's totals.
+    // It waits for the charts to load, so a bar never shows here first and then
+    // moves.
 
     @ViewBuilder
-    private func zonesCard(_ details: [String: Any]) -> some View {
-        let zones: [ZoneMetric: [Double]] = ZoneMetric.allCases.reduce(into: [:]) {
-            $0[$1] = ZoneDistribution.zoneSeconds(details: details, metric: $1)
-        }
+    private func zonesCard(_ details: [String: Any], charted: [WorkoutStreamModel] = []) -> some View {
+        let inCharts = Set(charted.compactMap { $0.zoneDistribution?.metric })
+        let zones: [ZoneMetric: [Double]] = charts.scoredAgainst == nil ? [:]
+            : ZoneMetric.allCases.filter { !inCharts.contains($0) }.reduce(into: [:]) {
+                $0[$1] = ZoneDistribution.zoneSeconds(details: details, metric: $1)
+            }
         // The bounds this workout was actually bucketed against, not today's.
         let bounds: [ZoneMetric: [Double]] = ZoneMetric.allCases.reduce(into: [:]) {
             $0[$1] = ZoneDistribution.zoneBounds(details: details, metric: $1)
@@ -767,7 +774,7 @@ struct TrainingDetailView: View {
                 Spacer(minLength: 0)
             }
             activityCard(leg.segment.details, title: "Metrics")
-            zonesCard(leg.segment.details)
+            zonesCard(leg.segment.details, charted: legCharts(leg))
             streamsSection(legCharts(leg))
                 .environment(\.routeCursorBase, leg.segment.offsetSeconds)
             swimSection(leg.segment.details)

@@ -52,6 +52,10 @@ struct ZoneDistributionModel: Codable, Equatable {
 
 struct ZoneDistributionBar: View {
     let model: ZoneDistributionModel
+    /// The caption while no zone is pointed at; nil names the metric.
+    var title: String?
+    /// The 0-based zone being pointed at, reported to a host that shows it elsewhere.
+    var zone: Binding<Int?>?
 
     @State private var selection: String?
 
@@ -74,6 +78,7 @@ struct ZoneDistributionBar: View {
                 selection: $selection
             )
         }
+        .onChange(of: selection) { _, label in zone?.wrappedValue = label.flatMap(Self.zoneIndex) }
     }
 
     /// The metric's name, or — while a zone is pointed at — that zone's numbers
@@ -93,7 +98,7 @@ struct ZoneDistributionBar: View {
                 }
             }
         } else {
-            Text(model.metric.displayName).foregroundStyle(.secondary)
+            Text(title ?? model.metric.displayName).foregroundStyle(.secondary)
         }
     }
 

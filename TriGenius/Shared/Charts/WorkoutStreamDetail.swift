@@ -18,21 +18,28 @@ struct WorkoutStreamCard: View {
     var height: CGFloat = 140
 
     @State private var showDetail = false
+    /// The zone pressed on the time-in-zone bar, shaded in the chart above it.
+    @State private var zone: Int?
 
     var body: some View {
-        WorkoutStreamChart(model: model, bands: bands, height: height)
-            .cardTitle(title) {
-                // The card as a whole opens the sheet; the button is the
-                // visible affordance, and the one target the plot's own scrub
-                // overlay can never swallow.
-                Button { showDetail = true } label: {
-                    Image(systemName: "arrow.down.left.and.arrow.up.right")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
+        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            WorkoutStreamChart(model: model, bands: bands, height: height, shadedZone: zone)
+            if let distribution = model.zoneDistribution {
+                ZoneDistributionBar(model: distribution, title: "Time in zone", zone: $zone)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .cardTitle(title) {
+            // The card as a whole opens the sheet; the button is the
+            // visible affordance, and the one target the plot's own scrub
+            // overlay can never swallow.
+            Button { showDetail = true } label: {
+                Image(systemName: "arrow.down.left.and.arrow.up.right")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .cardSurface()
         .contentShape(Rectangle())
         .onTapGesture { showDetail = true }
