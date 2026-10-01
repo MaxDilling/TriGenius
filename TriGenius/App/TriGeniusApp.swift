@@ -191,10 +191,6 @@ struct RootTabView: View {
                 }
             }
 
-            Tab("Plan", systemImage: "chart.bar.xaxis", value: CoachRouter.RootTab.plan) {
-                NavigationStack { ATPTabView() }
-            }
-
             Tab("Coach", systemImage: "bubble.left.and.bubble.right.fill", value: CoachRouter.RootTab.coach) {
                 NavigationStack { CoachChatView(brain: brain) }
             }
@@ -203,7 +199,7 @@ struct RootTabView: View {
                 NavigationStack { CalendarView() }
             }
 
-            Tab("Activities", systemImage: "magnifyingglass", value: CoachRouter.RootTab.activities, role: .search) {
+            Tab("Activities", systemImage: "figure.run", value: CoachRouter.RootTab.activities) {
                 NavigationStack { ActivitiesView() }
             }
         }

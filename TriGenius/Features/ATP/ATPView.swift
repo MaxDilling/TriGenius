@@ -1,13 +1,13 @@
 import SwiftUI
 
-// MARK: - Plan tab (ATP)
+// MARK: - Plan (ATP)
 //
 // The season-plan surface, laid out like a detail page: the next A race's readout,
 // the season chart on the plain background, the events, then "About". The
-// methodology + volume config sits in a setup sheet behind the header's Setup pill
+// methodology + volume config sits in a setup sheet behind the toolbar's Setup button
 // (Setup → Save → the deterministic engine recomputes and the chart updates).
 
-struct ATPTabView: View {
+struct ATPView: View {
 
     // Setup draft (mirrors ATPConfig + events).
     @State private var methodology: ATPMethodology = .weeklyTSS
@@ -46,23 +46,16 @@ struct ATPTabView: View {
             }
             .padding(Theme.Spacing.l)
         }
-        .safeAreaBar(edge: .top) {
+        .background(Color.appBackground)
+        .navigationTitle("Plan")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+        .toolbar {
             // A word, not a glyph: a pencil or gear leaves open whether it edits the
             // plan, an event or the app.
-            ScreenHeader("Plan") {
-                Button { showingSetup = true } label: {
-                    Text("Setup").font(.subheadline.weight(.semibold)).headerSegment()
-                }
-                .buttonStyle(.plain)
-                .headerPill()
-            }
-            .padding(.horizontal)
-            .padding(.vertical, Theme.Spacing.s)
+            ToolbarItem(placement: .primaryAction) { Button("Setup") { showingSetup = true } }
         }
-        .background(Color.appBackground)
-        #if os(iOS)
-        .toolbar(.hidden, for: .navigationBar)
-        #endif
         .sheet(isPresented: $showingSetup) { setupSheet }
         .sheet(item: $editingEvent) { draft in
             let isExisting = events.contains { $0.id == draft.id }
@@ -84,8 +77,8 @@ struct ATPTabView: View {
 
     // MARK: Setup sheet
 
-    /// The methodology + volume config, presented from the toolbar edit button so the Plan
-    /// tab itself stays focused on the season chart + events. Events live on the tab,
+    /// The methodology + volume config, presented from the toolbar's Setup button so the Plan
+    /// page itself stays focused on the season chart + events. Events live on the page,
     /// not here — they're the plan's content, not a setting.
     private var setupSheet: some View {
         NavigationStack {

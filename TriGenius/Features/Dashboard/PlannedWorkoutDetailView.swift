@@ -80,7 +80,7 @@ struct PlannedWorkoutDetailView: View {
             if family == .strength, !workout.isCompleted, !exerciseBlocks.isEmpty {
                 ToolbarItem(placement: .primaryAction) { startButton }
             }
-            // A race follows its event — it is edited and deleted in the Plan tab.
+            // A race follows its event — it is edited and deleted on the Plan page.
             if workout.source != TrainingDataStore.raceSource {
                 ToolbarItem(placement: .primaryAction) {
                     Button() { editor = .edit(workout) } label: {
@@ -128,15 +128,8 @@ struct PlannedWorkoutDetailView: View {
 
     private var header: some View {
         HStack(spacing: Theme.Spacing.m) {
-            Image(systemName: family.icon)
-                .font(.title)
-                .foregroundStyle(family.color)
-                .frame(width: 52, height: 52)
-                // Outlined, not filled — a planned session, not a completed one.
-                .background(family.color.opacity(0.15))
-                .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.m))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(workout.name).font(.headline)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(workout.name).font(.title2.bold())
                 HStack(spacing: 4) {
                     Text("Planned")
                     Text("·")

@@ -3,10 +3,10 @@ import Foundation
 // MARK: - Activity list
 //
 // The completed-activity history as the Activities screen shows it: each record
-// reduced to what its row and its week's totals need, then searched, filtered by
-// sport and grouped into training weeks. Under a sport filter a multisport session
-// is listed whole but its week totals count only that sport's legs, as in
-// `TrainingVolume`.
+// reduced to what its row and its week's totals need, then searched, filtered
+// (`ActivityFilter`) and grouped into training weeks. Under a sport filter a
+// multisport session is listed whole but its week totals count only that sport's
+// legs, as in `TrainingVolume`.
 
 struct ActivityListItem: Identifiable, Sendable {
     let id: String
@@ -18,6 +18,7 @@ struct ActivityListItem: Identifiable, Sendable {
     let distanceKm: Double
     let tss: Double?
     let contributions: [(family: SportFamily, tss: Double, distanceKm: Double, durationMinutes: Double)]
+    let isMultisport: Bool
     /// Name, sports and month + year in one string, so a keystroke only runs `contains`.
     let searchText: String
 
@@ -30,6 +31,7 @@ struct ActivityListItem: Identifiable, Sendable {
         distanceKm = record.distanceKm
         tss = record.tss
         contributions = record.sportContributions
+        isMultisport = !record.segmentsJSON.isEmpty
         let sports = Set(contributions.map(\.family) + [family]).map(\.displayName)
         searchText = ([record.name] + sports + [record.date.formatted(.dateTime.month(.wide).year())])
             .joined(separator: " ")
@@ -43,24 +45,48 @@ struct ActivityWeek: Identifiable {
     var id: Date { weekStart }
 }
 
+enum ActivityFilter: Hashable {
+    case all, sport(SportFamily), multisport
+
+    static let allCases = [all] + SportFamily.allCases.filter { $0 != .other }.map(sport) + [multisport, sport(.other)]
+
+    var sport: SportFamily? { if case .sport(let s) = self { s } else { nil } }
+
+    var label: String {
+        switch self {
+        case .all: "All sports"
+        case .sport(let s): s.displayName
+        case .multisport: "Multisport"
+        }
+    }
+
+    func matches(_ item: ActivityListItem) -> Bool {
+        switch self {
+        case .all: true
+        case .sport(let s): item.contributions.contains { $0.family == s }
+        case .multisport: item.isMultisport
+        }
+    }
+}
+
 enum ActivityList {
 
-    /// The items matching `sport` and every word of `query`, grouped by training
+    /// The items matching `filter` and every word of `query`, grouped by training
     /// week. `items` newest first; weeks come out newest first too.
-    static func weeks(_ items: [ActivityListItem], sport: SportFamily?, query: String) -> [ActivityWeek] {
+    static func weeks(_ items: [ActivityListItem], filter: ActivityFilter, query: String) -> [ActivityWeek] {
         let words = query.split(whereSeparator: \.isWhitespace).map(String.init)
         var groups: [(weekStart: Date, items: [ActivityListItem])] = []
         for item in items {
-            guard sport.map({ s in item.contributions.contains { $0.family == s } }) ?? true,
+            guard filter.matches(item),
                   words.allSatisfy(item.searchText.localizedStandardContains) else { continue }
             let weekStart = TrainingVolume.weekStart(of: item.start)
             if groups.last?.weekStart == weekStart { groups[groups.count - 1].items.append(item) }
             else { groups.append((weekStart, [item])) }
         }
-        return groups.map { ActivityWeek(weekStart: $0.weekStart, items: $0.items, totals: totals($0.items, sport: sport)) }
+        return groups.map { ActivityWeek(weekStart: $0.weekStart, items: $0.items, totals: totals($0.items, sport: filter.sport)) }
     }
 
-    /// Whole sessions without a filter; with one, only that sport's legs.
+    /// Whole sessions without a sport filter; with one, only that sport's legs.
     static func totals(_ items: [ActivityListItem], sport: SportFamily?) -> VolumeTotals {
         var t = VolumeTotals()
         for item in items {

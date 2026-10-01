@@ -5,7 +5,7 @@ import Combine
 //
 // The athlete's home screen. A `ScreenHeader` greeting the athlete by name, with
 // Settings as its one control and the plan line (current ATP period + countdown to
-// the next A event → Plan tab) under it, then the `DashboardSection` blocks in the
+// the next A event → Plan page) under it, then the `DashboardSection` blocks in the
 // athlete's configured order/visibility (`AppSettings.dashboardLayout`):
 //   • Up Next: today's completed + upcoming planned workouts, one row per
 //     workout → its detail screen.
@@ -150,7 +150,7 @@ struct DashboardView: View {
                 .headerPill()
             }
             if let plan = viewModel.atpPlan, !plan.weeks.isEmpty {
-                Button { router.selectedTab = .plan } label: { TrainingPlanBanner(plan: plan) }
+                NavigationLink { ATPView() } label: { TrainingPlanBanner(plan: plan) }
                     .buttonStyle(.plain)
             }
         }

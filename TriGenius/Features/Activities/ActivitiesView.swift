@@ -1,20 +1,21 @@
 import SwiftUI
 
-// MARK: - Activities (the search tab)
+// MARK: - Activities
 //
 // Every completed workout, newest first in training weeks, searchable by name, sport
-// and month and filterable by sport. Read-only: a row opens the workout's detail.
+// and month and filterable by sport or to multisport sessions. Read-only: a row
+// opens the workout's detail.
 
 struct ActivitiesView: View {
     @State private var items: [ActivityListItem] = []
     @State private var loaded = false
     @State private var query = ""
-    @State private var sport: SportFamily?
+    @State private var filter = ActivityFilter.all
     @Environment(CoachRouter.self) private var router
 
     var body: some View {
         @Bindable var router = router
-        let weeks = ActivityList.weeks(items, sport: sport, query: query)
+        let weeks = ActivityList.weeks(items, filter: filter, query: query)
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Theme.Spacing.l) {
                 ForEach(weeks) { week in
@@ -39,15 +40,23 @@ struct ActivitiesView: View {
             .padding(Theme.Spacing.l)
         }
         .overlay { if loaded && weeks.isEmpty { emptyState } }
-        .searchable(text: $query, prompt: "Name, sport or month")
         .safeAreaBar(edge: .top) {
-            ScreenHeader("Activities") { sportMenu }
-                .padding(.horizontal)
-                .padding(.vertical, Theme.Spacing.s)
+            VStack(spacing: Theme.Spacing.s) {
+                ScreenHeader("Activities") { sportMenu }
+                #if os(iOS)
+                searchField
+                #endif
+            }
+            .padding(.horizontal)
+            .padding(.vertical, Theme.Spacing.s)
         }
         .background(Color.appBackground)
+        // `searchable` needs the navigation bar, hidden on iOS — hence `searchField`.
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
+        .scrollDismissesKeyboard(.immediately)
+        #else
+        .searchable(text: $query, prompt: Self.searchPrompt)
         #endif
         .navigationDestination(item: $router.openedWorkoutID) { WorkoutDetailDestination(id: $0) }
         .onAppear { if !loaded { reload() } }
@@ -59,16 +68,35 @@ struct ActivitiesView: View {
         loaded = true
     }
 
+    private static let searchPrompt = "Name, sport or month"
+
+    #if os(iOS)
+    private var searchField: some View {
+        HStack(spacing: Theme.Spacing.s) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField(Self.searchPrompt, text: $query)
+                .autocorrectionDisabled()
+            if !query.isEmpty {
+                Button { query = "" } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, Theme.Spacing.s)
+        .headerPill()
+    }
+    #endif
+
     private var sportMenu: some View {
         Menu {
-            Picker("Sport", selection: $sport) {
-                Text("All sports").tag(SportFamily?.none)
-                ForEach(SportFamily.allCases) { Text($0.displayName).tag(SportFamily?.some($0)) }
+            Picker("Sport", selection: $filter) {
+                ForEach(ActivityFilter.allCases, id: \.self) { Text($0.label).tag($0) }
             }
             .pickerStyle(.inline)
         } label: {
             HStack(spacing: Theme.Spacing.xs) {
-                Text(sport?.displayName ?? "All sports")
+                Text(filter.label)
                 Image(systemName: "chevron.down").font(.caption.weight(.semibold))
             }
             .font(.subheadline.weight(.semibold))
@@ -86,10 +114,10 @@ struct ActivitiesView: View {
         let end = week.weekStart.addingTimeInterval(6 * 86400)
         let t = week.totals
         var parts = [durationHM(t.durationMinutes), "\(Int(t.tss.rounded())) TSS"]
-        if let sport {
-            if t.distanceKm > 0 { parts.insert(sport.distanceLabel(t.distanceKm, decimals: 1), at: 1) }
-            parts.insert(sport.displayName, at: 0)
+        if let sport = filter.sport, t.distanceKm > 0 {
+            parts.insert(sport.distanceLabel(t.distanceKm, decimals: 1), at: 1)
         }
+        if filter != .all { parts.insert(filter.label, at: 0) }
         return HStack(alignment: .firstTextBaseline) {
             Text((week.weekStart..<end).formatted(.interval.day().month(.abbreviated).year()))
                 .font(.headline)
@@ -114,8 +142,8 @@ struct ActivitiesView: View {
         } else if !query.isEmpty {
             ContentUnavailableView.search(text: query)
         } else {
-            ContentUnavailableView("No \(sport?.displayName.lowercased() ?? "") activities",
-                                   systemImage: sport?.icon ?? "figure.run")
+            ContentUnavailableView("No \(filter.label.lowercased()) activities",
+                                   systemImage: filter.sport?.icon ?? "figure.run")
         }
     }
 }

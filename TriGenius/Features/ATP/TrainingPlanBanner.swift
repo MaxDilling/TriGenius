@@ -1,6 +1,6 @@
 //  TrainingPlanBanner.swift
 //  The plan line under the Dashboard greeting: current period, week of season, and
-//  the countdown to the next A event. Tapping it switches to the Plan tab.
+//  the countdown to the next A event. Tapping it opens the Plan page.
 
 import SwiftUI
 
@@ -8,7 +8,7 @@ struct TrainingPlanBanner: View {
     let plan: ATPPlan
 
     /// The week whose Mon–Sun span contains today; falls back to the first upcoming
-    /// week (mirrors `ATPTabView.currentWeek`).
+    /// week (mirrors `ATPView.currentWeek`).
     private var currentWeek: ATPWeekPlan? {
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())

@@ -31,7 +31,7 @@ private func sample() -> [ActivityListItem] {
 
 @MainActor
 @Test func weeks_groupNewestFirstWithWholeSessionTotals() {
-    let weeks = ActivityList.weeks(sample(), sport: nil, query: "")
+    let weeks = ActivityList.weeks(sample(), filter: .all, query: "")
     #expect(weeks.map(\.weekStart) == [day(7), day(0)])
     #expect(weeks.map { $0.items.map(\.name) } == [["Brick", "Munich Cycling"], ["FTP-Test 20 min", "Lockerer Lauf"]])
     #expect(weeks[0].totals.tss == 190)             // 100 + 90
@@ -42,7 +42,7 @@ private func sample() -> [ActivityListItem] {
 
 @MainActor
 @Test func sportFilter_listsMultisportWholeButCountsOnlyItsLegs() {
-    let weeks = ActivityList.weeks(sample(), sport: .run, query: "")
+    let weeks = ActivityList.weeks(sample(), filter: .sport(.run), query: "")
     #expect(weeks.map { $0.items.map(\.name) } == [["Brick"], ["Lockerer Lauf"]])
     #expect(weeks[0].totals.tss == 40)
     #expect(weeks[0].totals.distanceKm == 10)
@@ -51,8 +51,16 @@ private func sample() -> [ActivityListItem] {
 }
 
 @MainActor
+@Test func multisportFilter_listsOnlyMultisportWithWholeSessionTotals() {
+    let weeks = ActivityList.weeks(sample(), filter: .multisport, query: "")
+    #expect(weeks.map { $0.items.map(\.name) } == [["Brick"]])
+    #expect(weeks[0].totals.tss == 100)
+    #expect(weeks[0].totals.durationMinutes == 90)
+}
+
+@MainActor
 @Test func search_needsEveryWordCaseInsensitive() {
-    #expect(ActivityList.weeks(sample(), sport: nil, query: "ftp").flatMap(\.items).map(\.name) == ["FTP-Test 20 min"])
-    #expect(ActivityList.weeks(sample(), sport: nil, query: "munich RUN").isEmpty)
-    #expect(ActivityList.weeks(sample(), sport: nil, query: "brick run").flatMap(\.items).map(\.name) == ["Brick"])
+    #expect(ActivityList.weeks(sample(), filter: .all, query: "ftp").flatMap(\.items).map(\.name) == ["FTP-Test 20 min"])
+    #expect(ActivityList.weeks(sample(), filter: .all, query: "munich RUN").isEmpty)
+    #expect(ActivityList.weeks(sample(), filter: .all, query: "brick run").flatMap(\.items).map(\.name) == ["Brick"])
 }

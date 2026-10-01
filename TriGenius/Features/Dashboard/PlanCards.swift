@@ -4,17 +4,15 @@ import SwiftUI
 //
 // Where the athlete stands against the plan — fitness vs the ATP's planned CTL, and
 // this week's per-discipline rings. Shown in the dashboard's Pinned section, on
-// Statistics and (fitness vs plan) in the coach chat; both lead to the Plan tab.
+// Statistics and (fitness vs plan) in the coach chat; both lead to the Plan page.
 
 struct FitnessVsPlanCard: View {
     static let title = "Fitness plan"
 
     let model: CTLTrendModel
 
-    @Environment(CoachRouter.self) private var router
-
     var body: some View {
-        Button { router.selectedTab = .plan } label: {
+        NavigationLink { ATPView() } label: {
             VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                 CardHeader(title: Self.title, color: Theme.Palette.fitness)
                 CTLTrendChart(model: model)
@@ -28,27 +26,27 @@ struct FitnessVsPlanCard: View {
 struct WeeklyTargetCard: View {
     let week: WeekTargets
 
-    @Environment(CoachRouter.self) private var router
     @State private var metric: VolumeMetric = .tss
     private var wide = WideLayout()
 
     init(week: WeekTargets) { self.week = week }
 
     var body: some View {
-        HStack(alignment: wide.isWide ? .center : .top, spacing: wide.isWide ? Theme.Spacing.l : Theme.Spacing.s) {
-            ForEach(week.visibleFamilies) { family in
-                VolumeRing(family: family, metric: metric, horizontal: wide.isWide,
-                           goal: week.target(for: family), projection: week.projection(for: family))
+        NavigationLink { ATPView() } label: {
+            HStack(alignment: wide.isWide ? .center : .top, spacing: wide.isWide ? Theme.Spacing.l : Theme.Spacing.s) {
+                ForEach(week.visibleFamilies) { family in
+                    VolumeRing(family: family, metric: metric, horizontal: wide.isWide,
+                               goal: week.target(for: family), projection: week.projection(for: family))
+                }
+                Chevron()
             }
-            Chevron()
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .cardTitle("Weekly Target") {
             SegmentedPicker("Metric", selection: $metric, options: VolumeMetric.allCases, label: \.label)
         }
         .contentCard()
-        // A tap gesture, not a Button: the picker in the title has to keep its taps.
-        .contentShape(Rectangle())
-        .onTapGesture { router.selectedTab = .plan }
     }
 }
 

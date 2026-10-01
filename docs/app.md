@@ -4,7 +4,7 @@ Detail doc for `App/`, `Features/Settings/`, `AppIntents/`. Index: `CLAUDE.md` �
 
 ## `App/TriGeniusApp.swift`
 
-Builds `CoachBrain` once; `applyBackend` re-applies backend + `setSources` + `reconcileWriteTarget` on any settings change. Launch does `syncAll(readSources)` then `reconcileWriteTarget`. Tab UI in `RootTabView`.
+Builds `CoachBrain` once; `applyBackend` re-applies backend + `setSources` + `reconcileWriteTarget` on any settings change. Launch does `syncAll(readSources)` then `reconcileWriteTarget`. Tab UI in `RootTabView`; the season plan (`ATPView`) is no tab — it is pushed from the dashboard's plan line and the Fitness plan / Weekly Target cards.
 
 ## Live strength workout (`Features/LiveStrength/`)
 
@@ -17,7 +17,7 @@ A planned strength session worked through in the app, set by set — started fro
 
 ## Activities (`Features/Activities/`)
 
-The search tab (`Tab(role: .search)` in `RootTabView`): every completed workout, read-only, newest first in training weeks. `TrainingDataStore.activityListItems()` fetches only the row columns (never streams or curves) into `ActivityListItem`s; `ActivityList` (`Analytics/`, pinned by `ActivityListTests`) searches them — every word must appear in name, sports or month + year — filters by sport and totals each week. Under a sport filter a multisport session is listed whole, but the week totals count only that sport's legs (`sportContributions`, as in `TrainingVolume`). A row opens `WorkoutDetailDestination`. `CoachRouter.openWorkout(id:)` pushes the same page from outside the tab (`openedWorkoutID`) — the target of a tapped notification that carries a `workout_id`, which today is the post-workout feedback question `BackgroundCoordinator.askForWorkoutFeedback` posts. After a foreground sync (launch, stale return) the same question comes up as a sheet instead (`router.feedbackWorkoutID` → `WorkoutFeedbackPrompt`); both go through `workoutAwaitingFeedback`/`markFeedbackAsked`, so a workout is asked about once. Rows are the shared `WorkoutRow`, as in the Dashboard's Up Next.
+The Activities tab: every completed workout, read-only, newest first in training weeks. `TrainingDataStore.activityListItems()` fetches only the row columns (never streams or curves) into `ActivityListItem`s; `ActivityList` (`Analytics/`, pinned by `ActivityListTests`) searches them — every word must appear in name, sports or month + year — filters them (`ActivityFilter`: one sport, or multisport sessions only) and totals each week. Search is `searchable` on the Mac and a field in the header on iOS, where the navigation bar is hidden. Under a sport filter a multisport session is listed whole, but the week totals count only that sport's legs (`sportContributions`, as in `TrainingVolume`). A row opens `WorkoutDetailDestination`. `CoachRouter.openWorkout(id:)` pushes the same page from outside the tab (`openedWorkoutID`) — the target of a tapped notification that carries a `workout_id`, which today is the post-workout feedback question `BackgroundCoordinator.askForWorkoutFeedback` posts. After a foreground sync (launch, stale return) the same question comes up as a sheet instead (`router.feedbackWorkoutID` → `WorkoutFeedbackPrompt`); both go through `workoutAwaitingFeedback`/`markFeedbackAsked`, so a workout is asked about once. Rows are the shared `WorkoutRow`, as in the Dashboard's Up Next.
 
 ## `App/SparkleUpdater.swift` (macOS only)
 
