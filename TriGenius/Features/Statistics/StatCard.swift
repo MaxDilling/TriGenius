@@ -19,6 +19,7 @@ struct StatCard: Hashable, Identifiable {
     static let sportShare = StatCard(id: "sport_share")
     static let timeInZone = StatCard(id: "time_in_zone")
     static let powerCurve = StatCard(id: "power_curve")
+    static let routes = StatCard(id: "routes")
     static func metric(_ metric: PerformanceMetric) -> StatCard { StatCard(id: metricPrefix + metric.key) }
 
     private static let metricPrefix = "metric:"
@@ -26,6 +27,7 @@ struct StatCard: Hashable, Identifiable {
         .ctl: "Fitness (CTL)", .atl: "Fatigue (ATL)", .tsb: "Form (TSB)", .ramp: "Ramp rate",
         .fitnessPlan: FitnessVsPlanCard.title, .weeklyTarget: "Weekly Target",
         .sportShare: "Sport share", .timeInZone: "Time in zone", .powerCurve: "Power curve",
+        .routes: "Route heatmap",
     ]
 
     static let pmcTiles: [StatCard] = [.ctl, .atl, .tsb, .ramp]
@@ -37,7 +39,7 @@ struct StatCard: Hashable, Identifiable {
     static let groups: [(title: String, cards: [StatCard])] = [
         ("Fitness & Form", pmcTiles),
         ("Plan", [.fitnessPlan, .weeklyTarget]),
-        ("Training Mix", workoutCards),
+        ("Training Mix", workoutCards + [.routes]),
         ("Performance", PerformanceMetric.all.filter { $0.group == .performance }.map { .metric($0) }),
         ("Recovery", PerformanceMetric.all.filter { $0.group == .recovery }.map { .metric($0) }),
     ]
@@ -106,6 +108,7 @@ struct StatCardView: View {
         case .sportShare: shareCard
         case .timeInZone: zonesCard
         case .powerCurve: powerCurveCard
+        case .routes: routesCard
         default:
             if let metric = card.metric, let points = stats.histories[metric.key] {
                 MetricCard(metric: metric, points: points, range: stats.range)
@@ -157,5 +160,25 @@ struct StatCardView: View {
         }
         .cardTitle(card.title)
         .contentCard()
+    }
+
+    private var routesCard: some View {
+        NavigationLink { RouteHeatDetailView(range: stats.range) } label: {
+            Group {
+                if let routes = stats.routes, routes.isEmpty {
+                    Text("No GPS routes in this range.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                } else {
+                    ZStack {
+                        if let routes = stats.routes { RouteHeatMap(lines: routes) } else { ProgressView() }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 240, maxHeight: 240)
+                    .clipShape(.rect(cornerRadius: Theme.Radius.m, style: .continuous))
+                }
+            }
+            .cardTitle(card.title) { Chevron() }
+            .contentCard()
+        }
+        .buttonStyle(.plain)
     }
 }

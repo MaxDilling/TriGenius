@@ -43,6 +43,7 @@ struct StatisticsView: View {
                 }
 
                 card(.powerCurve)
+                card(.routes)
 
                 PerformanceMetricsSection(stats: viewModel)
             }

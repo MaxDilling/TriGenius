@@ -417,7 +417,7 @@ private struct RouteMap: View {
 
 /// Satellite imagery with roads over the standard map, for every route map at
 /// once and remembered across launches.
-private let routeSatelliteKey = "route_map_satellite"
+let routeSatelliteKey = "route_map_satellite"
 
 struct RouteMapStyleButton: View {
     @AppStorage(routeSatelliteKey) private var satellite = false

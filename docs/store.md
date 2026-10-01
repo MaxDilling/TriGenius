@@ -53,6 +53,10 @@ App settings (backend/model, `read_sources` CSV, `metrics_source`, `write_target
 
 The OpenRouter API key and the Garmin login (OAuth tokens + email), all in `KeychainStore` marked synchronizable, so the secrets ride iCloud Keychain to the athlete's other devices (not the CloudKit data store) and never sit in plaintext UserDefaults. `GarminAuth` reads/writes its tokens here; `AppSettings.garminEmail` too. Items are `kSecAttrAccessibleAfterFirstUnlock` — the background refresh reads and rotates the Garmin tokens while the phone is locked; `migrateAccessibility()` (app launch) moves items written with the when-unlocked default.
 
+## Route cache — device-local
+
+`RouteCache` (`DataManagement/Local/RouteCache.swift`) keeps each completed workout's `RouteLine`s as one JSON file in `Caches/routes/`, named by the percent-encoded record id — derived data, outside SwiftData and CloudKit, rebuilt per device. `lines(since:)` runs off the main actor: it lists the completed workouts (`activityListItems`, no blobs), deletes the files of workouts no longer stored, reads the files that exist and builds the missing ones from `streamsData` / the legs' streams, 16 workouts at a time in parallel. A workout without GPS caches as an empty list, so it is decoded once. **A file exists ⇒ it is current:** `applyCompleted`, the one place a completed section lands on a row, calls `RouteCache.invalidate(id)`, so any re-ingest rebuilds that workout's lines; "Delete all my data" calls `clear()`.
+
 ## `TrainingDatabase.swift`
 
 The SwiftData store. `@Model` records `WorkoutRecord` and `PerformanceMetricRecord` (+ the ATP and coach-memory models); value-type DTOs (`Ingested*`, `MetricPoint`, `DailyTL`, `PerformanceSnapshot`) cross the actor boundary. The single `ModelContainer` is built from `TrainingDataStore.schema`. A *Coach-memory store API* extension maps the coach-memory rows ↔ the `CoachMemory` value structs. `store.activities()` returns the completed subset; `scheduledWorkouts`/`openScheduledWorkouts` the planned rows. Any mutation posts the coalesced `trainingDataDidChange`.

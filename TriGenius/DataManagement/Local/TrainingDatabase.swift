@@ -1549,6 +1549,7 @@ final class TrainingDataStore {
         record.streamsData = c.streamsData
         record.zoneHistogramData = c.zoneHistogramData
         record.segmentsJSON = c.segmentsJSON
+        RouteCache.invalidate(record.id)
         record.submaxProfileJSON = c.submaxProfileJSON
         record.wPrimeFloorsJSON = c.wPrimeFloorsJSON
         record.steadyHR20 = c.steadyHR20

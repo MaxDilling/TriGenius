@@ -810,6 +810,7 @@ struct SettingsView: View {
         memory.reset()
         ReplyRatingStore.shared.deleteAll()
         PainReportStore.shared.deleteAll()
+        RouteCache.clear()
         IgnoredWorkouts.clearAll()
         await GarminAuth.shared.logout()
         settings.garminEmail = ""

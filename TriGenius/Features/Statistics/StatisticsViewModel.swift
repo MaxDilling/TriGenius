@@ -29,12 +29,15 @@ final class StatisticsViewModel {
     /// change, so the card labels them as current (`ZoneDistributionStack`).
     private(set) var zoneBounds: [ZoneMetric: [Double]] = [:]
     private(set) var powerCurve: [PowerCurve.Point] = []
+    /// The range's GPS tracks; nil until `RouteCache` has delivered them.
+    private(set) var routes: [RouteLine]?
     /// Each marker's whole history by key; a marker without data has no entry.
     private(set) var histories: [String: [MetricPoint]] = [:]
     private(set) var metricsLoaded = false
 
     private var records: [WorkoutRecord] = []
     private var weeks = 0
+    private var routeLoad: Task<Void, Never>?
 
     init(weeklyStructure: WeeklyStructure, range: TimeRange = .threeMonths) {
         self.weeklyStructure = weeklyStructure
@@ -51,6 +54,13 @@ final class StatisticsViewModel {
         week = WeeklyTargets.thisWeek(weeklyStructure: weeklyStructure, atpPlan: plan,
                                       creditFactor: AppSettings.storedCreditFactor(), today: now)
         weeks = range.weeks(first: result.points.first?.date)
+        if cards?.contains(.routes) ?? true {
+            routeLoad?.cancel()
+            routeLoad = Task {
+                let lines = await RouteCache.lines(since: range.start(now: now))
+                if !Task.isCancelled, lines != routes { routes = lines }
+            }
+        }
         guard cards?.contains(where: StatCard.workoutCards.contains) ?? true,
               let windowStart = TrainingVolume.recentWeekStarts(weeks: weeks, today: now).first
         else { return }
