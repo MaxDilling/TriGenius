@@ -19,8 +19,8 @@ struct TrainingDetailView: View {
     /// `init` — `record.segments` parses `segmentsJSON` on every access.
     private let legs: [Leg]
 
-    /// One leg, with the name and color it carries through strip, splits and
-    /// chart bands. `name` is unique within the race so it can identify a row.
+    /// One leg, with the name and color it carries through strip and chart
+    /// bands. `name` is unique within the race so it can identify a row.
     private struct Leg: Identifiable {
         let index: Int
         let segment: WorkoutSegment
@@ -139,7 +139,7 @@ struct TrainingDetailView: View {
         .task(id: ChartSource(streams: record.streamsData, details: record.detailsJSON,
                               segments: record.segmentsJSON)) { await loadCharts() }
         .background(Color.appBackground)
-        .navigationTitle(family.displayName)
+        .navigationTitle(legs.isEmpty ? family.displayName : WorkoutSegments.sessionName(legs.map(\.segment)))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -342,6 +342,7 @@ struct TrainingDetailView: View {
                                                    basis: leg.segment.tssBasis))
             activityCard(leg.segment.details, title: "\(leg.name) · Metrics")
             zonesCard(leg.segment.details, charted: legCharts(leg))
+                .frame(maxHeight: .infinity, alignment: .top)
         } else {
             if legs.isEmpty {
                 if hasRoute { routeHeader() } else { header.cardSurface() }
@@ -352,11 +353,7 @@ struct TrainingDetailView: View {
             activityCard(details, title: legs.isEmpty ? "Activity" : "Metrics", extra: transitionsRow)
             feelCard
             zonesCard(details, charted: legs.isEmpty ? charts.whole : [])
-                .frame(maxHeight: legs.isEmpty ? .infinity : nil, alignment: .top)
-        }
-        // The splits card is the race's index — it stays on every tab.
-        if !legs.isEmpty {
-            splitsCard.frame(maxHeight: .infinity, alignment: .top)
+                .frame(maxHeight: .infinity, alignment: .top)
         }
     }
 
@@ -779,7 +776,6 @@ struct TrainingDetailView: View {
                 .environment(\.routeCursorBase, leg.segment.offsetSeconds)
             swimSection(leg.segment.details)
         } else {
-            splitsCard
             activityCard(details, title: "Metrics", extra: transitionsRow)
             zonesCard(details)
             feelCard
@@ -824,6 +820,7 @@ struct TrainingDetailView: View {
             .overlay(alignment: .bottom) {
                 Rectangle().fill(active ? color : .clear).frame(height: 2)
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .animation(.easeInOut(duration: 0.2), value: active)
@@ -835,68 +832,6 @@ struct TrainingDetailView: View {
         guard let leg else { return family.distanceLabel(record.distanceKm, decimals: 1) }
         if let rate = Self.rateLabel(leg.segment.details) { return rate }
         return leg.segment.distanceKm > 0 ? leg.segment.family.distanceLabel(leg.segment.distanceKm) : "—"
-    }
-
-    // MARK: Splits — the race broken into its legs (Total tab)
-
-    private var splitsCard: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            ProportionBar(
-                segments: legs.map {
-                    .init(label: $0.name, color: $0.color,
-                          value: $0.segment.durationMinutes, display: "")
-                },
-                showLegend: false)
-            VStack(spacing: Theme.Spacing.s) {
-                ForEach(legs) { leg in
-                    Button { selectedLeg = leg.index } label: { splitRow(leg) }
-                        .buttonStyle(.plain)
-                }
-            }
-        }
-        .cardTitle("Splits")
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .cardSurface()
-    }
-
-    private func splitRow(_ leg: Leg) -> some View {
-        HStack(spacing: Theme.Spacing.s) {
-            Image(systemName: Self.legIcon(leg))
-                .font(.subheadline)
-                .foregroundStyle(leg.color)
-                .frame(width: 30, height: 30)
-                .background(leg.color.opacity(0.17),
-                            in: .rect(cornerRadius: Theme.Radius.s, style: .continuous))
-            VStack(alignment: .leading, spacing: 1) {
-                Text(leg.name).font(.subheadline.weight(.semibold))
-                Text(splitDetail(leg)).font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-            VStack(alignment: .trailing, spacing: 1) {
-                Text(Self.elapsed(leg.segment.durationMinutes))
-                    .font(.subheadline.weight(.semibold)).monospacedDigit()
-                Text(leg.segment.tss.map { "\(Int($0.rounded())) TSS" } ?? "—")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .contentShape(Rectangle())
-    }
-
-    /// "40.2 km · 32.0 km/h" — the leg's distance and rate; a transition names
-    /// the disciplines it sits between instead, having neither rate nor pace.
-    private func splitDetail(_ leg: Leg) -> String {
-        var parts: [String] = []
-        if leg.segment.distanceKm > 0 {
-            parts.append(leg.segment.family.distanceLabel(leg.segment.distanceKm))
-        }
-        if let rate = Self.rateLabel(leg.segment.details) {
-            parts.append(rate)
-        } else if leg.segment.isTransition {
-            let neighbours = [legs.first { $0.index < leg.index && !$0.segment.isTransition },
-                              legs.first { $0.index > leg.index && !$0.segment.isTransition }]
-            parts.append(neighbours.compactMap { $0?.segment.family.displayName }.joined(separator: " → "))
-        }
-        return parts.joined(separator: " · ")
     }
 
     /// Time spent in transition — a race total the leg cards can't show.

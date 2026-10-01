@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Proportion bar
 //
-// A proportional capsule of colored segments plus an optional legend row — the
+// A proportional capsule of colored segments plus a legend row — the
 // shared building block behind time-in-zone bars and the dashboard's sport-share
 // mini chart. Pure presentation: callers supply label/color/value per segment, and
 // bind `selection` to learn which segment is under the pointer.
@@ -18,7 +18,6 @@ struct ProportionBar: View {
     }
 
     let segments: [Segment]
-    var showLegend = true
     /// Label of the segment under the pointer. Bind to opt into scrubbing; nil leaves
     /// the bar inert. The readout itself is the caller's — this only reports what is
     /// being pointed at.
@@ -45,19 +44,17 @@ struct ProportionBar: View {
             .frame(height: 10)
             .clipShape(Capsule())
             .modifier(ScrubbingIfBound(fraction: $scrubFraction, enabled: selection != nil))
-            if showLegend {
-                HStack(spacing: Theme.Spacing.m) {
-                    ForEach(visible) { segment in
-                        HStack(spacing: 3) {
-                            Circle().fill(segment.color).frame(width: 7, height: 7)
-                            Text(segment.label).font(.caption2).foregroundStyle(.secondary)
-                            Text(segment.display).font(.caption2).monospacedDigit()
-                        }
+            HStack(spacing: Theme.Spacing.m) {
+                ForEach(visible) { segment in
+                    HStack(spacing: 3) {
+                        Circle().fill(segment.color).frame(width: 7, height: 7)
+                        Text(segment.label).font(.caption2).foregroundStyle(.secondary)
+                        Text(segment.display).font(.caption2).monospacedDigit()
                     }
                 }
-                .lineLimit(1)
-                .minimumScaleFactor(0.7)
             }
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
         }
     }
 

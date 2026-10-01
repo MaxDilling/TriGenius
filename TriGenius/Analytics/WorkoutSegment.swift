@@ -44,6 +44,17 @@ nonisolated struct WorkoutSegment {
 
 nonisolated enum WorkoutSegments {
 
+    /// What a multisport session is called, read off its legs in order
+    /// (transitions aside) — both sources store every such session as `multi_sport`.
+    static func sessionName(_ segments: [WorkoutSegment]) -> String {
+        switch segments.filter({ !$0.isTransition }).map(\.family) {
+        case [.swim, .bike, .run]: "Triathlon"
+        case [.run, .bike, .run]: "Duathlon"
+        case [.bike, .run]: "Brick"
+        default: "Multisport"
+        }
+    }
+
     /// `[{offset_s, source_id, tss, tss_basis, details, streams}]`; "" for no
     /// segments. `streams` is the lzfse blob base64'd, so the whole session stays
     /// one JSON string attribute.
