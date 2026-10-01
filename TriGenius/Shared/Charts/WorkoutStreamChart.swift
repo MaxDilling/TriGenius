@@ -11,7 +11,7 @@ import Charts
 
 struct WorkoutStreamModel: Equatable, Identifiable {
     enum Kind: String {
-        case speed, power, wPrimeBalance, heartRate, runPace, hikePace, swimPace, bikeCadence, runCadence, elevation
+        case speed, power, wPrimeBalance, heartRate, runPace, swimPace, bikeCadence, runCadence, elevation
     }
     /// A *measured* level drawn as a rule across the plot — normalized power on
     /// a bike power trace. Never an average standing in for one that is missing.
@@ -104,7 +104,7 @@ struct WorkoutStreamModel: Equatable, Identifiable {
             [(.heartRate, .heartRate)]
         case .other:
             (SportFamily.matches(storedSport: details["sport"] as? String ?? "", filter: "hiking")
-                ? [(.speed, .hikePace)] : [])
+                ? [(.speed, .speed)] : [])
             + [(.heartRate, .heartRate), (.elevation, .elevation)]
         }
         var models = order.compactMap { metric, kind in
@@ -183,7 +183,7 @@ extension WorkoutStreamModel.Kind {
         case .power: "Power"
         case .wPrimeBalance: "W′ balance"
         case .heartRate: "Heart rate"
-        case .runPace, .hikePace, .swimPace: "Pace"
+        case .runPace, .swimPace: "Pace"
         case .bikeCadence, .runCadence: "Cadence"
         case .elevation: "Elevation"
         }
@@ -196,7 +196,6 @@ extension WorkoutStreamModel.Kind {
         case .wPrimeBalance: Theme.Palette.warning
         case .heartRate: Theme.Palette.danger
         case .runPace: Theme.Palette.sport(.run)
-        case .hikePace: Theme.Palette.sport(.other)
         case .swimPace: Theme.Palette.sport(.swim)
         case .bikeCadence, .runCadence: Theme.Palette.success
         case .elevation: .gray
@@ -217,12 +216,12 @@ extension WorkoutStreamModel.Kind {
     /// How the natural-unit samples reach the plot: pace kinds invert to
     /// seconds-per-unit, speed plots in km/h (matching its axis and tooltip).
     /// The pace floors are where the athlete counts as standing still — slower
-    /// than 33 min/km running, 50 min/km hiking (a steep climb runs well below
-    /// the running floor), 8:20 /100m swimming.
+    /// than 33 min/km running, 8:20 /100m swimming. A hike plots as speed
+    /// instead: its stream is standing still for a large share of its readings,
+    /// which on a pace axis would break the trace at each one.
     var axis: StreamPlot.Axis {
         switch self {
         case .runPace: .inverse(scale: 1000, floor: 0.5)
-        case .hikePace: .inverse(scale: 1000, floor: 1 / 3)
         case .swimPace: .inverse(scale: 100, floor: 0.2)
         case .speed: .linear(3.6)
         default: .linear(1)
@@ -231,7 +230,7 @@ extension WorkoutStreamModel.Kind {
 
     /// Whether the stream is speed in m/s — pace kinds store speed too — and so
     /// integrates to a distance.
-    var isSpeed: Bool { [.speed, .runPace, .hikePace, .swimPace].contains(self) }
+    var isSpeed: Bool { [.speed, .runPace, .swimPace].contains(self) }
 
     /// The narrowest span the axis frames, in plot units — a steady stretch
     /// stays a steady line instead of filling the plot.
@@ -240,7 +239,6 @@ extension WorkoutStreamModel.Kind {
         case .heartRate: 30
         case .elevation: 50
         case .runPace: 60
-        case .hikePace: 120
         case .swimPace: 20
         default: 0
         }
@@ -258,7 +256,7 @@ extension WorkoutStreamModel.Kind {
     /// Y-axis tick label for a plotted value.
     func axisLabel(_ display: Double) -> String {
         switch self {
-        case .runPace, .hikePace, .swimPace: Self.pace(display)
+        case .runPace, .swimPace: Self.pace(display)
         default: "\(Int(display.rounded()))"
         }
     }
@@ -269,7 +267,7 @@ extension WorkoutStreamModel.Kind {
         case .power: "W"
         case .wPrimeBalance: "kJ"
         case .heartRate: "bpm"
-        case .runPace, .hikePace: "/km"
+        case .runPace: "/km"
         case .swimPace: "/100m"
         case .bikeCadence: "rpm"
         case .runCadence: "spm"
@@ -579,15 +577,15 @@ struct WorkoutStreamChart: View {
             }
             ForEach(segments) { segment in
                 ForEach(segment.vertices) { vertex in
-                    if vertex.plotLow < vertex.plotHigh {
-                        AreaMark(
-                            x: .value("Time", vertex.offset),
-                            yStart: .value(model.kind.label, vertex.plotLow),
-                            yEnd: .value(model.kind.label, vertex.plotHigh),
-                            series: .value("Spread", "s\(segment.id)")
-                        )
-                        .foregroundStyle(model.kind.color.opacity(0.18))
-                    }
+                    // Every vertex, a spreadless one included: skipping it would
+                    // stretch the band straight across it between its neighbours.
+                    AreaMark(
+                        x: .value("Time", vertex.offset),
+                        yStart: .value(model.kind.label, vertex.plotLow),
+                        yEnd: .value(model.kind.label, vertex.plotHigh),
+                        series: .value("Spread", "s\(segment.id)")
+                    )
+                    .foregroundStyle(model.kind.color.opacity(0.18))
                     LineMark(
                         x: .value("Time", vertex.offset),
                         y: .value(model.kind.label, vertex.plot),
