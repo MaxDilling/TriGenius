@@ -99,7 +99,7 @@ struct RouteHeader<Caption: View>: View {
 }
 
 /// The phone layout, as Apple Fitness: the map fills the screen behind the page,
-/// which scrolls over it and leaves a window at the top. A tap fades the page
+/// which scrolls over it and leaves a window at the top. A tap hides the page
 /// and moves only the camera, from the window to the whole screen — the map
 /// never changes size or safe area, because MapKit refits on every frame of that.
 struct RouteMapPage<Caption: View, Content: View>: View {
@@ -139,6 +139,9 @@ struct RouteMapPage<Caption: View, Content: View>: View {
             .ignoresSafeArea(edges: .top)
             .scrollEdgeEffectHidden(!pastHeader, for: .top)
             .opacity(expanded ? 0 : 1)
+            .offset(y: expanded ? Theme.Spacing.xl : 0)
+            // Gone in one frame, back with the camera: rising as it fades in.
+            .animation(expanded ? nil : .smooth(duration: 0.5), value: expanded)
             .allowsHitTesting(!expanded)
         }
         .navigationBarBackButtonHidden(expanded)
@@ -171,22 +174,27 @@ struct RouteMapPage<Caption: View, Content: View>: View {
                         }
                         .onChange(of: [screen.width, screen.height, insets.top, insets.bottom,
                                        insets.leading, insets.trailing]) {
-                            frame(with: proxy)
+                            // Not measured here: the map has not taken the new geometry
+                            // yet. The refit ends in a camera change, which measures.
+                            framings = nil
+                            camera = .automatic
                         }
                 }
                 .opacity(framings == nil ? 0 : 1)
             }
-            Group {
-                VStack(spacing: 0) {
-                    Color.clear.frame(height: max(insets.top + routeWindowHeight - routeFadeHeight + routeFadeOverhang, 0))
-                    LinearGradient(stops: routeFadeStops(.appBackground), startPoint: .top, endPoint: .bottom)
-                        .frame(height: routeFadeHeight)
-                    Color.appBackground
+            // The fade is a background so its fixed heights never size the backdrop:
+            // taller than a landscape screen, they feed back through `insets` forever.
+            ScrollDim(depth: depth)
+                .background(alignment: .top) {
+                    VStack(spacing: 0) {
+                        Color.clear.frame(height: max(insets.top + routeWindowHeight - routeFadeHeight + routeFadeOverhang, 0))
+                        LinearGradient(stops: routeFadeStops(.appBackground), startPoint: .top, endPoint: .bottom)
+                            .frame(height: routeFadeHeight)
+                        Color.appBackground
+                    }
                 }
-                ScrollDim(depth: depth)
-            }
-            .opacity(expanded ? 0 : 1)
-            .allowsHitTesting(false)
+                .opacity(expanded ? 0 : 1)
+                .allowsHitTesting(false)
         }
         .ignoresSafeArea()
         .onGeometryChange(for: CGSize.self) { $0.size } action: { screen = $0 }
@@ -252,14 +260,14 @@ private struct ScrollDim: View {
 /// An eased fade into `color` — long and soft, so the map dissolves into the
 /// page rather than ending at an edge.
 private func routeFadeStops(_ color: Color) -> [Gradient.Stop] {
-    [.init(color: color.opacity(0), location: 0), .init(color: color.opacity(0.2), location: 0.4),
+    [.init(color: color.opacity(0), location: 0), .init(color: color.opacity(0.3), location: 0.2),
      .init(color: color.opacity(0.55), location: 0.7), .init(color: color, location: 1)]
 }
 
-private let routeFadeHeight: CGFloat = 280
+private let routeFadeHeight: CGFloat = 320
 /// How far below the window the page's background turns solid — under the
 /// title the map still shows through.
-private let routeFadeOverhang: CGFloat = 60
+private let routeFadeOverhang: CGFloat = 80
 
 /// The visible map above the page, and the part of it the title covers.
 private let routeWindowHeight: CGFloat = 260
