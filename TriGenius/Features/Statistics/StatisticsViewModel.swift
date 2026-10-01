@@ -42,7 +42,7 @@ final class StatisticsViewModel {
         pmc = result
         let plan = ATPEngine.current()
         maxRampRate = plan?.maxRampRate
-        ctlTrend = CTLTrendModel.around(points: result.points, planCurve: plan?.planCurve ?? [],
+        ctlTrend = CTLTrendModel.around(pmc: result, planCurve: plan?.planCurve ?? [],
                                         from: range.start(now: now) ?? result.points.first?.date, today: now)
         week = WeeklyTargets.thisWeek(weeklyStructure: weeklyStructure, atpPlan: plan,
                                       creditFactor: AppSettings.storedCreditFactor(), today: now)

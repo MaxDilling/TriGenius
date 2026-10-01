@@ -51,7 +51,7 @@ struct CTLTrendChatCard: View {
             }
         }
         .task {
-            model = CTLTrendModel.around(points: PMCEngine.current().points,
+            model = CTLTrendModel.around(pmc: PMCEngine.current(),
                                          planCurve: ATPEngine.current()?.planCurve ?? [])
         }
     }

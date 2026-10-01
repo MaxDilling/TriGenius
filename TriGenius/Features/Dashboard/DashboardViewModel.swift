@@ -75,11 +75,12 @@ final class DashboardViewModel {
 
         let store = TrainingDataStore.shared
         let records = store.activities() // newest first
-        pmc = PMCEngine.current()
+        let pmc = PMCEngine.current()
+        self.pmc = pmc
         weeklyBuckets = TrainingVolume.weeklyBuckets(records: records)
         let atpPlan = ATPEngine.current()
         self.atpPlan = atpPlan
-        ctlTrend = CTLTrendModel.around(points: pmc?.points ?? [], planCurve: atpPlan?.planCurve ?? [])
+        ctlTrend = CTLTrendModel.around(pmc: pmc, planCurve: atpPlan?.planCurve ?? [])
 
         let week = WeeklyTargets.thisWeek(weeklyStructure: context.weeklyStructure, atpPlan: atpPlan,
                                           creditFactor: AppSettings.storedCreditFactor(), store: store)
