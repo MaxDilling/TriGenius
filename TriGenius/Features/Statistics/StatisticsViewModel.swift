@@ -67,6 +67,10 @@ final class StatisticsViewModel {
         // Stored series first: they are one fetch each and must not wait for an estimate.
         let estimated = Set(PerformanceHistory.estimatedKeys)
         let metrics = PerformanceMetric.all.filter { cards?.contains(.metric($0)) ?? true }
+        // An estimated marker shows the value in force now until its series is resolved.
+        for metric in metrics where histories[metric.key] == nil {
+            histories[metric.key] = store.currentEstimate(metric.key).map { [$0] }
+        }
         for metric in metrics.sorted(by: { !estimated.contains($0.key) && estimated.contains($1.key) }) {
             let points = await store.metricHistory(metric.key)
             histories[metric.key] = points.isEmpty ? nil : points

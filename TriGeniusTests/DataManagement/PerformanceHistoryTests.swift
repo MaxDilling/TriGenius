@@ -79,6 +79,14 @@ struct PerformanceHistoryTests {
         #expect(PerformanceHistory.seriesFamily(of: "vo2max_cycling") == ["vo2max_cycling"])
     }
 
+    /// A card shows the latest point before its series exists, so the two must agree.
+    @Test func theLatestPointIsTheSeriesLastPoint() throws {
+        let history = cycling()
+        let latest = try #require(history.estimatedSeries(["critical_power"], latestOnly: true)["critical_power"])
+        #expect(latest.count == 1)
+        #expect(latest[0].value == history.estimatedSeries("critical_power").last?.value)
+    }
+
     /// The VO2max series has to carry VO2max, not the LT-pace default of the mapping.
     @Test func theVO2maxSeriesCarriesVO2max() throws {
         let series = cycling(ftp: false, cp: false, vo2: true).estimatedSeries("vo2max_cycling")

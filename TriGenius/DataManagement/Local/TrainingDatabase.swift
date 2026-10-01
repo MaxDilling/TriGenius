@@ -965,13 +965,16 @@ nonisolated struct PerformanceHistory: Sendable {
     /// once and only for these keys. CP, W′ and FTP are one posterior per date
     /// (`seriesFamily`), the one expensive estimate, so resolving them apart would pay for
     /// it three times.
-    func estimatedSeries(_ keys: [String]) -> [String: [MetricPoint]] {
+    ///
+    /// `latestOnly` resolves just the final point — the value in force now, for a card
+    /// that shows it before the series behind it has been resolved.
+    func estimatedSeries(_ keys: [String], latestOnly: Bool = false) -> [String: [MetricPoint]] {
         var perKey: [String: Set<Date>] = [:]
         for key in keys { perKey[key] = seriesDates(key) }
         let resolving = Set(perKey.keys)
         let now = Date()
         var out: [String: [MetricPoint]] = [:]
-        for date in Set(perKey.values.joined()).filter({ $0 < now }).sorted() + [now] {
+        for date in (latestOnly ? [] : Set(perKey.values.joined()).filter({ $0 < now }).sorted()) + [now] {
             let snap = snapshot(asOf: date, resolving: resolving)
             for key in perKey.keys {
                 guard var point = Self.point(key, snap, date) else { continue }
@@ -2685,6 +2688,12 @@ final class TrainingDataStore {
             if !estimated.isEmpty { return estimated }
         }
         return storedHistory(key)
+    }
+
+    /// The value an estimated key holds now — its series' final point without the series,
+    /// nil for a key that reads its stored series.
+    func currentEstimate(_ key: String) -> MetricPoint? {
+        performanceHistory().estimatedSeries([key], latestOnly: true)[key]?.last
     }
 
     /// `metricHistory` with the re-resolution off the main actor and cached
