@@ -477,8 +477,8 @@ nonisolated struct MetricPoint: Sendable, Identifiable {
 /// Latest value per performance metric, read from the DB to build the coach's
 /// system-prompt context and the Settings display.
 nonisolated struct PerformanceSnapshot: Sendable {
-    /// Estimated keys whose newest reading was entered by hand — where no `…IsEstimated`
-    /// is set, the value shown is the athlete's own and must say so.
+    /// Keys whose newest reading was entered by hand — where no `…IsEstimated` is set,
+    /// the value shown is the athlete's own and must say so.
     var handEnteredKeys: Set<String> = []
     var cyclingFTP: Int?
     /// True when `cyclingFTP` was derived from the critical-power estimate
@@ -942,7 +942,8 @@ nonisolated struct PerformanceHistory: Sendable {
                 snap.vo2maxRunningConfidence = confidence
             }
         }
-        snap.handEnteredKeys = Set(Self.estimatedKeys.filter { wanted($0) && isManual($0, asOf: date) })
+        snap.handEnteredKeys = Set((Self.estimatedKeys + ["running_ftp", "swim_css_speed", "max_hr", "weight_kg"])
+            .filter { wanted($0) && isManual($0, asOf: date) })
         return snap
     }
 

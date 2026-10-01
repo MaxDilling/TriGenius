@@ -1,11 +1,13 @@
 import SwiftUI
 
 /// Settings sub-page for the read sources (Garmin / Apple Health, read in parallel
-/// and merged into the local store) and the single write target. Split out of the
-/// root Settings list so that screen stays scannable.
-struct DataSourcesView: View {
+/// and merged into the local store), the workouts kept out of that import, and the
+/// single write target.
+struct ConnectionsView: View {
     @ObservedObject var settings: AppSettings
     let onBackendChanged: () -> Void
+
+    @State private var ignoredCount = IgnoredWorkouts.entries.count
 
     var body: some View {
         List {
@@ -27,7 +29,7 @@ struct DataSourcesView: View {
                     }
                 }
             } header: {
-                Text("Read From")
+                Text("Import from")
             } footer: {
                 Text("Pull training and health data from one or both. Garmin Connect workouts already mirrored into Apple Health are skipped to avoid duplicates. When both are on, performance and wellness metrics come from the single \u{201C}Metrics from\u{201D} provider.")
             }
@@ -55,6 +57,20 @@ struct DataSourcesView: View {
                 }
             }
 
+            Section {
+                NavigationLink {
+                    IgnoredWorkoutsView()
+                } label: {
+                    LabeledContent {
+                        Text(ignoredCount, format: .number)
+                    } label: {
+                        Label("Ignored workouts", systemImage: "eye.slash")
+                    }
+                }
+            } footer: {
+                Text("Workouts you hid from your calendar and analytics. They are skipped on every sync.")
+            }
+
             // Write target — where the coach schedules planned workouts.
             Section {
                 Picker("Schedule workouts to", selection: $settings.writeTarget) {
@@ -68,14 +84,15 @@ struct DataSourcesView: View {
                     GarminLoginSection(settings: settings)
                 }
             } header: {
-                Text("Write To")
+                Text("Send workouts to")
             } footer: {
                 Text(settings.writeTarget == .appleWatch
                      ? "Planned workouts are sent to the Apple Watch via WorkoutKit — start them from the Workout app."
                      : "Planned workouts are created and scheduled in Garmin Connect. Switching targets re-syncs upcoming plans; nothing is lost.")
             }
         }
-        .navigationTitle("Data Sources")
+        .navigationTitle("Connections")
+        .onAppear { ignoredCount = IgnoredWorkouts.entries.count }
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif

@@ -33,11 +33,13 @@ The Sparkle SPM dependency is the one thing that *does* live in `project.pbxproj
 
 Backend defaults to on-device **Apple Intelligence**; the cloud **OpenRouter** backend is gated behind an explicit consent sheet (`CloudAIConsentView`, `cloudAIConsent` → `isConfigured`).
 
-Read sources + write target live on a **`DataSourcesView`** sub-page: the "Read From" toggles + "Metrics from" picker, one section per enabled source with Garmin login and a `ReadSourceSyncSection` "Re-sync" → `resync(source:)`, plus the "Write To" picker.
+`SettingsView` itself is a **hub**: every root row names a sub-page and shows that page's current state (or what still needs setting up, in the warning colour); nothing is configured on the root. Groups, in the order a new athlete sets up:
 
-The **Dashboard** section holds the two dashboard sub-pages plus the cross-training-credit slider: **`DashboardLayoutView`** (per-section visibility + drag order, `dashboardLayout`) and **`SportSplitView`** (swim/bike/run percentage sliders that rebalance to 100 % and write `WeeklyStructure.sportRatio` via `CoachMemory` — the ATP's sport split and, at 0 %, the gate that removes a discipline's weekly-target ring).
-
-**Privacy & Data** section: privacy-policy link (`privacyPolicyURL`), the medical disclaimer, ignored workouts, and **"Delete all my data"** — a full personal-data + consent erase (`deleteTrainingAndATP` + `CoachMemory.reset` + `IgnoredWorkouts.clearAll` + Garmin logout + key/consent clear).
+- **Connect** — **`ConnectionsView`**: the "Import from" toggles + "Metrics from" picker, one section per enabled source with Garmin login and a `ReadSourceSyncSection` "Re-sync" → `resync(source:)`, the ignored workouts (`IgnoredWorkoutsView`), and the "Send workouts to" picker. `CalendarSettingsView`: calendar access + which calendars the coach considers.
+- **Athlete** — `AthleteProfileView` (name/goals as the coach keeps them, reset). **`PerformanceSettingsView`**: every physiological marker as one row by discipline — current value plus a `MetricSource` mark (calculated / synced / entered) — each opening the shared `MetricDetailView`. That detail page carries `MetricCalculationSection` for the markers in `MetricCalculation` (the opt-in switch, source, method, inputs, 80 % range; the running threshold factor on the LT-pace page), so the switch is the same from Settings and from Statistics; it reads `AppSettings` from the environment (`TriGeniusApp` injects it at the root). `HistoryRecompute` is the one "Recompute history" control. **`WeeklyTargetsView`**: swim/bike/run percentage sliders that rebalance to 100 % and write `WeeklyStructure.sportRatio` via `CoachMemory` (the ATP's sport split and, at 0 %, the gate that removes a discipline's weekly-target ring), plus the cross-training-credit slider. `StrengthProfileView`.
+- **Coach** — `AIModelSettingsView` (backend picker, per-backend fields, consent sheet) and `NotificationSettingsView` (form alerts, quiet hours, reminders).
+- **App** — **`DashboardLayoutView`** (per-section visibility + drag order, `dashboardLayout`).
+- **Privacy & Data** — privacy-policy link (`privacyPolicyURL`), the medical disclaimer, and **"Delete all my data"** — a full personal-data + consent erase (`deleteTrainingAndATP` + `CoachMemory.reset` + `IgnoredWorkouts.clearAll` + Garmin logout + key/consent clear).
 
 The **Developer** section is `#if DEBUG`-only. A first-launch `MedicalDisclaimerView` gate (`AppStorage("medical_disclaimer_accepted")`) shows from `RootTabView`.
 

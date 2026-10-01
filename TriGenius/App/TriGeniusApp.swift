@@ -35,6 +35,7 @@ struct TriGeniusApp: App {
                 RootTabView(brain: brain, memory: memory, settings: settings, router: router) {
                     applyBackend(to: brain)
                 }
+                .environmentObject(settings)
             } else {
                 ProgressView("Initialisiere…")
                     .task { await setupBrain() }

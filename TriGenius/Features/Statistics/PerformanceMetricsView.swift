@@ -64,10 +64,10 @@ struct PerformanceMetric: Identifiable {
         // Performance (physiological capacity)
         PerformanceMetric(key: "vo2max_running", title: "VO₂max (Run)", group: .performance, accent: SportFamily.run.color,
                           unit: "ml/kg/min", storageUnit: "ml_kg_min", format: intFormat, parse: doubleParse, higherIsBetter: true,
-                          about: "VO₂max is the maximum amount of oxygen your body can take up and use each minute during all-out exercise, per kilogram of body weight. It is set by how much blood your heart pumps per minute and how much oxygen your muscles extract from it — the size of your endurance engine. Your watch estimates it from how fast you run at a given heart rate. It rises slowly with regular training, so look at the trend over weeks, not day to day."),
+                          about: "VO₂max is the maximum amount of oxygen your body can take up and use each minute during all-out exercise, per kilogram of body weight. It is set by how much blood your heart pumps per minute and how much oxygen your muscles extract from it — the size of your endurance engine. It rises slowly with regular training, so look at the trend over weeks, not day to day."),
         PerformanceMetric(key: "vo2max_cycling", title: "VO₂max (Bike)", group: .performance, accent: SportFamily.bike.color,
                           unit: "ml/kg/min", storageUnit: "ml_kg_min", format: intFormat, parse: doubleParse, higherIsBetter: true,
-                          about: "VO₂max is the maximum amount of oxygen your body can take up and use each minute during all-out exercise, per kilogram of body weight. It is set by how much blood your heart pumps per minute and how much oxygen your muscles extract from it — the size of your endurance engine. Your watch estimates it from the power you produce at a given heart rate, so it only appears if you ride with a power meter. It rises slowly with regular training, so look at the trend over weeks."),
+                          about: "VO₂max is the maximum amount of oxygen your body can take up and use each minute during all-out exercise, per kilogram of body weight. It is set by how much blood your heart pumps per minute and how much oxygen your muscles extract from it — the size of your endurance engine. It only appears if you ride with a power meter. It rises slowly with regular training, so look at the trend over weeks."),
         PerformanceMetric(key: "cycling_ftp", title: "FTP (Bike)", group: .performance, accent: SportFamily.bike.color,
                           unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true,
                           estimateNote: "Derived from your estimated critical power.",
@@ -75,18 +75,18 @@ struct PerformanceMetric: Identifiable {
         PerformanceMetric(key: "critical_power", title: "Critical Power", group: .performance, accent: SportFamily.bike.color,
                           unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true,
                           estimateNote: "Estimated from heart rate and power in your rides.",
-                          about: "Critical power (CP) is the highest power, in watts, you can hold without steadily draining your anaerobic reserve — the boundary between efforts that settle and efforts that end within minutes. Above CP you spend W′, a fixed store of work; below it, W′ refills. It sits a little above FTP. The app works it out from how hard your heart works at a given power, and raises it whenever a ride proves you can do more."),
+                          about: "Critical power (CP) is the highest power, in watts, you can hold without steadily draining your anaerobic reserve — the boundary between efforts that settle and efforts that end within minutes. Above CP you spend W′, a fixed store of work; below it, W′ refills. It sits a little above FTP."),
         PerformanceMetric(key: "w_prime", title: "W′", group: .performance, accent: SportFamily.bike.color,
                           unit: "kJ", storageUnit: "kj", format: oneDecimalFormat, resolution: 0.1, parse: doubleParse, higherIsBetter: true,
                           estimateNote: "Estimated from the hardest efforts in your rides.",
-                          about: "W′ (\"W prime\") is the amount of work, in kilojoules, you can do above your critical power before you have to slow down — your anaerobic reserve for attacks, climbs and sprints. Riding above CP spends it; riding below CP refills it over minutes. It is typically 10–25 kJ. The app reads it from what your rides prove you have spent at once, so it only rises when a ride shows it; it changes slowly with training."),
+                          about: "W′ (\"W prime\") is the amount of work, in kilojoules, you can do above your critical power before you have to slow down — your anaerobic reserve for attacks, climbs and sprints. Riding above CP spends it; riding below CP refills it over minutes. It is typically 10–25 kJ and changes slowly with training."),
         PerformanceMetric(key: "running_ftp", title: "FTP (Run)", group: .performance, accent: SportFamily.run.color,
                           unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true,
                           about: "Running FTP is the highest power, in watts, you could hold for about an hour of hard running. Like cycling FTP, it marks the boundary between an effort you can sustain and one where lactate accumulates and you tire within minutes. It only exists if your watch or a foot pod measures running power. Devices measure running power differently, so compare it only with your own earlier values, never with someone else's."),
         PerformanceMetric(key: "lactate_threshold_hr", title: "LTHR (Run)", group: .performance, accent: SportFamily.run.color,
                           unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true,
                           estimateNote: "Estimated from max HR and recent sustained runs.",
-                          about: "LTHR (lactate threshold heart rate) is your heart rate at the point where lactate starts to accumulate in your muscles faster than your body can clear it. Below it you can keep going for a long time; above it you tire within minutes — in trained athletes it is roughly the effort you could hold for an hour. The app uses it to set your running heart-rate zones and to work out how hard a run was when no pace data is available."),
+                          about: "LTHR (lactate threshold heart rate) is your heart rate at the point where lactate starts to accumulate in your muscles faster than your body can clear it. Below it you can keep going for a long time; above it you tire within minutes — in trained athletes it is roughly the effort you could hold for an hour. The app uses it to set your running heart-rate zones and to work out how hard a run was when no pace data is available. Disciplines without a threshold heart rate of their own use it for their zones too."),
         PerformanceMetric(key: "lactate_threshold_hr_cycling", title: "LTHR (Bike)", group: .performance, accent: SportFamily.bike.color,
                           unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true,
                           estimateNote: "Estimated from the heart rate held in rides near your best 20-minute power.",
@@ -296,7 +296,7 @@ struct MetricCard: View {
 // MARK: - Detail view
 
 /// The chart + history for one marker, pushed from its tile and from Settings'
-/// automatic-calculation screen.
+/// Performance page.
 struct MetricDetailView: View {
     let metric: PerformanceMetric
     let points: [MetricPoint]
@@ -327,15 +327,13 @@ struct MetricDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.l) {
                 readout
-                if visiblePoints.last?.isEstimated == true, let note = metric.estimateNote {
-                    Text(note).font(.caption).foregroundStyle(.secondary)
-                }
                 chart
                 stats
                 SectionHeading("About \(metric.title)")
                 Text(metric.about)
                     .font(.subheadline).foregroundStyle(.secondary)
                     .contentCard()
+                MetricCalculationSection(metric: metric, latest: points.last)
                 manualSection
             }
             .padding(Theme.Spacing.l)

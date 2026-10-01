@@ -1,9 +1,9 @@
 import SwiftUI
 
-// MARK: - Sport split
+// MARK: - Weekly targets
 //
-// Settings → Dashboard → Sport split: how the week's training load divides across
-// swim/bike/run. Writes `WeeklyStructure.sportRatio` — the only sport-aware input
+// Settings → Weekly targets: how the week's training load divides across
+// swim/bike/run, and how far surplus in one discipline counts toward the others. Writes `WeeklyStructure.sportRatio` — the only sport-aware input
 // to the otherwise sport-agnostic ATP (`ATPSportSplit`) and the gate on the
 // dashboard's weekly-target rings (`WeeklyTargets.visibleFamilies`): a discipline
 // at 0 % is not programmed and gets no ring.
@@ -12,13 +12,15 @@ import SwiftUI
 // let the page render an all-zero split) and edited as a local draft; the commit
 // happens once the drag ends, since each write persists and reloads the dashboard.
 
-struct SportSplitView: View {
+struct WeeklyTargetsView: View {
     @ObservedObject var memory: CoachMemory
+    @ObservedObject var settings: AppSettings
 
     @State private var ratio: [SportFamily: Double]
 
-    init(memory: CoachMemory) {
+    init(memory: CoachMemory, settings: AppSettings) {
         _memory = ObservedObject(wrappedValue: memory)
+        _settings = ObservedObject(wrappedValue: settings)
         _ratio = State(initialValue: Self.normalized(memory.weeklyStructure.sportRatio))
     }
 
@@ -46,8 +48,23 @@ struct SportSplitView: View {
             } footer: {
                 Text("Divides the week's planned load across the disciplines. Run balances the other two, so a swim or bike share you dial in stays put. A discipline set to 0 % is dropped from the plan and its ring disappears from the dashboard's weekly target.")
             }
+
+            Section {
+                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                    HStack {
+                        Label("Cross-training credit", systemImage: "arrow.triangle.2.circlepath")
+                        Spacer()
+                        Text(settings.crossTrainingCreditFactor, format: .percent.precision(.fractionLength(0)))
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(value: $settings.crossTrainingCreditFactor, in: 0...1, step: 0.05)
+                }
+            } footer: {
+                Text("Lets surplus in one discipline partly fill the other weekly rings — 0 % keeps each discipline strict, 100 % treats load as fully interchangeable.")
+            }
         }
-        .navigationTitle("Sport Split")
+        .navigationTitle("Weekly Targets")
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -83,7 +100,7 @@ struct SportSplitView: View {
 
     /// Shares as fractions of the triathlon total — the stored weights needn't sum
     /// to 1 (the coach may set raw weights), the sliders always show percentages.
-    private static func normalized(_ stored: [SportFamily: Double]) -> [SportFamily: Double] {
+    static func normalized(_ stored: [SportFamily: Double]) -> [SportFamily: Double] {
         let weights = SportFamily.triathlon.map { max(0, stored[$0] ?? 0) }
         let total = weights.reduce(0, +)
         guard total > 0 else { return [:] }

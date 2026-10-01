@@ -505,16 +505,18 @@ final class AppSettings: ObservableObject {
 
 // MARK: - Settings View
 
+/// The settings hub: each row names a sub-page and shows that page's current state,
+/// so nothing is configured on the root itself.
 struct SettingsView: View {
     let brain: CoachBrain
     @ObservedObject var settings: AppSettings
     @ObservedObject var memory: CoachMemory
     let onBackendChanged: () -> Void
 
-    @State private var showAPIKey = false
-    @State private var showClearConfirm = false
+    @ObservedObject private var reminders = ReminderStore.shared
+    @State private var garminConnected = true
+    @State private var calendarAccess = CalendarService.shared.accessState
     @State private var showClearDataConfirm = false
-    @State private var showCloudConsent = false
     #if DEBUG
     @State private var showClearDBConfirm = false
     @State private var showDeletePerfConfirm = false
@@ -524,168 +526,48 @@ struct SettingsView: View {
 
     var body: some View {
         List {
-            // AI Coach section — which model answers. On-device Apple Intelligence
-            // is the private default; OpenRouter (cloud) is gated behind explicit
-            // consent because it sends training + health data to a third party.
-            Section {
-                Picker("Backend", selection: $settings.selectedBackend) {
-                    ForEach(BackendType.allCases) { backend in
-                        Text(backend.displayName).tag(backend)
-                    }
+            Section("Connect") {
+                row("Connections", icon: "arrow.triangle.2.circlepath",
+                    value: garminMissing ? "Garmin not connected"
+                        : settings.readSources.map(\.displayName).sorted().joined(separator: " · "),
+                    warning: garminMissing) {
+                    ConnectionsView(settings: settings, onBackendChanged: onBackendChanged)
                 }
-                .pickerStyle(.segmented)
-                .onChange(of: settings.selectedBackend) { _, new in
-                    // Selecting the cloud backend without prior consent opens the
-                    // consent sheet instead of activating it.
-                    if new == .openRouter && !settings.cloudAIConsent {
-                        showCloudConsent = true
-                    } else {
-                        onBackendChanged()
-                    }
+                row("Calendar", icon: "calendar", value: calendarValue, warning: calendarAccess == .denied) {
+                    CalendarSettingsView()
                 }
-
-                switch settings.selectedBackend {
-                case .openRouter:
-                    openRouterSection
-                case .appleIntelligence:
-                    appleIntelligenceSection
-                case .lmStudio:
-                    lmStudioSection
-                }
-            } header: {
-                Text("AI Coach")
-            } footer: {
-                Text("Apple Intelligence runs on your device — no training or health data leaves it. OpenRouter is a cloud service you connect with your own API key; using it sends your workout data to OpenRouter and the model you pick.")
             }
 
-            // Data sources — read (Garmin / Apple Health) + write target live on
-            // their own sub-page to keep the root list scannable.
-            Section {
-                NavigationLink {
-                    DataSourcesView(settings: settings, onBackendChanged: onBackendChanged)
-                } label: {
-                    Label("Data Sources", systemImage: "arrow.triangle.2.circlepath")
+            Section("Athlete") {
+                row("Profile", icon: "person", value: memory.userProfile.name ?? "Not set") {
+                    AthleteProfileView(memory: memory)
                 }
-            } footer: {
-                Text("Where TriGenius reads your training and health data from, and where it schedules planned workouts.")
-            }
-
-            // Schedule (calendar) section — gives the coach awareness of busy days.
-            Section {
-                CalendarAccessSection()
-            } header: {
-                Text("Schedule")
-            } footer: {
-                Text("Lets the coach read your calendar's busy/free windows to plan workouts around busy days. Read-only — TriGenius never changes your events.")
-            }
-
-            // Dashboard section — section layout + weekly-ring tuning.
-            Section {
-                NavigationLink {
-                    DashboardLayoutView(settings: settings)
-                } label: {
-                    Label("Dashboard layout", systemImage: "rectangle.grid.1x2")
+                row("Performance", icon: "gauge.with.dots.needle.67percent") {
+                    PerformanceSettingsView(settings: settings)
                 }
-                NavigationLink {
-                    SportSplitView(memory: memory)
-                } label: {
-                    Label("Sport split", systemImage: "chart.pie")
+                row("Weekly targets", icon: "chart.pie", value: sportSplitValue) {
+                    WeeklyTargetsView(memory: memory, settings: settings)
                 }
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Label("Cross-training credit", systemImage: "arrow.triangle.2.circlepath")
-                        Spacer()
-                        Text(settings.crossTrainingCreditFactor, format: .percent.precision(.fractionLength(0)))
-                            .foregroundStyle(.secondary).monospacedDigit()
-                    }
-                    Slider(value: $settings.crossTrainingCreditFactor, in: 0...1, step: 0.05)
-                }
-            } header: {
-                Text("Dashboard")
-            } footer: {
-                Text("Dashboard layout picks which sections appear and in what order (the AI summary costs an LLM call per load, off by default). Sport split divides the week's load across swim/bike/run — a discipline at 0 % loses its weekly-target ring. Cross-training credit lets surplus in one discipline partly fill the other weekly rings — 0 % keeps each discipline strict, 100 % treats load as fully interchangeable.")
-            }
-
-            // Notifications section — proactive background coaching.
-            Section {
-                NotificationSettingsSection(settings: settings)
-            } header: {
-                Text("Notifications")
-            } footer: {
-                Text("Proactive alerts when your form (TSB) signals high fatigue or detraining. Evaluated on a background refresh.")
-            }
-
-            // Reminders section — user/coach-configurable push reminders.
-            RemindersSection()
-
-            // Athlete profile section
-            Section("Athlete Profile") {
-                profileRow("Name", value: memory.userProfile.name)
-
-                if !memory.userProfile.goals.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Goals")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text(memory.userProfile.goals.joined(separator: ", "))
-                            .font(.body)
-                    }
-                    .padding(.vertical, 2)
-                }
-
-                NavigationLink {
+                row("Strength profile", icon: "dumbbell",
+                    value: memory.sportProgress.progress(for: "strength").strengthProfile.place?.label ?? "Set up") {
                     StrengthProfileView(memory: memory)
-                } label: {
-                    LabeledContent("Strength profile",
-                                   value: memory.sportProgress.progress(for: "strength").strengthProfile.place?.label ?? "Set up")
-                }
-
-                Button(role: .destructive) {
-                    showClearConfirm = true
-                } label: {
-                    Label("Reset profile", systemImage: "trash")
-                }
-                .alert("Delete athlete profile?", isPresented: $showClearConfirm) {
-                    Button("Delete", role: .destructive) {
-                        resetMemory()
-                    }
-                    Button("Cancel", role: .cancel) {}
-                } message: {
-                    Text("All saved profile and training data will be deleted.")
                 }
             }
 
-            // Performance metrics — auto-synced from the data source into the
-            // local time-series DB; read-only here.
-            Section {
-                let performance = TrainingDataStore.shared.latestSnapshot()
-                profileRow("FTP (cycling)", value: performance.cyclingFTP.map {
-                    performance.cyclingFTPIsEstimated ? "~\($0) W (estimated)" : "\($0) W"
-                })
-                profileRow("Threshold power (run)", value: performance.runningFTP.map { "\($0) W" })
-                profileRow("CSS", value: performance.cssPaceFormatted.map { "\($0)/100m" })
-                profileRow("Lactate threshold HR", value: performance.lactateThrHR.map {
-                    performance.lactateThrHRIsEstimated
-                        ? "~\($0) bpm (\(performance.lactateThrHRConfidence.rawValue))"
-                        : "\($0) bpm"
-                })
-                profileRow("Lactate threshold pace", value: performance.lactateThrPaceFormatted.map {
-                    performance.lactateThrPaceIsEstimated ? "~\($0)/km (estimated)" : "\($0)/km"
-                })
-                profileRow("VO₂max (run)", value: performance.vo2maxRunning.map { String(format: "%.1f", $0) })
-                profileRow("VO₂max (cycling)", value: performance.vo2maxCycling.map { String(format: "%.1f", $0) })
-                profileRow("Max HR", value: performance.maxHR.map { "\($0) bpm" })
-                profileRow("Weight", value: performance.weightKg.map { String(format: "%.1f kg", $0) })
-                NavigationLink {
-                    AutomaticCalculationView(settings: settings)
-                } label: {
-                    Label("Automatic calculation", systemImage: "wand.and.sparkles")
+            Section("Coach") {
+                row("AI model", icon: "sparkles", value: aiModelIssue ?? settings.selectedBackend.displayName,
+                    warning: aiModelIssue != nil) {
+                    AIModelSettingsView(settings: settings, onBackendChanged: onBackendChanged)
                 }
-                RecomputeHistoryButton()
-            } header: {
-                Text("Performance")
-            } footer: {
-                Text("Synced automatically from \(settings.metricsSource.displayName). History is kept in the local database. **Automatic calculation** works out the values your watch does not report, and says what each one rests on.\n\n**Recompute history** rewrites training load and time in zone for everything already stored — worth doing after any threshold change, and safe to run at any time.")
+                row("Notifications", icon: "bell.badge", value: notificationsValue) {
+                    NotificationSettingsView(settings: settings)
+                }
+            }
+
+            Section("App") {
+                row("Dashboard layout", icon: "rectangle.grid.1x2") {
+                    DashboardLayoutView(settings: settings)
+                }
             }
 
             // Privacy & Data — user-facing controls Apple review expects: the
@@ -693,11 +575,6 @@ struct SettingsView: View {
             Section {
                 Link(destination: URL(string: Self.privacyPolicyURL)!) {
                     Label("Privacy Policy", systemImage: "hand.raised")
-                }
-                NavigationLink {
-                    IgnoredWorkoutsView()
-                } label: {
-                    Label("Ignored workouts", systemImage: "eye.slash")
                 }
                 Button(role: .destructive) {
                     showClearDataConfirm = true
@@ -826,181 +703,63 @@ struct SettingsView: View {
             }
             #endif
 
-            // About section
             Section("About") {
-                HStack {
-                    Text("TriGenius")
-                    Spacer()
-                    Text("AI Triathlon Coach")
-                        .foregroundStyle(.secondary)
-                }
-                HStack {
-                    Text("Version")
-                    Spacer()
-                    Text(Self.appVersion).foregroundStyle(.secondary).monospacedDigit()
-                }
+                LabeledContent("TriGenius", value: "AI Triathlon Coach")
+                LabeledContent("Version", value: Self.appVersion)
             }
         }
         .navigationTitle("Settings")
-        .sheet(isPresented: $showCloudConsent) {
-            CloudAIConsentView(
-                onAccept: {
-                    settings.cloudAIConsent = true
-                    showCloudConsent = false
-                    onBackendChanged()
-                },
-                onDecline: {
-                    settings.selectedBackend = .appleIntelligence
-                    showCloudConsent = false
-                }
-            )
+        .task {
+            calendarAccess = CalendarService.shared.accessState
+            garminConnected = await GarminAuth.shared.isAuthenticated
         }
     }
 
-    // MARK: - OpenRouter section
-
-    private var openRouterSection: some View {
-        Group {
-            HStack {
-                if showAPIKey {
-                    TextField("API key", text: $settings.openRouterAPIKey)
-                        #if os(iOS)
-                        .textInputAutocapitalization(.never)
-                        #endif
-                        .disableAutocorrection(true)
-                        .onChange(of: settings.openRouterAPIKey) { onBackendChanged() }
-                } else {
-                    SecureField("API key", text: $settings.openRouterAPIKey)
-                        .onChange(of: settings.openRouterAPIKey) { onBackendChanged() }
-                }
-                Button {
-                    showAPIKey.toggle()
-                } label: {
-                    Image(systemName: showAPIKey ? "eye.slash" : "eye")
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Picker("Model", selection: $settings.openRouterModel) {
-                ForEach(AppSettings.availableOpenRouterModels, id: \.model) { entry in
-                    Text(entry.model).tag(entry.model)
-                }
-            }
-            .onChange(of: settings.openRouterModel) { onBackendChanged() }
-
-            Picker("Summary model", selection: $settings.openRouterSummaryModel) {
-                ForEach(AppSettings.availableSummaryModels, id: \.model) { entry in
-                    Text(entry.model).tag(entry.model)
-                }
-            }
-
-            Toggle("Web search", isOn: $settings.openRouterWebSearch)
-                .onChange(of: settings.openRouterWebSearch) { onBackendChanged() }
-            if settings.openRouterWebSearch {
-                Text("The coach can look things up on the live web when a question needs current information (billed per search by OpenRouter; queries also reach the search provider). Replies that used the web show a globe.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-
-            if settings.openRouterAPIKey.isEmpty {
-                Label("API key required for OpenRouter", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(Theme.Palette.warning)
-                    .font(.caption)
-            } else {
-                Label("OpenRouter configured", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(Theme.Palette.success)
-                    .font(.caption)
-            }
-
-            // Cloud-sharing consent state + a way to revoke it (revoking falls the
-            // coach back to on-device Apple Intelligence).
-            if settings.cloudAIConsent {
-                Button(role: .destructive) {
-                    settings.cloudAIConsent = false
-                    settings.selectedBackend = .appleIntelligence
-                    onBackendChanged()
-                } label: {
-                    Label("Revoke cloud data sharing", systemImage: "hand.raised")
-                }
-                .font(.caption)
+    private func row<Destination: View>(_ title: String, icon: String, value: String? = nil, warning: Bool = false,
+                                        @ViewBuilder destination: () -> Destination) -> some View {
+        NavigationLink(destination: destination) {
+            LabeledContent {
+                Text(value ?? "").foregroundStyle(warning ? Theme.Palette.warning : Color.secondary)
+            } label: {
+                Label(title, systemImage: icon)
             }
         }
     }
 
-    // MARK: - Apple Intelligence section
+    // MARK: - Row values
 
-    private var appleIntelligenceSection: some View {
-        Group {
-            modelStatusRow("On-device", status: AppleModelAvailability.onDeviceStatus())
+    private var garminMissing: Bool {
+        !garminConnected && (settings.readSources.contains(.garmin) || settings.writeTarget == .garmin)
+    }
 
-            // TODO: Force Private Cloud Compute to unavailable until Apple unlocks it
-            // for this developer account; restore `AppleModelAvailability.cloudStatus()` then.
-            let cloud = AppleModelAvailability.Status(isAvailable: false, detail: "Not yet enabled for this account")
-            modelStatusRow("Private Cloud Compute", status: cloud)
-
-            Toggle("Use Private Cloud Compute", isOn: $settings.useAppleCloudCompute)
-                .disabled(!cloud.isAvailable)
-                .onChange(of: settings.useAppleCloudCompute) { onBackendChanged() }
+    private var calendarValue: String {
+        switch calendarAccess {
+        case .authorized: "On"
+        case .notDetermined: "Not set up"
+        case .denied: "Access denied"
         }
     }
 
-    private func modelStatusRow(_ name: String, status: AppleModelAvailability.Status) -> some View {
-        Label {
-            Text("\(name)\(status.detail.map { " — \($0)" } ?? "")")
-        } icon: {
-            Image(systemName: status.isAvailable ? "checkmark.circle.fill" : "xmark.circle.fill")
-                .foregroundStyle(status.isAvailable ? .green : .red)
-        }
-        .font(.caption)
+    private var sportSplitValue: String? {
+        let ratio = WeeklyTargetsView.normalized(memory.weeklyStructure.sportRatio)
+        guard !ratio.isEmpty else { return nil }
+        return SportFamily.triathlon.map { String(Int(((ratio[$0] ?? 0) * 100).rounded())) }
+            .joined(separator: " / ") + " %"
     }
 
-    // MARK: - LM Studio section
-
-    private var lmStudioSection: some View {
-        Group {
-            TextField("Server URL", text: $settings.lmStudioBaseURL)
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                .keyboardType(.URL)
-                #endif
-                .disableAutocorrection(true)
-                .onChange(of: settings.lmStudioBaseURL) { onBackendChanged() }
-
-            TextField("Model id", text: $settings.lmStudioModel)
-                #if os(iOS)
-                .textInputAutocapitalization(.never)
-                #endif
-                .disableAutocorrection(true)
-                .onChange(of: settings.lmStudioModel) { onBackendChanged() }
-
-            if settings.lmStudioBaseURL.isEmpty {
-                Label("Server URL required for LM Studio", systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(Theme.Palette.warning)
-                    .font(.caption)
-            } else {
-                Label("Start LM Studio's local server, then pick the loaded model id.", systemImage: "desktopcomputer")
-                    .foregroundStyle(.secondary)
-                    .font(.caption)
-            }
+    /// What still keeps the selected backend from answering, if anything.
+    private var aiModelIssue: String? {
+        switch settings.selectedBackend {
+        case .openRouter where settings.openRouterAPIKey.isEmpty: "API key required"
+        case .lmStudio where settings.lmStudioBaseURL.isEmpty: "Server URL required"
+        default: nil
         }
     }
 
-    // MARK: - Helpers
-
-    private func profileRow(_ label: String, value: String?) -> some View {
-        HStack {
-            Text(label)
-            Spacer()
-            Text(value ?? "—")
-                .foregroundStyle(value == nil ? .tertiary : .secondary)
-        }
-    }
-
-    private func resetMemory() {
-        // Reset by writing a fresh memory
-        memory.updateProfile { $0 = UserProfile() }
-        memory.updateWeeklyStructure { $0 = WeeklyStructure() }
-        memory.updatePreferences { $0 = AthletePreferences() }
+    private var notificationsValue: String {
+        let count = reminders.rules.filter(\.enabled).count
+        if count == 0 { return settings.proactiveNotifications ? "Form alerts" : "Off" }
+        return count == 1 ? "1 reminder" : "\(count) reminders"
     }
 
     /// Full user-data erase for the Privacy & Data section (Guideline 5.1.1-v):
@@ -1029,6 +788,49 @@ struct SettingsView: View {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—"
         let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
         return "\(v) (\(b))"
+    }
+}
+
+// MARK: - Athlete Profile
+
+/// What the coach knows the athlete by. Read-only: the coach keeps it from the chat.
+struct AthleteProfileView: View {
+    @ObservedObject var memory: CoachMemory
+    @State private var showResetConfirm = false
+
+    var body: some View {
+        List {
+            Section {
+                LabeledContent("Name", value: memory.userProfile.name ?? "—")
+                if !memory.userProfile.goals.isEmpty {
+                    LabeledContent("Goals", value: memory.userProfile.goals.joined(separator: ", "))
+                }
+            } footer: {
+                Text("Your coach fills this in from your conversations — tell it when something changes.")
+            }
+
+            Section {
+                Button(role: .destructive) {
+                    showResetConfirm = true
+                } label: {
+                    Label("Reset profile", systemImage: "trash")
+                }
+                .alert("Delete athlete profile?", isPresented: $showResetConfirm) {
+                    Button("Delete", role: .destructive) {
+                        memory.updateProfile { $0 = UserProfile() }
+                        memory.updateWeeklyStructure { $0 = WeeklyStructure() }
+                        memory.updatePreferences { $0 = AthletePreferences() }
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Deletes your profile, weekly structure and preferences. Your workouts are kept.")
+                }
+            }
+        }
+        .navigationTitle("Profile")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
     }
 }
 
@@ -1323,7 +1125,23 @@ struct ReportsDebugView: View {
     }
 }
 
-// MARK: - Calendar Access Section
+// MARK: - Calendar
+
+struct CalendarSettingsView: View {
+    var body: some View {
+        List {
+            Section {
+                CalendarAccessSection()
+            } footer: {
+                Text("Lets the coach read your calendar's busy/free windows to plan workouts around busy days. Read-only — TriGenius never changes your events.")
+            }
+        }
+        .navigationTitle("Calendar")
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
+    }
+}
 
 /// Shows the device-calendar access state and a button to grant it. The coach's
 /// `read_calendar_availability` tool also requests access on first use; this just
@@ -1413,426 +1231,6 @@ private struct CalendarSelectionList: View {
                 CalendarService.shared.excludedCalendarIdentifiers = excluded
             }
         )
-    }
-}
-
-// MARK: - Notification Settings Section
-
-/// Toggle for proactive background notifications. Enabling it requests
-/// notification authorization and schedules the background refresh.
-struct NotificationSettingsSection: View {
-    @ObservedObject var settings: AppSettings
-    @State private var statusMessage: String?
-
-    var body: some View {
-        Group {
-            Toggle(isOn: Binding(
-                get: { settings.proactiveNotifications },
-                set: { newValue in
-                    settings.proactiveNotifications = newValue
-                    Task { await apply(newValue) }
-                }
-            )) {
-                Label("Proactive notifications", systemImage: "bell.badge")
-            }
-
-            if let statusMessage {
-                Text(statusMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func apply(_ enabled: Bool) async {
-        guard enabled else {
-            BackgroundCoordinator.shared.cancel()
-            statusMessage = nil
-            return
-        }
-        let granted = await NotificationCenterService.shared.requestAuthorization()
-        if granted {
-            BackgroundCoordinator.shared.schedule()
-            statusMessage = "You'll get a proactive heads-up after the next background refresh."
-        } else {
-            settings.proactiveNotifications = false
-            statusMessage = "Notifications are turned off for TriGenius — enable them in the Settings app."
-        }
-    }
-}
-
-// MARK: - Reminders Section
-
-/// UI display metadata for a `ReminderKind`.
-private extension ReminderKind {
-    var title: String {
-        switch self {
-        case .checkIn: return "Check-in"
-        case .weeklyReview: return "Weekly review"
-        case .custom: return "Custom"
-        case .todaysWorkout: return "Today's workout"
-        case .sleepAdvice: return "Sleep advice"
-        }
-    }
-    var systemImage: String {
-        switch self {
-        case .checkIn: return "bubble.left.and.bubble.right"
-        case .weeklyReview: return "calendar.badge.clock"
-        case .custom: return "bell"
-        case .todaysWorkout: return "figure.run"
-        case .sleepAdvice: return "bed.double"
-        }
-    }
-}
-
-/// Lists configurable reminders + quiet hours, bound to the shared `ReminderStore`.
-/// Static reminders fire at their exact time via the OS; dynamic ones are composed
-/// and delivered on a background refresh (timing is approximate).
-struct RemindersSection: View {
-    @ObservedObject private var store = ReminderStore.shared
-    @State private var editing: ReminderRule?
-    @State private var isAdding = false
-
-    var body: some View {
-        Section {
-            // Quiet hours.
-            QuietHoursRow(store: store)
-
-            // Existing reminders.
-            ForEach(store.rules) { rule in
-                Button { editing = rule } label: { reminderRow(rule) }
-                    .buttonStyle(.plain)
-            }
-            .onDelete { offsets in
-                offsets.map { store.rules[$0].id }.forEach { store.delete(id: $0) }
-                reconcile()
-            }
-
-            Button { isAdding = true } label: {
-                Label("Add reminder", systemImage: "plus.circle")
-            }
-        } header: {
-            Text("Reminders")
-        } footer: {
-            Text("Schedule when TriGenius nudges you. Dynamic reminders (today's workout, sleep advice) are delivered around the chosen time on a background refresh, so they may arrive a little late.")
-        }
-        .sheet(isPresented: $isAdding) {
-            ReminderEditorView(rule: nil) { saved in
-                store.upsert(saved); reconcile()
-            }
-        }
-        .sheet(item: $editing) { rule in
-            ReminderEditorView(rule: rule) { saved in
-                store.upsert(saved); reconcile()
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func reminderRow(_ rule: ReminderRule) -> some View {
-        HStack {
-            Image(systemName: rule.kind.systemImage)
-                .frame(width: 24)
-                .foregroundStyle(rule.enabled ? Color.accentColor : .secondary)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(rule.kind == .custom ? (rule.message ?? rule.kind.title) : rule.kind.title)
-                    .font(.body)
-                    .lineLimit(1)
-                Text("\(timeLabel(rule)) · \(weekdaysLabel(rule))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            if !rule.enabled {
-                Text("Off").font(.caption).foregroundStyle(.secondary)
-            }
-        }
-        .contentShape(Rectangle())
-    }
-
-    private func timeLabel(_ rule: ReminderRule) -> String {
-        String(format: "%02d:%02d", rule.hour, rule.minute)
-    }
-
-    private func weekdaysLabel(_ rule: ReminderRule) -> String {
-        guard !rule.weekdays.isEmpty else { return "Every day" }
-        let short = ["", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-        return rule.weekdays.sorted().map { short[$0] }.joined(separator: " ")
-    }
-
-    private func reconcile() {
-        Task {
-            await NotificationCenterService.shared.requestAuthorization()
-            await ReminderScheduler.shared.reconcile()
-        }
-    }
-}
-
-/// A toggle + two time pickers for the quiet-hours window.
-private struct QuietHoursRow: View {
-    @ObservedObject var store: ReminderStore
-
-    private var isOn: Bool { store.quietStartMinute != nil && store.quietEndMinute != nil }
-
-    var body: some View {
-        Toggle(isOn: Binding(
-            get: { isOn },
-            set: { on in
-                if on { store.setQuietHours(start: 22 * 60, end: 7 * 60) }
-                else { store.setQuietHours(start: nil, end: nil) }
-            }
-        )) {
-            Label("Quiet hours", systemImage: "moon")
-        }
-
-        if isOn {
-            DatePicker("From", selection: Binding(
-                get: { Self.date(fromMinutes: store.quietStartMinute ?? 0) },
-                set: { store.setQuietHours(start: Self.minutes(from: $0), end: store.quietEndMinute) }
-            ), displayedComponents: .hourAndMinute)
-
-            DatePicker("To", selection: Binding(
-                get: { Self.date(fromMinutes: store.quietEndMinute ?? 0) },
-                set: { store.setQuietHours(start: store.quietStartMinute, end: Self.minutes(from: $0)) }
-            ), displayedComponents: .hourAndMinute)
-        }
-    }
-
-    static func date(fromMinutes m: Int) -> Date {
-        Calendar.current.date(bySettingHour: m / 60, minute: m % 60, second: 0, of: Date()) ?? Date()
-    }
-    static func minutes(from date: Date) -> Int {
-        let c = Calendar.current.dateComponents([.hour, .minute], from: date)
-        return (c.hour ?? 0) * 60 + (c.minute ?? 0)
-    }
-}
-
-/// Create/edit sheet for a single reminder.
-struct ReminderEditorView: View {
-    let rule: ReminderRule?
-    let onSave: (ReminderRule) -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var kind: ReminderKind
-    @State private var time: Date
-    @State private var weekdays: Set<Int>
-    @State private var enabled: Bool
-    @State private var message: String
-
-    private let weekdayOrder = [2, 3, 4, 5, 6, 7, 1] // Mon…Sun
-    private let weekdayShort = ["", "S", "M", "T", "W", "T", "F", "S"]
-
-    init(rule: ReminderRule?, onSave: @escaping (ReminderRule) -> Void) {
-        self.rule = rule
-        self.onSave = onSave
-        _kind = State(initialValue: rule?.kind ?? .checkIn)
-        _time = State(initialValue: QuietHoursRow.date(fromMinutes: (rule?.hour ?? 8) * 60 + (rule?.minute ?? 0)))
-        _weekdays = State(initialValue: Set(rule?.weekdays ?? []))
-        _enabled = State(initialValue: rule?.enabled ?? true)
-        _message = State(initialValue: rule?.message ?? "")
-    }
-
-    private var isValid: Bool {
-        kind != .custom || !message.trimmingCharacters(in: .whitespaces).isEmpty
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Picker("Type", selection: $kind) {
-                        ForEach(ReminderKind.allCases, id: \.self) { k in
-                            Label(k.title, systemImage: k.systemImage).tag(k)
-                        }
-                    }
-                    if kind == .custom {
-                        TextField("Message", text: $message, axis: .vertical)
-                    }
-                } footer: {
-                    Text(kind.isDynamic
-                         ? "Composed from your current data and delivered around this time on a background refresh."
-                         : "Fires at the exact time, even when the app is closed.")
-                }
-
-                Section {
-                    DatePicker("Time", selection: $time, displayedComponents: .hourAndMinute)
-                    Toggle("Enabled", isOn: $enabled)
-                }
-
-                Section {
-                    HStack {
-                        ForEach(Array(weekdayOrder.enumerated()), id: \.offset) { _, wd in
-                            let on = weekdays.contains(wd)
-                            Button {
-                                if on { weekdays.remove(wd) } else { weekdays.insert(wd) }
-                            } label: {
-                                Text(weekdayShort[wd])
-                                    .font(.caption.bold())
-                                    .frame(maxWidth: .infinity, minHeight: 34)
-                                    .background(on ? Color.accentColor : Color.secondary.opacity(0.15))
-                                    .foregroundStyle(on ? .white : .primary)
-                                    .clipShape(Circle())
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                } header: {
-                    Text("Repeat")
-                } footer: {
-                    Text(weekdays.isEmpty ? "No days selected → repeats every day." : "")
-                }
-            }
-            .navigationTitle(rule == nil ? "New Reminder" : "Edit Reminder")
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { save() }.disabled(!isValid)
-                }
-            }
-        }
-    }
-
-    private func save() {
-        let m = QuietHoursRow.minutes(from: time)
-        let saved = ReminderRule(
-            id: rule?.id ?? UUID().uuidString,
-            kind: kind,
-            enabled: enabled,
-            hour: m / 60,
-            minute: m % 60,
-            weekdays: weekdays.sorted(),
-            message: kind == .custom ? message : nil
-        )
-        onSave(saved)
-        dismiss()
-    }
-}
-
-// MARK: - Reminder Test View
-
-/// Developer screen to exercise the reminder pipeline without waiting for the
-/// real schedule or a system background refresh.
-struct ReminderTestView: View {
-    @ObservedObject private var store = ReminderStore.shared
-    @State private var status: String?
-    @State private var dynamicPreviews: [ReminderKind: String] = [:]
-    @State private var pending: [String] = []
-    @State private var isBusy = false
-
-    var body: some View {
-        Form {
-            Section {
-                Button {
-                    run { granted in status = granted ? "Notifications authorized." : "Authorization denied — enable TriGenius in the Settings app." }
-                } label: { Label("Request authorization", systemImage: "checkmark.shield") }
-
-                Button {
-                    run { _ in
-                        let ok = await NotificationCenterService.shared.post(
-                            title: "TriGenius — test",
-                            body: "This is an immediate test reminder.",
-                            identifier: "trigenius.reminder.test.\(UUID().uuidString)")
-                        status = ok ? "Sent an immediate test notification." : "Couldn't send — check authorization."
-                    }
-                } label: { Label("Send test notification now", systemImage: "paperplane") }
-
-                Button {
-                    run { _ in
-                        let ok = await NotificationCenterService.shared.scheduleTest(after: 10)
-                        status = ok ? "Scheduled a test for 10s from now — background the app to see it." : "Couldn't schedule — check authorization."
-                    }
-                } label: { Label("Schedule test in 10s", systemImage: "clock.badge") }
-            } header: {
-                Text("Delivery")
-            } footer: {
-                Text("Verifies notification permission and that the OS delivers TriGenius notifications.")
-            }
-
-            Section {
-                ForEach([ReminderKind.todaysWorkout, .sleepAdvice], id: \.self) { kind in
-                    Button {
-                        run { _ in
-                            let body = await BackgroundCoordinator.shared.sendDynamicReminderTest(kind)
-                            dynamicPreviews[kind] = body ?? "(nothing to report right now)"
-                            status = body == nil ? "\(label(kind)): nothing to report — not sent." : "\(label(kind)): sent."
-                        }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Label("Compose & send \(label(kind))", systemImage: kind.systemImage)
-                            if let preview = dynamicPreviews[kind] {
-                                Text(preview).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-            } header: {
-                Text("Dynamic reminders")
-            } footer: {
-                Text("Composes the body from your current data and delivers it immediately, ignoring the once-per-day limit.")
-            }
-
-            Section {
-                Button {
-                    run { _ in
-                        await BackgroundCoordinator.shared.runProactiveCheck()
-                        status = "Ran the full background check (sync + proactive digest + due dynamic reminders)."
-                    }
-                } label: { Label("Run background check now", systemImage: "arrow.triangle.2.circlepath") }
-            } footer: {
-                Text("Simulates the periodic background refresh. Gated by the Proactive notifications toggle and quiet hours, just like the real run.")
-            }
-
-            Section {
-                Button {
-                    run { _ in
-                        await NotificationCenterService.shared.requestAuthorization()
-                        await ReminderScheduler.shared.reconcile()
-                        pending = await ReminderScheduler.shared.pendingReminderBodies()
-                        status = "Reconciled \(pending.count) OS-scheduled reminder(s)."
-                    }
-                } label: { Label("Reconcile & list scheduled", systemImage: "list.bullet.rectangle") }
-
-                if pending.isEmpty {
-                    Text("No static reminders scheduled with the OS.")
-                        .font(.caption).foregroundStyle(.secondary)
-                } else {
-                    ForEach(pending, id: \.self) { Text($0).font(.caption) }
-                }
-            } header: {
-                Text("Scheduled (static) reminders")
-            }
-
-            if let status {
-                Section {
-                    Text(status).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-        }
-        .navigationTitle("Test Reminders")
-        #if os(iOS)
-        .navigationBarTitleDisplayMode(.inline)
-        #endif
-        .task { pending = await ReminderScheduler.shared.pendingReminderBodies() }
-        .disabled(isBusy)
-    }
-
-    private func label(_ kind: ReminderKind) -> String {
-        kind == .todaysWorkout ? "today's workout" : "sleep advice"
-    }
-
-    /// Run an async action, requesting authorization first and toggling busy.
-    private func run(_ action: @escaping (Bool) async -> Void) {
-        isBusy = true
-        Task {
-            let granted = await NotificationCenterService.shared.requestAuthorization()
-            await action(granted)
-            isBusy = false
-        }
     }
 }
 
