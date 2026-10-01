@@ -26,6 +26,8 @@ struct SummaryTile: View {
     var series: [MetricPoint] = []
     /// A trend drawn over `series`, which then fades behind it.
     var trendLine: [MetricPoint]?
+    /// The smallest value span the sparkline's height stands for.
+    var minSpan = 0.0
     /// For a signed series (Form, ramp rate), whose sign is the reading: zero stays in
     /// view as a dotted line and the area fills toward it.
     var zeroLine = false
@@ -88,7 +90,7 @@ struct SummaryTile: View {
             // Extra bottom buffer keeps the line floating above the card's lower
             // edge; the area still fills the gap beneath it.
             let domain = tightDomain(series + (zeroLine ? [MetricPoint(date: first, value: 0)] : []),
-                                     topPad: 0.15, bottomPad: 0.45)
+                                     minSpan: minSpan, topPad: 0.15, bottomPad: 0.45)
             let span = last.timeIntervalSince(first)
             let unitY = { (value: Double) in (value - domain.lowerBound) / (domain.upperBound - domain.lowerBound) }
             let unit = { (p: MetricPoint) in CGPoint(x: p.date.timeIntervalSince(first) / span, y: unitY(p.value)) }
@@ -197,10 +199,16 @@ struct CardHeader: View {
 
 /// A Y-axis domain tightened to the data's own min/max (plus a margin on each
 /// side), so even small progressions fill the chart's height instead of
-/// flattening against `.automatic`'s round-number padding.
-func tightDomain(_ points: [MetricPoint], topPad: Double = 0.18, bottomPad: Double = 0.18) -> ClosedRange<Double> {
+/// flattening against `.automatic`'s round-number padding. A series spanning less
+/// than `minSpan` is framed as if it spanned that much, centred.
+func tightDomain(_ points: [MetricPoint], minSpan: Double = 0,
+                 topPad: Double = 0.18, bottomPad: Double = 0.18) -> ClosedRange<Double> {
     let values = points.map(\.value)
-    guard let lo = values.min(), let hi = values.max() else { return 0...1 }
+    guard var lo = values.min(), var hi = values.max() else { return 0...1 }
+    if hi - lo < minSpan {
+        let mid = (lo + hi) / 2
+        (lo, hi) = (mid - minSpan / 2, mid + minSpan / 2)
+    }
     let range = hi - lo
     // A flat series has no range to scale by — fall back to a small synthetic span.
     let unit = range > 0 ? range : max(abs(hi) * 0.28, 1)

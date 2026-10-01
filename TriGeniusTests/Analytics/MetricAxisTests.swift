@@ -25,6 +25,19 @@ struct MetricAxisTests {
         #expect(abs(axis.domain.lowerBound - 49.4) < 1e-9 && abs(axis.domain.upperBound - 56.6) < 1e-9)
     }
 
+    @Test func aNarrowSeriesIsFramedAtTheMinimumSpan() throws {
+        // 299 - 301 under a 30 W minimum reads as 285 - 315: step 10, ticks 280 ... 320,
+        // padded by 0.1 x 40.
+        let axis = try #require(MetricAxis.axis([299, 301], resolution: 1, minSpan: 30))
+        #expect(close(axis.ticks, [280, 290, 300, 310, 320]))
+        #expect(abs(axis.domain.lowerBound - 276) < 1e-9 && abs(axis.domain.upperBound - 324) < 1e-9)
+    }
+
+    @Test func aSeriesWiderThanTheMinimumSpanIsUntouched() throws {
+        let axis = try #require(MetricAxis.axis([50, 53.1, 56], resolution: 1, minSpan: 5))
+        #expect(close(axis.ticks, [50, 52, 54, 56]))
+    }
+
     @Test func oneDecimalLabelsStepByATenth() throws {
         let axis = try #require(MetricAxis.axis([70.3, 70.4], resolution: 0.1))
         #expect(close(axis.ticks, [70.2, 70.3, 70.4]))

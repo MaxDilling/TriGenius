@@ -31,6 +31,10 @@ struct PerformanceMetric: Identifiable {
     /// The smallest difference `format` shows, in the unit it shows — seconds for a pace.
     /// The detail chart's ticks never sit closer, or two labels would read the same.
     var resolution: Double = 1
+    /// The smallest span a chart's y axis covers, in the unit `format` shows — about the
+    /// change that means something for this marker, so a move inside its day-to-day
+    /// noise does not fill the chart. 0 frames the data as it is.
+    var minSpan: Double = 0
     /// Parses a display string back into the raw stored value (inverse of `format`),
     /// or nil when the input is malformed — drives manual-entry validation.
     let parse: (String) -> Double?
@@ -63,46 +67,46 @@ struct PerformanceMetric: Identifiable {
     static let all: [PerformanceMetric] = [
         // Performance (physiological capacity)
         PerformanceMetric(key: "vo2max_running", title: "VO₂max (Run)", group: .performance, accent: SportFamily.run.color,
-                          unit: "ml/kg/min", storageUnit: "ml_kg_min", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          unit: "ml/kg/min", storageUnit: "ml_kg_min", format: intFormat, minSpan: 5, parse: doubleParse, higherIsBetter: true,
                           about: "VO₂max is the maximum amount of oxygen your body can take up and use each minute during all-out exercise, per kilogram of body weight. It is set by how much blood your heart pumps per minute and how much oxygen your muscles extract from it — the size of your endurance engine. It rises slowly with regular training, so look at the trend over weeks, not day to day."),
         PerformanceMetric(key: "vo2max_cycling", title: "VO₂max (Bike)", group: .performance, accent: SportFamily.bike.color,
-                          unit: "ml/kg/min", storageUnit: "ml_kg_min", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          unit: "ml/kg/min", storageUnit: "ml_kg_min", format: intFormat, minSpan: 5, parse: doubleParse, higherIsBetter: true,
                           about: "VO₂max is the maximum amount of oxygen your body can take up and use each minute during all-out exercise, per kilogram of body weight. It is set by how much blood your heart pumps per minute and how much oxygen your muscles extract from it — the size of your endurance engine. It only appears if you ride with a power meter. It rises slowly with regular training, so look at the trend over weeks."),
         PerformanceMetric(key: "cycling_ftp", title: "FTP (Bike)", group: .performance, accent: SportFamily.bike.color,
-                          unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          unit: "W", storageUnit: "watts", format: intFormat, minSpan: 30, parse: doubleParse, higherIsBetter: true,
                           estimateNote: "Derived from your estimated critical power.",
                           about: "FTP (Functional Threshold Power) is the highest power, in watts, you could hold for about an hour of hard riding. It sits close to your lactate threshold: below it, your body clears lactate as fast as your muscles produce it and you can keep going for a long time; above it, lactate accumulates and you tire within minutes. The app uses FTP to set your cycling training zones and to work out how hard each ride with power was. If it is out of date, those zones and numbers are off too."),
         PerformanceMetric(key: "critical_power", title: "Critical Power", group: .performance, accent: SportFamily.bike.color,
-                          unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          unit: "W", storageUnit: "watts", format: intFormat, minSpan: 30, parse: doubleParse, higherIsBetter: true,
                           estimateNote: "Estimated from heart rate and power in your rides.",
                           about: "Critical power (CP) is the highest power, in watts, you can hold without steadily draining your anaerobic reserve — the boundary between efforts that settle and efforts that end within minutes. Above CP you spend W′, a fixed store of work; below it, W′ refills. It sits a little above FTP."),
         PerformanceMetric(key: "w_prime", title: "W′", group: .performance, accent: SportFamily.bike.color,
-                          unit: "kJ", storageUnit: "kj", format: oneDecimalFormat, resolution: 0.1, parse: doubleParse, higherIsBetter: true,
+                          unit: "kJ", storageUnit: "kj", format: oneDecimalFormat, resolution: 0.1, minSpan: 5, parse: doubleParse, higherIsBetter: true,
                           estimateNote: "Estimated from the hardest efforts in your rides.",
                           about: "W′ (\"W prime\") is the amount of work, in kilojoules, you can do above your critical power before you have to slow down — your anaerobic reserve for attacks, climbs and sprints. Riding above CP spends it; riding below CP refills it over minutes. It is typically 10–25 kJ and changes slowly with training."),
         PerformanceMetric(key: "running_ftp", title: "FTP (Run)", group: .performance, accent: SportFamily.run.color,
-                          unit: "W", storageUnit: "watts", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          unit: "W", storageUnit: "watts", format: intFormat, minSpan: 30, parse: doubleParse, higherIsBetter: true,
                           about: "Running FTP is the highest power, in watts, you could hold for about an hour of hard running. Like cycling FTP, it marks the boundary between an effort you can sustain and one where lactate accumulates and you tire within minutes. It only exists if your watch or a foot pod measures running power. Devices measure running power differently, so compare it only with your own earlier values, never with someone else's."),
         PerformanceMetric(key: "lactate_threshold_hr", title: "LTHR (Run)", group: .performance, accent: SportFamily.run.color,
-                          unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          unit: "bpm", storageUnit: "bpm", format: intFormat, minSpan: 10, parse: doubleParse, higherIsBetter: true,
                           estimateNote: "Estimated from max HR and recent sustained runs.",
                           about: "LTHR (lactate threshold heart rate) is your heart rate at the point where lactate starts to accumulate in your muscles faster than your body can clear it. Below it you can keep going for a long time; above it you tire within minutes — in trained athletes it is roughly the effort you could hold for an hour. The app uses it to set your running heart-rate zones and to work out how hard a run was when no pace data is available. Disciplines without a threshold heart rate of their own use it for their zones too."),
         PerformanceMetric(key: "lactate_threshold_hr_cycling", title: "LTHR (Bike)", group: .performance, accent: SportFamily.bike.color,
-                          unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          unit: "bpm", storageUnit: "bpm", format: intFormat, minSpan: 10, parse: doubleParse, higherIsBetter: true,
                           estimateNote: "Estimated from the heart rate held in rides near your best 20-minute power.",
                           about: "Your LTHR on the bike: the heart rate at which lactate starts to accumulate in your muscles faster than your body can clear it. It is usually a few beats lower than when running, because cycling works less muscle mass, so your heart does not need to pump as much blood — which is why the bike has its own value. The app uses it to set your cycling heart-rate zones and to work out how hard a ride was without a power meter."),
         PerformanceMetric(key: "lactate_threshold_speed", title: "LT Pace", group: .performance, accent: SportFamily.run.color,
-                          unit: "/km", storageUnit: "m_per_s", format: paceFromSpeed(1000), parse: speedFromPace(1000), higherIsBetter: true, paceDistanceM: 1000,
+                          unit: "/km", storageUnit: "m_per_s", format: paceFromSpeed(1000), minSpan: 20, parse: speedFromPace(1000), higherIsBetter: true, paceDistanceM: 1000,
                           estimateNote: "Reconstructed from heart rate and pace on recent runs.",
                           about: "LT pace (lactate threshold pace) is your running pace at the lactate threshold — the point where lactate accumulates in your muscles faster than your body can clear it. It is roughly the pace you could hold for an hour of hard running. The app uses it to set your running pace zones and to work out how hard each run was, with hills taken into account: uphill counts as harder, downhill as easier. A faster LT pace means you run faster at the same effort."),
         PerformanceMetric(key: "swim_css_speed", title: "CSS", group: .performance, accent: SportFamily.swim.color,
-                          unit: "/100m", storageUnit: "m_per_s", format: paceFromSpeed(100), parse: speedFromPace(100), higherIsBetter: true, paceDistanceM: 100,
+                          unit: "/100m", storageUnit: "m_per_s", format: paceFromSpeed(100), minSpan: 10, parse: speedFromPace(100), higherIsBetter: true, paceDistanceM: 100,
                           about: "CSS (Critical Swim Speed) is the fastest pace per 100 m you can keep up without steadily tiring — the swimming counterpart of your lactate threshold. It is usually found by swimming 400 m and 200 m as fast as you can: the 200 m difference in distance divided by the difference in time. The app uses it to work out how hard each swim was. A faster CSS means you swim faster at the same effort."),
         PerformanceMetric(key: "max_hr", title: "Max HR", group: .performance, accent: Theme.Palette.body,
-                          unit: "bpm", storageUnit: "bpm", format: intFormat, parse: doubleParse, higherIsBetter: true,
+                          unit: "bpm", storageUnit: "bpm", format: intFormat, minSpan: 10, parse: doubleParse, higherIsBetter: true,
                           about: "Your maximum heart rate is the highest your heart can beat at an all-out effort, and the upper end of your heart-rate range. It depends mostly on your genes and declines slowly with age — training barely changes it, so a higher max HR does not mean you are fitter. A new value usually just means your watch caught a harder effort than before."),
         PerformanceMetric(key: "weight_kg", title: "Weight", group: .performance, accent: Theme.Palette.body,
-                          unit: "kg", storageUnit: "kg", format: oneDecimalFormat, resolution: 0.1, parse: doubleParse, higherIsBetter: false,
+                          unit: "kg", storageUnit: "kg", format: oneDecimalFormat, resolution: 0.1, minSpan: 4, parse: doubleParse, higherIsBetter: false,
                           about: "Your weight directly affects your VO₂max: at the same fitness, a lighter body gets a higher VO₂max and a heavier one a lower value. On the bike, less weight means faster climbs at the same power, because what counts uphill is watts per kilogram. Weight swings by 1–2 kg from day to day through water, food and stored carbohydrate (glycogen), so look at the trend over weeks."),
         // Recovery (daily wellness signals)
         PerformanceMetric(key: "resting_hr", title: "Resting HR", group: .recovery, accent: Theme.Palette.recovery,
@@ -127,10 +131,19 @@ struct PerformanceMetric: Identifiable {
     /// laid out in the seconds the labels show and mapped back.
     func axis(_ points: [MetricPoint]) -> MetricAxis.Axis? {
         guard let d = paceDistanceM else {
-            return MetricAxis.axis(points.map(\.value), resolution: resolution)
+            return MetricAxis.axis(points.map(\.value), resolution: resolution, minSpan: minSpan)
         }
-        guard let a = MetricAxis.axis(points.map { d / $0.value }, resolution: resolution) else { return nil }
+        guard let a = MetricAxis.axis(points.map { d / $0.value }, resolution: resolution, minSpan: minSpan)
+        else { return nil }
         return .init(domain: (d / a.domain.upperBound)...(d / a.domain.lowerBound), ticks: a.ticks.map { d / $0 })
+    }
+
+    /// `minSpan` in stored units around `value`: a pace is stored as speed, so its
+    /// seconds become the speed span between the paces half of them either side.
+    func storedMinSpan(around value: Double) -> Double {
+        guard let d = paceDistanceM, value > 0 else { return minSpan }
+        let pace = d / value
+        return d / (pace - minSpan / 2) - d / (pace + minSpan / 2)
     }
 
     /// One point as the athlete reads it: an estimate is prefixed "~" so a derived
@@ -287,7 +300,8 @@ struct MetricCard: View {
                             .init(value: $0, isRise: trend.rawDelta > 0,
                                   color: trend.isImproved ? Theme.Palette.success : Theme.Palette.warning)
                         },
-                        series: recent, trendLine: metric.trendLine(points, in: range), display: metric.display)
+                        series: recent, trendLine: metric.trendLine(points, in: range),
+                        minSpan: metric.storedMinSpan(around: points.last?.value ?? 0), display: metric.display)
         }
         .buttonStyle(.plain)
     }

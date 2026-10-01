@@ -13,10 +13,16 @@ nonisolated enum MetricAxis {
     /// `values` in the unit the labels show, `resolution` the smallest difference they show
     /// (1 for whole numbers, 0.1 for one decimal, 1 s for a pace). Aims at `count` ticks and
     /// never draws fewer than three; the domain runs `pad` of the tick span past the outer
-    /// ticks, so a line on a tick does not ride the frame.
-    static func axis(_ values: [Double], resolution: Double, count: Int = 4,
+    /// ticks, so a line on a tick does not ride the frame. A series spanning less than
+    /// `minSpan` is framed as if it spanned that much, centred — or a change inside the
+    /// marker's own noise fills the chart.
+    static func axis(_ values: [Double], resolution: Double, minSpan: Double = 0, count: Int = 4,
                      pad: Double = 0.1) -> Axis? {
-        guard let lo = values.min(), let hi = values.max(), resolution > 0 else { return nil }
+        guard var lo = values.min(), var hi = values.max(), resolution > 0 else { return nil }
+        if hi - lo < minSpan {
+            let mid = (lo + hi) / 2
+            (lo, hi) = (mid - minSpan / 2, mid + minSpan / 2)
+        }
         let step = niceStep(max((hi - lo) / Double(count - 1), resolution), resolution: resolution)
         var first = (lo / step).rounded(.down) * step
         var last = (hi / step).rounded(.up) * step
