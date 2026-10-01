@@ -707,6 +707,7 @@ nonisolated struct PerformanceHistory: Sendable {
     /// `date`, ties broken by source rank — among manual readings only, for
     /// `manualFirstKeys` once one exists. Nil when none exists yet by then.
     private func entry(_ key: String, asOf date: Date) -> Entry? {
+        assert(Self.readKeys.contains(key))
         guard var entries = byKey[key] else { return nil }
         if Self.manualFirstKeys.contains(key),
            entries.contains(where: { $0.rank == Self.manualRank && $0.date <= date }) {
@@ -984,6 +985,10 @@ nonisolated struct PerformanceHistory: Sendable {
         return out
     }
 
+    /// Every metric the resolver reads — the only series the store fetches for it, so a
+    /// key missing here resolves to nil.
+    static let readKeys = estimatedKeys + ["running_ftp", "swim_css_speed", "max_hr", "weight_kg", "resting_hr"]
+
     /// Every estimated key resolved together with `key` — the posterior it shares.
     static func seriesFamily(of key: String) -> [String] {
         cpPosteriorKeys.contains(key) ? cpPosteriorKeys : [key]
@@ -1160,9 +1165,8 @@ final class TrainingDataStore {
     /// activities + scheduled + metrics in sequence) collapses into a single post.
     private var changePending = false
     private func markChanged() {
-        cachedEvidence = nil
-        cachedSessionDates = nil
-        invalidateResolvedValues()
+        inputsStale = true
+        postChange()
     }
 
     /// Whether the stored training load and time in zone were scored against thresholds
@@ -1188,8 +1192,11 @@ final class TrainingDataStore {
     /// so a flipped switch and a day passing were both invisible until the next sync
     /// happened to write something.
     func invalidateResolvedValues() {
-        cachedLatestSnapshot = nil
-        seriesTasks = nil
+        resolved = nil
+        postChange()
+    }
+
+    private func postChange() {
         guard !changePending else { return }
         changePending = true
         DispatchQueue.main.async { [weak self] in
@@ -2425,73 +2432,95 @@ final class TrainingDataStore {
         }
     }
 
-    /// The full performance-metric history as a point-in-time–queryable resolver.
+    /// The full performance-metric history as a point-in-time–queryable resolver, built
+    /// once and kept until the rows or settings it reads change (`Resolved`).
     /// `adding` contributes HR evidence the store doesn't hold yet — the activities of
     /// an ingest pass in flight (see `ingest`); it never enters the cache.
     func performanceHistory(adding incoming: [PerformanceHistory.ActivityEvidence] = []) -> PerformanceHistory {
-        let records = (try? context.fetch(FetchDescriptor<PerformanceMetricRecord>())) ?? []
+        let settings = resolvedUnder()
+        if incoming.isEmpty, !inputsStale, let resolved, resolved.settings == settings {
+            return resolved.history
+        }
+        let cyclingEstimate = settings.vo2max || settings.ftp || settings.cp
+        let wantsSessions = cyclingEstimate || settings.ltPace || settings.runVO2
+        let wantsEvidence = wantsSessions || settings.lthr || settings.bikeLTHR
+
+        // Order-independent, so two fetches of the same rows agree.
+        var fingerprint = 0
+        func mix(_ values: any Hashable...) {
+            var hasher = Hasher()
+            for value in values { value.hash(into: &hasher) }
+            fingerprint &+= hasher.finalize()
+        }
+        let keys = PerformanceHistory.readKeys
+        let records = (try? context.fetch(FetchDescriptor<PerformanceMetricRecord>(
+            predicate: #Predicate { keys.contains($0.metricKey) }))) ?? []
+        for r in records { mix(r.metricKey, r.date, r.value, r.source) }
+        // Only fetched when an estimate that reads it is switched on: `WorkoutRecord`
+        // has no partial fault here, so the fetch materializes every stored stream blob.
+        var rows: [WorkoutRecord] = []
+        if wantsEvidence {
+            rows = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
+                predicate: #Predicate {
+                    $0.isCompleted && ($0.steadyHR20 > 0 || $0.paceHRProfileJSON != ""
+                                       || $0.submaxProfileJSON != "" || $0.wPrimeFloorsJSON != "")
+                }))) ?? []
+            for r in rows {
+                mix(r.date, r.steadyHR20, r.peakHR, r.paceHRProfileJSON, r.submaxProfileJSON,
+                    r.wPrimeFloorsJSON, r.sport)
+            }
+        }
+        // Detraining counts idle days from the last session of *any* sport, for both filters.
+        var sessions: [Date] = []
+        if wantsSessions {
+            var descriptor = FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.isCompleted })
+            descriptor.propertiesToFetch = [\.date]
+            sessions = ((try? context.fetch(descriptor)) ?? []).map(\.date)
+            for date in sessions { mix(date) }
+        }
+        if incoming.isEmpty, let resolved, resolved.settings == settings, resolved.fingerprint == fingerprint {
+            inputsStale = false
+            return resolved.history
+        }
+
         var byKey: [String: [PerformanceHistory.Entry]] = [:]
         for r in records {
             byKey[r.metricKey, default: []].append(
                 .init(date: r.date, value: r.value, rank: Self.sourceRank(r.source))
             )
         }
-        let estimateLTHR = UserDefaults.standard.bool(forKey: AppSettings.estimateLTHRFromHRMaxKey)
-        let estimateLTPace = UserDefaults.standard.bool(forKey: AppSettings.estimateLTPaceFromRunsKey)
-        let estimateRunVO2 = UserDefaults.standard.bool(forKey: AppSettings.estimateRunningVO2maxFromRunsKey)
-        let estimateBikeLTHR = UserDefaults.standard.bool(forKey: AppSettings.estimateCyclingLTHRFromRidesKey)
-        let estimateFTP = UserDefaults.standard.bool(forKey: AppSettings.estimateFTPFromCPKey)
-        let estimateVO2max = UserDefaults.standard.bool(forKey: AppSettings.estimateVO2maxFromRidesKey)
-        let estimateCP = UserDefaults.standard.bool(forKey: AppSettings.estimateCPFromRidesKey)
-        let cyclingEstimate = estimateVO2max || estimateFTP || estimateCP
-        // Only fetched when an estimate that reads it is switched on, and cached
-        // because this runs per list row: `WorkoutRecord` has no partial fault here,
-        // so each fetch otherwise materializes every stored stream blob.
-        var observations: [PerformanceHistory.ActivityEvidence] = []
-        if estimateLTHR || estimateLTPace || cyclingEstimate || estimateRunVO2 || estimateBikeLTHR {
-            if let cached = cachedEvidence { observations = cached } else {
-                let rows = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
-                    predicate: #Predicate {
-                        $0.isCompleted && ($0.steadyHR20 > 0 || $0.paceHRProfileJSON != ""
-                                           || $0.submaxProfileJSON != "" || $0.wPrimeFloorsJSON != "")
-                    }))) ?? []
-                observations = rows.map {
-                    .init(date: $0.date, steadyHR20: $0.steadyHR20, peakHR: $0.peakHR,
-                          paceProfile: LTPaceEstimate.decode($0.paceHRProfileJSON),
-                          submaxProfile: VO2maxEstimate.decode($0.submaxProfileJSON),
-                          wPrimeFloors: CriticalPowerEstimate.decode($0.wPrimeFloorsJSON),
-                          family: SportFamily(sportKey: $0.sport))
-                }
-                cachedEvidence = observations
-            }
+        var observations = rows.map {
+            PerformanceHistory.ActivityEvidence(
+                date: $0.date, steadyHR20: $0.steadyHR20, peakHR: $0.peakHR,
+                paceProfile: LTPaceEstimate.decode($0.paceHRProfileJSON),
+                submaxProfile: VO2maxEstimate.decode($0.submaxProfileJSON),
+                wPrimeFloors: CriticalPowerEstimate.decode($0.wPrimeFloorsJSON),
+                family: SportFamily(sportKey: $0.sport))
+        }
+        if wantsEvidence {
             observations += incoming.filter {
                 $0.steadyHR20 > 0 || !$0.paceProfile.isEmpty || !$0.submaxProfile.isEmpty
                     || !$0.wPrimeFloors.isEmpty
             }
         }
-        // Detraining counts idle days from the last session of *any* sport, for both filters.
-        var sessions: [Date] = []
-        if cyclingEstimate || estimateLTPace || estimateRunVO2 {
-            if let cached = cachedSessionDates { sessions = cached } else {
-                var descriptor = FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.isCompleted })
-                descriptor.propertiesToFetch = [\.date]
-                sessions = ((try? context.fetch(descriptor)) ?? []).map(\.date)
-                cachedSessionDates = sessions
-            }
-            sessions += incoming.map(\.date)
-        }
-        return PerformanceHistory(
+        if wantsSessions { sessions += incoming.map(\.date) }
+        let history = PerformanceHistory(
             byKey: byKey,
-            estimateFTPFromCP: estimateFTP,
-            estimateVO2maxFromRides: estimateVO2max,
-            estimateCPFromRides: estimateCP,
-            estimateLTHRFromHRMax: estimateLTHR,
-            estimateLTPaceFromRuns: estimateLTPace,
-            estimateRunningVO2maxFromRuns: estimateRunVO2,
-            estimateCyclingLTHRFromRides: estimateBikeLTHR,
-            ltPaceFractionOverride: AppSettings.storedLTPaceFraction,
+            estimateFTPFromCP: settings.ftp,
+            estimateVO2maxFromRides: settings.vo2max,
+            estimateCPFromRides: settings.cp,
+            estimateLTHRFromHRMax: settings.lthr,
+            estimateLTPaceFromRuns: settings.ltPace,
+            estimateRunningVO2maxFromRuns: settings.runVO2,
+            estimateCyclingLTHRFromRides: settings.bikeLTHR,
+            ltPaceFractionOverride: settings.fraction,
             evidence: observations,
             sessionDates: sessions)
+        if incoming.isEmpty {
+            resolved = Resolved(settings: settings, fingerprint: fingerprint, history: history)
+            inputsStale = false
+        }
+        return history
     }
 
     /// Re-bucketing input for one multisport row: each leg's stored histogram, keyed
@@ -2525,7 +2554,7 @@ final class TrainingDataStore {
             r.wPrimeFloorsJSON = CriticalPowerEstimate.encode(floors)
             progress(i + 1, total)
         }
-        cachedEvidence = nil
+        inputsStale = true
         let history = performanceHistory()
         for (i, r) in rows.enumerated() {
             let snapshot = history.snapshot(asOf: r.date, resolving: PerformanceHistory.scoringKeys(
@@ -2556,57 +2585,65 @@ final class TrainingDataStore {
         return rows.count
     }
 
+    /// What a resolution was resolved under: the calculation opt-ins and the LT-pace
+    /// fraction, which move every threshold without a row being written.
+    private struct Key: Equatable {
+        let ftp, cp, vo2max, lthr, ltPace, runVO2, bikeLTHR: Bool
+        let fraction: Double?
+    }
+
+    /// The resolver and everything resolved from it, valid for exactly one state of its
+    /// inputs: the settings (`Key`) and the rows it reads (`fingerprint`). A store write
+    /// only marks the rows unverified (`inputsStale`); the next read re-fetches them and
+    /// keeps all of this when they turn out unchanged — most writes (a planned workout,
+    /// an ATP edit, a sync that brought nothing new) touch none of them.
+    private struct Resolved {
+        let settings: Key
+        let fingerprint: Int
+        let history: PerformanceHistory
+        var latest: PerformanceSnapshot?
+        /// Estimated series per family. CP, W′ and FTP cost a posterior per date, so every
+        /// screen asking for one shares one computation of all three
+        /// (`PerformanceHistory.seriesFamily`).
+        var series: [String: Task<[String: [MetricPoint]], Never>] = [:]
+    }
+    private var resolved: Resolved?
+    private var inputsStale = true
+
     /// Latest value per metric key — the source for the coach's prompt context,
-    /// the Settings display, and the planned-workout estimators. Cached because the
-    /// estimators read it per list row; `markChanged()` invalidates on any mutation.
-    /// The estimate opt-ins change how a threshold resolves without touching a row,
-    /// so the cache carries the flags it was built under rather than relying on
-    /// whoever flips them to invalidate it.
-    /// What a cached resolution was resolved under.
-    private struct Key: Equatable { let flags: [Bool]; let fraction: Double? }
-    private var cachedLatestSnapshot: (key: Key, snapshot: PerformanceSnapshot)?
-    private var cachedEvidence: [PerformanceHistory.ActivityEvidence]?
-    private var cachedSessionDates: [Date]?
+    /// the Settings display, and the planned-workout estimators, which read it per list row.
     func latestSnapshot() -> PerformanceSnapshot {
-        let key = resolvedUnder()
-        if let cached = cachedLatestSnapshot, cached.key == key { return cached.snapshot }
-        let snap = performanceHistory().snapshot(asOf: .distantFuture)
-        cachedLatestSnapshot = (key, snap)
+        let history = performanceHistory()
+        if let snap = resolved?.latest { return snap }
+        let snap = history.snapshot(asOf: .distantFuture)
+        resolved?.latest = snap
         return snap
     }
 
-    /// The settings every resolved value depends on. The fraction moves the LT pace
-    /// without moving a switch, so it is part of the key too, or the slider stays
-    /// invisible until something else invalidates.
     private func resolvedUnder() -> Key {
-        Key(flags: [AppSettings.estimateFTPFromCPKey, AppSettings.estimateCPFromRidesKey,
-                    AppSettings.estimateVO2maxFromRidesKey, AppSettings.estimateLTHRFromHRMaxKey,
-                    AppSettings.estimateLTPaceFromRunsKey, AppSettings.estimateRunningVO2maxFromRunsKey,
-                    AppSettings.estimateCyclingLTHRFromRidesKey].map { UserDefaults.standard.bool(forKey: $0) },
-            fraction: AppSettings.storedLTPaceFraction)
+        func on(_ key: String) -> Bool { UserDefaults.standard.bool(forKey: key) }
+        return Key(ftp: on(AppSettings.estimateFTPFromCPKey), cp: on(AppSettings.estimateCPFromRidesKey),
+                   vo2max: on(AppSettings.estimateVO2maxFromRidesKey),
+                   lthr: on(AppSettings.estimateLTHRFromHRMaxKey),
+                   ltPace: on(AppSettings.estimateLTPaceFromRunsKey),
+                   runVO2: on(AppSettings.estimateRunningVO2maxFromRunsKey),
+                   bikeLTHR: on(AppSettings.estimateCyclingLTHRFromRidesKey),
+                   fraction: AppSettings.storedLTPaceFraction)
     }
 
-    /// Estimated series, resolved once per data version and settings. CP, W′ and FTP cost
-    /// a posterior per date (~140 dates for a season), so every screen asking for one
-    /// shares one computation of all three (`PerformanceHistory.seriesFamily`) — started
-    /// in the background as soon as the data changes, before any screen asks.
-    private var seriesTasks: (key: Key, tasks: [String: Task<[String: [MetricPoint]], Never>])?
-
     private func seriesTask(_ key: String) -> Task<[String: [MetricPoint]], Never> {
-        let settings = resolvedUnder()
-        if seriesTasks?.key != settings { seriesTasks = (settings, [:]) }
-        let family = PerformanceHistory.seriesFamily(of: key)
-        if let task = seriesTasks?.tasks[family[0]] { return task }
         let history = performanceHistory()
+        let family = PerformanceHistory.seriesFamily(of: key)
+        if let task = resolved?.series[family[0]] { return task }
         let task = Task.detached(priority: .utility) { history.estimatedSeries(family) }
-        seriesTasks?.tasks[family[0]] = task
+        resolved?.series[family[0]] = task
         return task
     }
 
     /// Start the expensive series before anyone opens them.
     private func prewarmSeries() {
-        guard UserDefaults.standard.bool(forKey: AppSettings.estimateCPFromRidesKey)
-                || UserDefaults.standard.bool(forKey: AppSettings.estimateFTPFromCPKey) else { return }
+        let settings = resolvedUnder()
+        guard settings.cp || settings.ftp else { return }
         _ = seriesTask(PerformanceHistory.cpPosteriorKeys[0])
     }
 

@@ -246,12 +246,12 @@ struct PerformanceMetricsSection: View {
 
     private func load() async {
         let store = TrainingDataStore.shared
-        var result: [String: [MetricPoint]] = [:]
-        for metric in PerformanceMetric.all {
+        // Stored series first: they are one fetch each and must not wait for an estimate.
+        let estimated = Set(PerformanceHistory.estimatedKeys)
+        for metric in PerformanceMetric.all.sorted(by: { !estimated.contains($0.key) && estimated.contains($1.key) }) {
             let points = await store.metricHistory(metric.key)
-            if !points.isEmpty { result[metric.key] = points }
+            histories[metric.key] = points.isEmpty ? nil : points
         }
-        histories = result
         loaded = true
     }
 }
