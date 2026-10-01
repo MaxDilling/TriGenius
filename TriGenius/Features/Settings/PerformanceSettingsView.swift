@@ -31,6 +31,7 @@ struct PerformanceSettingsView: View {
             }
             Section {} footer: {
                 Text("\(Image(systemName: MetricSource.calculated(nil).icon)) calculated from your training · \(Image(systemName: MetricSource.synced.icon)) synced from \(settings.metricsSource.displayName) · \(Image(systemName: MetricSource.entered.icon)) entered by you. Open a value to see its history, enter one yourself, or switch its calculation on — a calculated value replaces the synced one.")
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if !historyStale { recompute }
         }
