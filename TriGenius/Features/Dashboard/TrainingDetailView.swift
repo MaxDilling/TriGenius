@@ -19,7 +19,7 @@ struct TrainingDetailView: View {
     /// `init` — `record.segments` parses `segmentsJSON` on every access.
     private let legs: [Leg]
 
-    /// One leg, with the name and color it carries through strip and chart
+    /// One leg, with the name and color it carries through pill and chart
     /// bands. `name` is unique within the race so it can identify a row.
     private struct Leg: Identifiable {
         let index: Int
@@ -37,7 +37,7 @@ struct TrainingDetailView: View {
         self.legs = segments.enumerated().map { index, segment in
             seen[segment.sport, default: 0] += 1
             let ordinal = seen[segment.sport] ?? 1
-            let title = Self.legTitle(segment)
+            let title = Self.sportTitle(segment.sport)
             return Leg(
                 index: index,
                 segment: segment,
@@ -127,7 +127,7 @@ struct TrainingDetailView: View {
     var body: some View {
         Group {
             if hasRoute && !isWide {
-                RouteMapPage(tracks: routeTracks) { header } content: { compactBody.padding() }
+                RouteMapPage(tracks: routeTracks, focus: selectedLeg) { header } content: { compactBody.padding() }
             } else {
                 ScrollView {
                     Group { if isWide { wideBody } else { compactBody } }.padding()
@@ -139,7 +139,7 @@ struct TrainingDetailView: View {
         .task(id: ChartSource(streams: record.streamsData, details: record.detailsJSON,
                               segments: record.segmentsJSON)) { await loadCharts() }
         .background(Color.appBackground)
-        .navigationTitle(legs.isEmpty ? family.displayName : WorkoutSegments.sessionName(legs.map(\.segment)))
+        .navigationTitle(legs.isEmpty ? Self.sportTitle(record.sport) : WorkoutSegments.sessionName(legs.map(\.segment)))
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
@@ -293,8 +293,7 @@ struct TrainingDetailView: View {
     //
     // One card set, two arrangements: the phone column, and — from ~1000pt of
     // width — two panes, a fixed summary rail beside the charts tiled across the
-    // rest, so a wide window doesn't push every chart below the fold. The title
-    // and (multisport) the segment strip span both panes and never move.
+    // rest, so a wide window doesn't push every chart below the fold.
 
     private var compactBody: some View {
         VStack(alignment: .leading, spacing: Theme.Spacing.l) {
@@ -316,38 +315,37 @@ struct TrainingDetailView: View {
     }
 
     private var wideBody: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            // Single sport needs no heading here: the navigation title already
-            // names it, and the rail carries the workout's own header card.
-            if !legs.isEmpty {
-                if hasRoute { routeHeader() } else { header }
-                segmentStrip
-            }
-            HStack(alignment: .top, spacing: Theme.Spacing.l) {
-                VStack(spacing: Theme.Spacing.m) { rail }
-                    .frame(width: 372)
-                VStack(spacing: Theme.Spacing.m) { chartPane }
-                    .frame(maxWidth: .infinity)
-            }
+        HStack(alignment: .top, spacing: Theme.Spacing.l) {
+            VStack(spacing: Theme.Spacing.m) { rail }
+                .frame(width: 372)
+            VStack(spacing: Theme.Spacing.m) { chartPane }
+                .frame(maxWidth: .infinity)
         }
     }
 
-    /// The left rail: identity and every number, top to bottom. Its last card
-    /// stretches so both panes end flush.
+    /// The left rail: the header card with the hero figures of what is selected,
+    /// (multisport) the segment pill and every number, top to bottom. The last
+    /// card stretches so both panes end flush.
     @ViewBuilder
     private var rail: some View {
+        let title = VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            header
+            HeroMetricsRow(metrics: selectedLegValue.map {
+                totalsMetrics($0.segment.durationMinutes, $0.segment.tss, $0.segment.distanceKm,
+                              family: $0.segment.family, basis: $0.segment.tssBasis)
+            } ?? heroMetrics)
+        }
+        if hasRoute {
+            RouteHeader(tracks: routeTracks, focus: selectedLeg) { title }
+        } else {
+            title.cardSurface()
+        }
+        if !legs.isEmpty { segmentPill }
         if let leg = selectedLegValue {
-            HeroMetricsRow(metrics: totalsMetrics(leg.segment.durationMinutes, leg.segment.tss,
-                                                   leg.segment.distanceKm, family: leg.segment.family,
-                                                   basis: leg.segment.tssBasis))
             activityCard(leg.segment.details, title: "\(leg.name) · Metrics")
             zonesCard(leg.segment.details, charted: legCharts(leg))
                 .frame(maxHeight: .infinity, alignment: .top)
         } else {
-            if legs.isEmpty {
-                if hasRoute { routeHeader() } else { header.cardSurface() }
-            }
-            HeroMetricsRow(metrics: heroMetrics)
             comparisonCard
             plannedStructureCard
             activityCard(details, title: legs.isEmpty ? "Activity" : "Metrics", extra: transitionsRow)
@@ -399,11 +397,6 @@ struct TrainingDetailView: View {
 
     /// Nil until the streams have decoded; the route header holds its place meanwhile.
     private var routeTracks: [RouteTrack]? { charts.route.isEmpty ? nil : charts.route }
-
-    /// The header laid over the route map as a card — the wide layout's.
-    private func routeHeader() -> some View {
-        RouteHeader(tracks: routeTracks) { header }
-    }
 
     /// "27. September 2026, 07:34–16:32 · Garmin"
     private var dateLine: String {
@@ -749,20 +742,20 @@ struct TrainingDetailView: View {
 
     // MARK: Segments — the legs of a multisport session
     //
-    // A segment tab strip (Garmin Connect's pattern) replaces one endless scroll
-    // through every leg: title, totals and strip stay put, only the blocks below
-    // swap. Each leg renders through the same cards as a standalone workout —
-    // its details dict has the identical schema and it carries its own streams,
-    // TSS and basis. "Total" keeps the whole-race view.
+    // A glass segment pill replaces one endless scroll through every leg: title
+    // and pill stay put, only the blocks below swap. Each leg renders through the
+    // same cards as a standalone workout — its details dict has the identical
+    // schema and it carries its own streams, TSS and basis. "Total" keeps the
+    // whole-race view.
 
-    /// The leg the strip has selected; nil on the Total tab.
+    /// The leg the pill has selected; nil on the Total tab.
     private var selectedLegValue: Leg? {
         selectedLeg.flatMap { $0 < legs.count ? legs[$0] : nil }
     }
 
     @ViewBuilder
     private var multisportSection: some View {
-        segmentStrip
+        segmentPill
         if let leg = selectedLegValue {
             HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.s) {
                 Text(leg.name).font(.title3.weight(.bold))
@@ -783,55 +776,37 @@ struct TrainingDetailView: View {
         }
     }
 
-    private var segmentStrip: some View {
-        HStack(spacing: 2) {
-            segmentTab(nil)
-            ForEach(legs) { segmentTab($0) }
+    private var segmentPill: some View {
+        HStack(spacing: 0) {
+            pillSegment(nil)
+            ForEach(legs) { pillSegment($0) }
         }
-        .background(alignment: .bottom) {
-            Rectangle().fill(.separator).frame(height: 1)
-        }
+        .padding(Theme.Spacing.xs)
+        .glassEffect(.regular, in: .capsule)
     }
 
-    private func segmentTab(_ leg: Leg?) -> some View {
+    private func pillSegment(_ leg: Leg?) -> some View {
         let active = selectedLeg == leg?.index
         let color = leg?.color ?? accent
         return Button {
             selectedLeg = leg?.index
         } label: {
-            VStack(spacing: 3) {
+            VStack(spacing: 2) {
                 Image(systemName: leg.map(Self.legIcon) ?? "link")
                     .font(.footnote)
                     .foregroundStyle(active ? color : .secondary)
                 Text(Self.elapsed(leg?.segment.durationMinutes ?? record.durationMinutes))
-                    .font(.caption.weight(.bold)).monospacedDigit()
+                    .font(.caption2.weight(.semibold)).monospacedDigit()
                     .foregroundStyle(active ? .primary : .secondary)
-                Text(tabDetail(leg))
-                    .font(.caption2)
-                    .foregroundStyle(active ? .secondary : .tertiary)
             }
             .lineLimit(1).minimumScaleFactor(0.75)
             .frame(maxWidth: .infinity)
             .padding(.vertical, Theme.Spacing.s)
-            .background(
-                active ? color.opacity(0.12) : .clear,
-                in: .rect(topLeadingRadius: Theme.Radius.s, topTrailingRadius: Theme.Radius.s)
-            )
-            .overlay(alignment: .bottom) {
-                Rectangle().fill(active ? color : .clear).frame(height: 2)
-            }
-            .contentShape(Rectangle())
+            .background(active ? color.opacity(0.22) : .clear, in: .capsule)
+            .contentShape(.capsule)
         }
         .buttonStyle(.plain)
         .animation(.easeInOut(duration: 0.2), value: active)
-    }
-
-    /// The tab's secondary line: the race distance for Total, else the leg's own
-    /// rate — falling back to its distance for a transition, which has no rate.
-    private func tabDetail(_ leg: Leg?) -> String {
-        guard let leg else { return family.distanceLabel(record.distanceKm, decimals: 1) }
-        if let rate = Self.rateLabel(leg.segment.details) { return rate }
-        return leg.segment.distanceKm > 0 ? leg.segment.family.distanceLabel(leg.segment.distanceKm) : "—"
     }
 
     /// Time spent in transition — a race total the leg cards can't show.
@@ -865,12 +840,13 @@ struct TrainingDetailView: View {
         leg.segment.isTransition ? "chevron.right.2" : leg.segment.family.icon
     }
 
-    /// The leg's family name, except for the sports the families collapse into
-    /// `.other` — a triathlon's transitions above all, which would otherwise all
-    /// read "Other". Those show their own sport key ("transition" → "Transition").
-    private static func legTitle(_ segment: WorkoutSegment) -> String {
-        guard segment.family == .other else { return segment.family.displayName }
-        return segment.sport.replacingOccurrences(of: "_", with: " ").capitalized
+    /// The sport's family name, except for the sports the families collapse into
+    /// `.other`, which would otherwise all read "Other". Those show their own
+    /// sport key ("hiking" → "Hiking").
+    private static func sportTitle(_ sport: String) -> String {
+        let family = SportFamily(sportKey: sport)
+        guard family == .other else { return family.displayName }
+        return sport.replacingOccurrences(of: "_", with: " ").capitalized
     }
 
     /// "1:12:04 · 40.2 km · 118 TSS" — the parts this leg actually measured.
@@ -879,21 +855,6 @@ struct TrainingDetailView: View {
         if segment.distanceKm > 0 { parts.append(segment.family.distanceLabel(segment.distanceKm)) }
         if let tss = segment.tss { parts.append("\(Int(tss.rounded())) TSS") }
         return parts.joined(separator: " · ")
-    }
-
-    /// The measured average rate of a details dict — pace for swim and run,
-    /// speed for the bike. Nil when the sport has none (a transition).
-    private static func rateLabel(_ details: [String: Any]) -> String? {
-        if let pace = Coerce.string((details["swimming"] as? [String: Any])?["avg_pace_per_100m"]) {
-            return "\(pace) /100m"
-        }
-        if let pace = Coerce.string((details["running"] as? [String: Any])?["avg_pace_min_km"]) {
-            return "\(pace) /km"
-        }
-        if let speed = Coerce.double((details["cycling"] as? [String: Any])?["avg_speed_kmh"]), speed > 0 {
-            return String(format: "%.1f km/h", speed)
-        }
-        return nil
     }
 
     /// Elapsed split time — `h:mm:ss` over an hour, else `m:ss`.

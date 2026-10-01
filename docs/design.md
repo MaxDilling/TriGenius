@@ -50,7 +50,7 @@ The Apple Health model: summaries in tiles, a tap pushes the full page.
 - **Anything that leads somewhere carries a `Chevron`** — tiles, rows, the plan line, a card that switches tabs.
 - **Drilling into data pushes a page; creating or editing opens a sheet.** A detail page puts its readout at the top — the latest value over the span charted, the scrubbed reading and its date while scrubbing (no tooltip) — then the chart on the plain background, then "About" text; adding a value is the `+` in the navigation bar.
 - **One `TimeRange`** (`M 3M 6M Y All`, `.rangeBar(_:)`, full width pinned beneath the navigation bar; on macOS centred on the title's row) for every analysis view; a detail page opens at the range of the screen it came from.
-Gehe- **One `SegmentedPicker`** for every view switch in a heading, card or toolbar.
+- **One `SegmentedPicker`** for every view switch in a heading, card or toolbar. The one exception is the multisport leg pill on the workout page (`TrainingDetailView.segmentPill`): a glass capsule whose segments stack an icon over the leg's duration and tint in the leg's color, which a text segment cannot carry.
 - **One secondary axis, only for Form.** Form (TSB) is signed and rides the trailing axis centred on zero, filled from zero in the Form amber, faded beneath the load lines (`ATPSeasonChart`, `PMCDetailView`). Any other series on a different scale becomes its own chart sharing the time axis.
 
 ## 5. Layout paradigms (Calendar & Workouts)
@@ -58,7 +58,7 @@ Gehe- **One `SegmentedPicker`** for every view switch in a heading, card or tool
 - **Reduce vertical scrolling.** Prefer compact horizontal rows over bulky vertical cards in lists; separate entries with thin translucent dividers.
 - **Color tinting over icons.** Don't use large discipline icons (swim/bike/run). Use a small icon and lightly **tint** the row/glass with the discipline color.
 - **Life vs. training.** Non-training calendar events (Work, Uni) must be visually subordinate: colorless, flat, minimal height — so colored training sessions stand out as the day's anchors.
-- **Hero metrics.** In detail views, lift the 2–3 most important metrics (TL, Duration, IF/TE) into a hero row (`HeroMetricsRow`) at the top, left-aligned with the title and on the page background rather than a card; keep secondary metrics in a compact list below.
+- **Hero metrics.** In detail views, lift the 2–3 most important metrics (TL, Duration, IF/TE) into a hero row (`HeroMetricsRow`) at the top, left-aligned with the title and on the page background rather than a metric card — in the wide layout's rail inside the header card, under the title; keep secondary metrics in a compact list below.
 
 ## 6. Tokens (`Theme.swift`)
 

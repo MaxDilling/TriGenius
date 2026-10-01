@@ -51,6 +51,12 @@ struct RouteTrack: Identifiable {
         guard let best, best.gap <= StreamPlot.holdSeconds else { return nil }
         return (best.coordinate, best.color)
     }
+
+    /// What the map frames: the track `focus` names, else every track — a leg
+    /// without a fix of its own (a transition) leaves the whole route in view.
+    static func framed(_ tracks: [RouteTrack], focus: Int?) -> [CLLocationCoordinate2D] {
+        tracks.first { $0.id == focus }?.coordinates ?? tracks.flatMap(\.coordinates)
+    }
 }
 
 /// The moment a chart is scrubbed to, on the route's timeline. Only the map's
@@ -73,27 +79,49 @@ struct RouteHeader<Caption: View>: View {
     /// while the streams are still decoding — the header already holds its
     /// place, so the page does not jump when the map arrives.
     let tracks: [RouteTrack]?
+    /// The leg the map zooms to and sets off from the others; nil for the whole route.
+    var focus: Int?
     @ViewBuilder let caption: Caption
 
     @State private var showDetail = false
+    @State private var camera: MapCameraPosition = .automatic
+    @State private var captionHeight = routeCaptionHeight
 
     var body: some View {
         ZStack {
             Color.appSecondaryBackground
             if let tracks {
                 MapReader { proxy in
-                    RouteMap(tracks: tracks, interactive: false, camera: .constant(.automatic))
-                        .safeAreaPadding(.bottom, routeCaptionHeight)
+                    RouteMap(tracks: tracks, focus: focus, interactive: false, camera: $camera)
+                        .safeAreaPadding(.bottom, captionHeight)
                         .overlay { CursorMarker(proxy: proxy, tracks: tracks).ignoresSafeArea() }
+                }
+                .onChange(of: focus, initial: true) {
+                    withAnimation(.smooth(duration: 0.7)) {
+                        camera = tracks.first { $0.id == focus }.flatMap { MKMapRect(bounding: $0.coordinates) }
+                            .map { .rect($0.withMargin) } ?? .automatic
+                    }
                 }
             }
         }
-        .frame(height: routeWindowHeight)
-        .overlay(alignment: .bottom) { caption.routeCaption(fadingInto: .appSecondaryBackground, over: 150) }
+        .frame(height: routeWindowHeight - routeCaptionHeight + captionHeight)
+        .overlay(alignment: .bottom) {
+            caption.routeCaption(fadingInto: .appSecondaryBackground, over: captionHeight + 80)
+                .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { captionHeight = $0 }
+        }
         .clipShape(.rect(cornerRadius: Theme.Radius.l, style: .continuous))
         .onTapGesture { if tracks != nil { showDetail = true } }
+        .overlay(alignment: .topTrailing) {
+            if tracks != nil {
+                RouteMapStyleButton()
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.glass)
+                    .buttonBorderShape(.circle)
+                    .padding(Theme.Spacing.m)
+            }
+        }
         .sheet(isPresented: $showDetail) {
-            RouteMapDetail(tracks: tracks ?? [])
+            RouteMapDetail(tracks: tracks ?? [], focus: focus)
         }
     }
 }
@@ -104,6 +132,8 @@ struct RouteHeader<Caption: View>: View {
 /// never changes size or safe area, because MapKit refits on every frame of that.
 struct RouteMapPage<Caption: View, Content: View>: View {
     let tracks: [RouteTrack]?
+    /// The leg the map zooms to and sets off from the others; nil for the whole route.
+    var focus: Int?
     @ViewBuilder let caption: Caption
     @ViewBuilder let content: Content
 
@@ -166,8 +196,11 @@ struct RouteMapPage<Caption: View, Content: View>: View {
             Color.appBackground
             if let tracks {
                 MapReader { proxy in
-                    RouteMap(tracks: tracks, interactive: expanded, camera: $camera)
+                    RouteMap(tracks: tracks, focus: focus, interactive: expanded, camera: $camera)
                         .overlay { CursorMarker(proxy: proxy, tracks: tracks).ignoresSafeArea() }
+                        .onChange(of: focus) {
+                            withAnimation(.smooth(duration: 0.7)) { frame(with: proxy) }
+                        }
                         .onMapCameraChange(frequency: .onEnd) { context in
                             restingCamera = context.camera
                             if framings == nil { frame(with: proxy) }
@@ -215,7 +248,7 @@ struct RouteMapPage<Caption: View, Content: View>: View {
     /// the map runs under: the bars, and on iPad the sidebar.
     private func frame(with proxy: MapProxy) {
         guard let tracks, let current = restingCamera, screen.width > 0,
-              let route = MKMapRect(bounding: tracks.flatMap(\.coordinates)),
+              let route = MKMapRect(bounding: RouteTrack.framed(tracks, focus: focus)),
               let anchor = proxy.convert(current.centerCoordinate, to: .local) else { return }
         let centre = MKMapPoint(current.centerCoordinate)
         guard let probe = proxy.convert(MKMapPoint(x: centre.x + 1000, y: centre.y).coordinate, to: .local),
@@ -280,6 +313,13 @@ private extension MKMapRect {
         guard let minX = xs.min(), let maxX = xs.max(), let minY = ys.min(), let maxY = ys.max() else { return nil }
         self.init(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
     }
+
+    /// Room around a framed leg: 15 % a side, and at least 100 m so a
+    /// transition's few metres do not fill the map.
+    var withMargin: MKMapRect {
+        let floor = 100 * MKMapPointsPerMeterAtLatitude(origin.coordinate.latitude)
+        return insetBy(dx: -0.15 * width - floor, dy: -0.15 * height - floor)
+    }
 }
 
 private extension View {
@@ -322,30 +362,33 @@ private struct RouteDot: View {
 
 private struct RouteMapDetail: View {
     let tracks: [RouteTrack]
+    let focus: Int?
     @Environment(\.dismiss) private var dismiss
     @State private var camera: MapCameraPosition = .automatic
 
     var body: some View {
-        NavigationStack {
-            RouteMap(tracks: tracks, interactive: true, camera: $camera)
-                .ignoresSafeArea(edges: .bottom)
-                .navigationTitle("Route")
-                #if !os(macOS)
-                .navigationBarTitleDisplayMode(.inline)
-                #endif
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) { RouteMapStyleButton() }
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button(role: .close) { dismiss() }
-                    }
+        RouteMap(tracks: tracks, focus: focus, interactive: true, camera: $camera)
+            .ignoresSafeArea()
+            .overlay(alignment: .top) {
+                HStack {
+                    Button("Close", systemImage: "xmark") { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                    Spacer()
+                    RouteMapStyleButton()
                 }
-        }
-        .windowFillingSheet()
+                .labelStyle(.iconOnly)
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .controlSize(.large)
+                .padding(Theme.Spacing.l)
+            }
+            .windowFillingSheet()
     }
 }
 
 private struct RouteMap: View {
     let tracks: [RouteTrack]
+    let focus: Int?
     let interactive: Bool
     @Binding var camera: MapCameraPosition
 
@@ -355,7 +398,8 @@ private struct RouteMap: View {
         Map(position: $camera, interactionModes: interactive ? [.pan, .zoom] : []) {
             ForEach(tracks) { track in
                 MapPolyline(coordinates: track.coordinates)
-                    .stroke(track.color, style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                    .stroke(track.color.opacity(focus == nil || focus == track.id ? 1 : 0.3),
+                            style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
             }
             if let start = tracks.first?.coordinates.first {
                 Annotation("Start", coordinate: start) { RouteDot(color: Theme.Palette.success) }
