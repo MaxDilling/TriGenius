@@ -181,19 +181,20 @@ struct CardHeader: View {
 
     var body: some View {
         HStack(spacing: Theme.Spacing.xs) {
-            Text(title).font(.headline).foregroundStyle(color).lineLimit(1)
+            Text(title).font(.headline).foregroundStyle(color).lineLimit(1).layoutPriority(1)
             Spacer(minLength: Theme.Spacing.xs)
-            if let date {
-                Text(Self.label(date)).font(.caption).foregroundStyle(.secondary)
+            if let date, let label = Self.label(date) {
+                Text(label).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Chevron()
         }
         .padding(.top, -Theme.Spacing.titleTuck)
     }
 
-    private static func label(_ date: Date) -> String {
+    /// Today's reading is the default and carries no label.
+    private static func label(_ date: Date) -> String? {
         let cal = Calendar.current
-        if cal.isDateInToday(date) { return "Today" }
+        if cal.isDateInToday(date) { return nil }
         if cal.isDateInYesterday(date) { return "Yesterday" }
         return date.formatted(.dateTime.day().month(.abbreviated))
     }
