@@ -19,10 +19,20 @@ final class CoachRouter {
     var selectedTab: RootTab = .dashboard
     /// Text to pre-fill into the chat input, awaiting consumption by the chat view.
     var pendingPrompt: String?
+    /// The workout the Activities tab shows on top of its list; nil once popped.
+    var openedWorkoutID: String?
+    /// The workout whose feedback sheet is up — the post-workout question in the foreground.
+    var feedbackWorkoutID: String?
 
     /// Switch to the Coach tab and pre-fill (but do not send) the given prompt.
     func openChat(prefill: String) {
         pendingPrompt = prefill
         selectedTab = .coach
+    }
+
+    /// Switch to the Activities tab and push the given workout's page.
+    func openWorkout(id: String) {
+        openedWorkoutID = id
+        selectedTab = .activities
     }
 }

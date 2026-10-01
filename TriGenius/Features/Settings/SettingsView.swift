@@ -576,6 +576,9 @@ struct SettingsView: View {
                 Link(destination: URL(string: Self.privacyPolicyURL)!) {
                     Label("Privacy Policy", systemImage: "hand.raised")
                 }
+                row("Feedback", icon: "hand.thumbsup", value: feedbackValue) {
+                    FeedbackView(athleteName: memory.userProfile.name)
+                }
                 Button(role: .destructive) {
                     showClearDataConfirm = true
                 } label: {
@@ -728,6 +731,11 @@ struct SettingsView: View {
 
     // MARK: - Row values
 
+    private var feedbackValue: String {
+        let count = ReplyRatingStore.shared.ids.count
+        return count == 1 ? "1 rating" : "\(count) ratings"
+    }
+
     private var garminMissing: Bool {
         !garminConnected && (settings.readSources.contains(.garmin) || settings.writeTarget == .garmin)
     }
@@ -772,6 +780,8 @@ struct SettingsView: View {
         TrainingDataStore.shared.deleteTrainingAndATP()
         DataSyncCoordinator.shared.resetSyncState()
         memory.reset()
+        ReplyRatingStore.shared.deleteAll()
+        PainReportStore.shared.deleteAll()
         IgnoredWorkouts.clearAll()
         await GarminAuth.shared.logout()
         settings.garminEmail = ""

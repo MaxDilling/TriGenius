@@ -1749,8 +1749,11 @@ final class TrainingDataStore {
     /// Record the athlete's subjective feedback (feel 1–5, RPE 1–10, free-text
     /// note) on a completed activity. Matches the stored id or a source-prefixed
     /// variant of the raw provider id. Returns false when no matching completed
-    /// workout exists.
-    func setWorkoutFeedback(activityId: String, feel: Int?, rpe: Int?, note: String?) -> Bool {
+    /// workout exists. `clearing` names the keys (`feel`, `rpe`) to delete from both
+    /// the override layer and the completed section; a value the source supplies
+    /// returns with its next re-fetch.
+    func setWorkoutFeedback(activityId: String, feel: Int?, rpe: Int?, note: String?,
+                            clearing: [String] = []) -> Bool {
         let candidates = [activityId, "garmin:\(activityId)", "healthkit:\(activityId)", "local:\(activityId)"]
         guard let r = (try? context.fetch(
             FetchDescriptor<WorkoutRecord>(predicate: #Predicate { candidates.contains($0.id) && $0.isCompleted })))?.first
@@ -1759,6 +1762,12 @@ final class TrainingDataStore {
         if let feel { edits["feel"] = feel }
         if let rpe { edits["rpe"] = rpe }
         if let note { edits["notes"] = note }
+        if !clearing.isEmpty, var details = Self.jsonObject(r.detailsJSON) {
+            var ov = Self.jsonObject(r.overridesJSON) ?? [:]
+            for key in clearing { ov[key] = nil; details[key] = nil }
+            r.overridesJSON = Self.jsonString(ov) ?? r.overridesJSON
+            r.detailsJSON = Self.jsonString(details) ?? r.detailsJSON
+        }
         setOverrides(edits, on: r)
         return true
     }
@@ -1888,6 +1897,26 @@ final class TrainingDataStore {
                                         \.durationMinutes, \.distanceKm, \.tss, \.segmentsJSON]
         return ((try? context.fetch(descriptor)) ?? []).map(ActivityListItem.init)
             .sorted { $0.start > $1.start }
+    }
+
+    /// Every completed workout the athlete rated or annotated, for the feedback
+    /// export. Fetches only the columns it reads, never the streams.
+    func workoutFeedback() -> [[String: Any]] {
+        var descriptor = FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.isCompleted },
+                                                        sortBy: [SortDescriptor(\.date)])
+        descriptor.propertiesToFetch = [\.id, \.date, \.sport, \.durationMinutes, \.tss, \.detailsJSON]
+        return ((try? context.fetch(descriptor)) ?? []).compactMap { r in
+            let details = Self.jsonObject(r.detailsJSON) ?? [:]
+            var out: [String: Any] = [:]
+            for key in ["feel", "rpe", "notes"] { out[key] = details[key] }
+            guard !out.isEmpty else { return nil }
+            out["workout_id"] = r.id
+            out["date"] = r.date.timeIntervalSince1970
+            out["sport"] = r.sport
+            out["duration_minutes"] = r.durationMinutes
+            out["tss"] = r.tss
+            return out
+        }
     }
 
     /// Total number of stored completed activities.

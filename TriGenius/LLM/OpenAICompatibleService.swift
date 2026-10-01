@@ -51,6 +51,7 @@ final class OpenAICompatibleBackend: LLMBackend {
     private let webSearch: Bool
     private let reasoningEffort: String?
     private(set) var model: String
+    var modelID: String { model }
 
     /// `baseURL` must include the API version suffix the provider serves under
     /// (`/v1`). `apiKey` is nil for keyless local servers. `extraHeaders` carries

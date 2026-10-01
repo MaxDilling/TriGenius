@@ -87,6 +87,8 @@ enum LLMStreamEvent {
 
 protocol LLMBackend: AnyObject {
     var displayName: String { get }
+    /// The model behind this backend, as recorded with a reply rating.
+    var modelID: String { get }
     var supportsTools: Bool { get }
     var isAvailable: Bool { get }
 

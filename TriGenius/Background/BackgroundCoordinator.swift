@@ -123,6 +123,42 @@ final class BackgroundCoordinator {
         await NotificationCenterService.shared.postDailyDigest(signals)
 
         await deliverDueDynamicReminders()
+
+        await askForWorkoutFeedback()
+    }
+
+    // MARK: - Workout feedback
+
+    private static let feedbackAskedKey = "trigenius.notify.feedbackAskedWorkout"
+
+    /// The latest session of today or yesterday, when it carries neither feel nor
+    /// RPE (a rating given on the watch arrives with the activity) and hasn't been
+    /// asked about yet. `markFeedbackAsked` is what makes the question a one-off
+    /// across the notification and the in-app sheet.
+    func workoutAwaitingFeedback(now: Date = Date()) -> WorkoutRecord? {
+        let cal = Calendar.current
+        guard let since = cal.date(byAdding: .day, value: -1, to: cal.startOfDay(for: now)),
+              let latest = TrainingDataStore.shared.activities(since: since)
+                .max(by: { ($0.date, $0.startMinute ?? 0) < ($1.date, $1.startMinute ?? 0) }),
+              latest.id != UserDefaults.standard.string(forKey: Self.feedbackAskedKey),
+              let details = try? JSONSerialization.jsonObject(with: Data(latest.detailsJSON.utf8)) as? [String: Any],
+              details["feel"] == nil, details["rpe"] == nil
+        else { return nil }
+        return latest
+    }
+
+    func markFeedbackAsked(_ workout: WorkoutRecord) {
+        UserDefaults.standard.set(workout.id, forKey: Self.feedbackAskedKey)
+    }
+
+    private func askForWorkoutFeedback() async {
+        guard !ReminderStore.shared.isWithinQuietHours(), let workout = workoutAwaitingFeedback() else { return }
+        let posted = await NotificationCenterService.shared.post(
+            title: "How was \(workout.name)?",
+            body: "Rate the effort and how it felt.",
+            identifier: "trigenius.feedback.\(workout.id)",
+            workoutID: workout.id)
+        if posted { markFeedbackAsked(workout) }
     }
 
     // MARK: - Dynamic reminders

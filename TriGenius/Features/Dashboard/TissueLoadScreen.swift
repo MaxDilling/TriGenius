@@ -13,6 +13,7 @@ struct TissueLoadScreen: View {
 
     @State private var side: TissueBodyMap.Side = .back
     @State private var selected: TissueGroup?
+    @State private var showPainCheck = false
 
     private var wide = WideLayout()
 
@@ -47,6 +48,10 @@ struct TissueLoadScreen: View {
         #if os(iOS)
         .navigationBarTitleDisplayMode(.inline)
         #endif
+        .toolbar {
+            Button { showPainCheck = true } label: { Label("Report pain", systemImage: "bandage") }
+        }
+        .sheet(isPresented: $showPainCheck) { PainCheckView() }
         .navigationDestination(item: $selected) { group in
             if let detail = TissueGroupDetailModel.make(group: group, input: input) {
                 TissueGroupDetail(model: detail, onAskCoach: onAskCoach)

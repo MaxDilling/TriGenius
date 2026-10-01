@@ -18,6 +18,8 @@ final class NotificationCenterService {
     /// when the athlete taps a notification. `nonisolated` so the (nonisolated)
     /// notification-center delegate callbacks can read it.
     nonisolated static let followUpPromptKey = "follow_up_prompt"
+    /// `userInfo` key carrying the id of the workout a tap opens.
+    nonisolated static let workoutIDKey = "workout_id"
 
     private let center = UNUserNotificationCenter.current()
     /// Retained so the center keeps a strong reference to it (the center's
@@ -27,6 +29,8 @@ final class NotificationCenterService {
     /// Invoked when the athlete taps a notification carrying a follow-up prompt.
     /// Set once at launch (see `TriGeniusApp.setupBrain`) to route into the chat.
     var onNotificationTap: ((String) -> Void)?
+    /// Invoked when the athlete taps a notification carrying a workout id.
+    var onWorkoutTap: ((String) -> Void)?
 
     private init() {}
 
@@ -106,7 +110,8 @@ final class NotificationCenterService {
     /// the caller's responsibility (see `ReminderScheduler.dynamicDeliveredToday`).
     /// Returns whether the notification was scheduled.
     @discardableResult
-    func post(title: String, body: String, identifier: String, followUpPrompt: String? = nil) async -> Bool {
+    func post(title: String, body: String, identifier: String, followUpPrompt: String? = nil,
+              workoutID: String? = nil) async -> Bool {
         guard await isAuthorized else { return false }
         let content = UNMutableNotificationContent()
         content.title = title
@@ -114,6 +119,9 @@ final class NotificationCenterService {
         content.sound = .default
         if let followUpPrompt {
             content.userInfo[Self.followUpPromptKey] = followUpPrompt
+        }
+        if let workoutID {
+            content.userInfo[Self.workoutIDKey] = workoutID
         }
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: nil)
         do {
@@ -171,7 +179,8 @@ final class NotificationCenterService {
 ///     by default unless a delegate opts in here — exactly the case when a reminder
 ///     is fired from the in-app Test Reminders screen.
 ///   • `didReceive` — a tap. If the notification carries a follow-up prompt, route
-///     it into the chat (pre-filled, unsent) via the service's `onNotificationTap`.
+///     it into the chat (pre-filled, unsent) via the service's `onNotificationTap`;
+///     if it carries a workout id, open that workout via `onWorkoutTap`.
 private final class NotificationDelegate: NSObject, UNUserNotificationCenterDelegate {
     private weak var service: NotificationCenterService?
 
@@ -194,8 +203,10 @@ private final class NotificationDelegate: NSObject, UNUserNotificationCenterDele
     ) {
         let userInfo = response.notification.request.content.userInfo
         let prompt = userInfo[NotificationCenterService.followUpPromptKey] as? String
+        let workoutID = userInfo[NotificationCenterService.workoutIDKey] as? String
         Task { @MainActor in
             if let prompt { service?.onNotificationTap?(prompt) }
+            if let workoutID { service?.onWorkoutTap?(workoutID) }
             completionHandler()
         }
     }

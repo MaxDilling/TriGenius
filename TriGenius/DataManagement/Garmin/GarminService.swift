@@ -92,13 +92,11 @@ nonisolated final class GarminService: Sendable {
     /// scores the same TSS. Returns the segments plus the bike leg's power curve
     /// (the only leg whose power belongs under the cycling key) and each leg's zone
     /// streams, keyed by its `sourceId`. Empty when not a multisport parent.
-    private func multisportSegments(_ activity: [String: Any], id: String?) async
+    private func multisportSegments(_ activity: [String: Any], dto: [String: Any]?) async
         -> (segmentsJSON: String, powerCurveJSON: String, legZoneSamples: [String: ZoneSamples]) {
         // The list entry only *flags* a multisport parent (`parent: true`); the
-        // child ids live in the activity's own DTO, so that costs one extra fetch —
-        // for parents only, and only for activities the cache didn't cover.
-        guard activity["parent"] as? Bool == true, let id,
-              let dto = try? await client.getActivity(id: id),
+        // child ids live in the activity's own DTO.
+        guard activity["parent"] as? Bool == true, let dto,
               let metadata = dto["metadataDTO"] as? [String: Any],
               let childIds = metadata["childIds"] as? [Any], !childIds.isEmpty,
               let parentStart = GarminTransform.timestamp((dto["summaryDTO"] as? [String: Any])?["startTimeGMT"])
@@ -109,7 +107,7 @@ nonisolated final class GarminService: Sendable {
         var legZoneSamples: [String: ZoneSamples] = [:]
         for child in childIds {
             guard let dto = try? await client.getActivity(id: "\(child)") else { continue }
-            let leg = await formatActivityRecord(GarminTransform.flattenActivity(dto))
+            let leg = await formatActivityRecord(GarminTransform.flattenActivity(dto), dto: dto)
             if leg.record["cycling"] != nil, !leg.powerCurveJSON.isEmpty { powerCurveJSON = leg.powerCurveJSON }
             let start = GarminTransform.timestamp((dto["summaryDTO"] as? [String: Any])?["startTimeGMT"]) ?? parentStart
             let sourceId = "garmin:\(child)"
@@ -134,14 +132,19 @@ nonisolated final class GarminService: Sendable {
         var legZoneSamples: [String: ZoneSamples] = [:]
     }
 
-    private func formatActivityRecord(_ activity: [String: Any]) async -> FormattedActivity {
+    /// `dto` is the activity's own DTO when the caller already holds it (a multisport
+    /// leg); otherwise it is fetched here — the list entry lacks the athlete's
+    /// rating and a parent's child ids.
+    private func formatActivityRecord(_ activity: [String: Any], dto: [String: Any]? = nil) async -> FormattedActivity {
         let startTime = activity["startTimeLocal"] as? String ?? ""
         let activityType = (activity["activityType"] as? [String: Any])?["typeKey"] as? String ?? "unknown"
         let activityId = activity["activityId"].map { "\($0)" }
 
         // A multisport parent carries no per-discipline data of its own — its legs
         // do, as segments. The bike leg's power curve becomes the row's.
-        let (segmentsJSON, legPowerCurve, legZoneSamples) = await multisportSegments(activity, id: activityId)
+        var dto = dto
+        if dto == nil, let activityId { dto = try? await client.getActivity(id: activityId) }
+        let (segmentsJSON, legPowerCurve, legZoneSamples) = await multisportSegments(activity, dto: dto)
         var powerCurveJSON = legPowerCurve
 
         // One full-details fetch feeds NGP, the power curve and the metric streams
@@ -171,14 +174,13 @@ nonisolated final class GarminService: Sendable {
         ]
 
         // Athlete's subjective post-workout feedback, mirroring Garmin's "How did
-        // you feel?" / perceived-effort prompt. Garmin stores feel as 0/25/50/75/100
-        // → mapped to a 1–5 scale, and RPE as 0–100 (×10) → a 1–10 scale. A local
-        // edit via log_workout_feedback overwrites these same keys.
-        // NOTE: validate `workoutFeel`/`workoutRpe`/`description` against a real
-        // synced activity — these are the documented Garmin activity DTO keys.
-        if let feel = Self.mappedFeel(activity["workoutFeel"]) { data["feel"] = feel }
-        if let rpe = Self.mappedRpe(activity["workoutRpe"]) { data["rpe"] = rpe }
-        if let desc = (activity["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !desc.isEmpty {
+        // you feel?" / perceived-effort prompt — only in the activity's own DTO,
+        // never in the list entry. Garmin stores feel as 0/25/50/75/100 → mapped to
+        // a 1–5 scale, and RPE as 0–100 (×10) → a 1–10 scale.
+        let summary = dto?["summaryDTO"] as? [String: Any]
+        if let feel = Self.mappedFeel(summary?["directWorkoutFeel"]) { data["feel"] = feel }
+        if let rpe = Self.mappedRpe(summary?["directWorkoutRpe"]) { data["rpe"] = rpe }
+        if let desc = (dto?["description"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !desc.isEmpty {
             data["notes"] = desc
         }
 

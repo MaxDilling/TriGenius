@@ -693,44 +693,9 @@ struct TrainingDetailView: View {
 
     @ViewBuilder
     private var feelCard: some View {
-        let feel = Coerce.int(details["feel"])
-        let rpe = Coerce.int(details["rpe"])
-        let comment = Coerce.string(details["notes"])
-        if feel != nil || rpe != nil || (comment?.isEmpty == false) {
-            VStack(alignment: .leading, spacing: Theme.Spacing.s) {
-                if let feel {
-                    metricRow("Feel", feelLabel(feel), "face.smiling")
-                }
-                if let rpe {
-                    metricRow("RPE", "\(rpe) / 10", "gauge.with.dots.needle.bottom.50percent")
-                }
-                if let comment, !comment.isEmpty {
-                    Text(comment).font(.subheadline).foregroundStyle(.secondary)
-                }
-            }
-            .cardTitle("How it felt", systemImage: "face.smiling")
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .cardSurface()
+        if record.isCompleted {
+            WorkoutFeedbackCard(record: record)
         }
-    }
-
-    private func feelLabel(_ value: Int) -> String {
-        switch value {
-        case ...1: return "Very Weak"
-        case 2:    return "Weak"
-        case 3:    return "Normal"
-        case 4:    return "Strong"
-        default:   return "Very Strong"
-        }
-    }
-
-    private func metricRow(_ label: String, _ value: String, _ icon: String) -> some View {
-        HStack {
-            Label(label, systemImage: icon).font(.subheadline)
-            Spacer()
-            Text(value).font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-        }
-        .padding(.vertical, Theme.Spacing.xs)
     }
 
     private func paceLabel(_ secPerKm: Double) -> String {

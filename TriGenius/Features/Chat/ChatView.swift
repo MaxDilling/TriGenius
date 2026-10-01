@@ -21,8 +21,14 @@ struct ChatMessage: Identifiable {
     /// The reply pulled in live web-search results — shows a globe badge whose
     /// popover lists these sources.
     var webCitations: [WebCitation] = []
+    /// The athlete's vote on the reply this bubble closes.
+    var rating: ReplyRating? = nil
 
     var isUser: Bool { author == .user }
+    /// The vote, while its rating still exists — ratings can be deleted in Settings.
+    @MainActor var activeRating: ReplyRating? {
+        rating.flatMap { ReplyRatingStore.shared.ids.contains($0.id) ? $0 : nil }
+    }
 }
 
 // MARK: - Chat ViewModel
@@ -74,7 +80,7 @@ final class ChatViewModel {
                 return ChatMessage(author: .coach, text: "", timestamp: saved.timestamp, card: card)
             }
             return ChatMessage(author: saved.role == "user" ? .user : .coach,
-                               text: saved.text, timestamp: saved.timestamp)
+                               text: saved.text, timestamp: saved.timestamp, rating: saved.rating)
         }
     }
 
@@ -91,7 +97,7 @@ final class ChatViewModel {
                     return SavedTurn(role: "assistant", text: "", timestamp: msg.timestamp, card: card)
                 }
                 guard !msg.text.isEmpty else { return nil }
-                return SavedTurn(role: "assistant", text: msg.text, timestamp: msg.timestamp)
+                return SavedTurn(role: "assistant", text: msg.text, timestamp: msg.timestamp, rating: msg.rating)
             case .tool, .thinking:
                 return nil
             }
@@ -287,6 +293,48 @@ final class ChatViewModel {
         showGreeting = true
     }
 
+    /// The coach bubbles that close a reply — the last text bubble before the next
+    /// user message — and so carry the rating thumbs. Never the reply in flight.
+    var rateableIDs: Set<UUID> {
+        var ids: Set<UUID> = []
+        var last: UUID?
+        for message in messages {
+            if message.isUser {
+                if let last { ids.insert(last) }
+                last = nil
+            } else if message.author == .coach, message.card == nil, !message.text.isEmpty {
+                last = message.id
+            }
+        }
+        if !isResponding, let last { ids.insert(last) }
+        return ids
+    }
+
+    /// Store the athlete's vote on a reply with everything a replay needs
+    /// (`CoachBrain.ratingContext`). A changed vote rewrites the same file.
+    func rate(_ message: ChatMessage, up: Bool, reasons: [String] = [], comment: String = "") {
+        guard let idx = messages.firstIndex(where: { $0.id == message.id }),
+              var rating = brain.ratingContext(forReplyTo: messages[...idx].count { $0.isUser }) else { return }
+        let id = messages[idx].rating?.id ?? UUID().uuidString
+        rating["id"] = id
+        rating["timestamp"] = Date().timeIntervalSince1970
+        rating["rating"] = up ? "up" : "down"
+        rating["reasons"] = reasons
+        rating["comment"] = comment.trimmingCharacters(in: .whitespacesAndNewlines)
+        rating["app_version"] = SettingsView.appVersion
+        ReplyRatingStore.shared.save(id: id, rating)
+        messages[idx].rating = ReplyRating(id: id, isUp: up)
+        persist()
+    }
+
+    func clearRating(_ message: ChatMessage) {
+        guard let idx = messages.firstIndex(where: { $0.id == message.id }), let rating = messages[idx].rating
+        else { return }
+        ReplyRatingStore.shared.delete(id: rating.id)
+        messages[idx].rating = nil
+        persist()
+    }
+
     /// File a bug/feedback report: snapshot the current conversation transcript
     /// (plus the athlete's optional note) into the local `ReportStore`.
     func fileReport(note: String) {
@@ -321,6 +369,8 @@ struct CoachChatView: View {
     @State private var viewModel: ChatViewModel
     @FocusState private var inputFocused: Bool
     @State private var showReport = false
+    /// The reply whose 👎 is being given its reasons.
+    @State private var ratingDown: ChatMessage?
 
     init(brain: CoachBrain) {
         _viewModel = State(initialValue: ChatViewModel(brain: brain))
@@ -337,7 +387,19 @@ struct CoachChatView: View {
         router.pendingPrompt = nil
     }
 
+    /// A tap on a thumb: the active one withdraws the vote, 👎 asks for reasons first.
+    private func rate(_ message: ChatMessage, up: Bool) {
+        if message.activeRating?.isUp == up {
+            viewModel.clearRating(message)
+        } else if up {
+            viewModel.rate(message, up: true)
+        } else {
+            ratingDown = message
+        }
+    }
+
     var body: some View {
+        let rateable = viewModel.rateableIDs
         VStack(spacing: 0) {
             // Message list
             ScrollViewReader { proxy in
@@ -362,7 +424,8 @@ struct CoachChatView: View {
                                     MessageBubble(
                                         message: message,
                                         isStreaming: message.id == viewModel.streamingMessageID,
-                                        onRetry: message.isUser ? { viewModel.retry(message) } : nil
+                                        onRetry: message.isUser ? { viewModel.retry(message) } : nil,
+                                        onRate: rateable.contains(message.id) ? { rate(message, up: $0) } : nil
                                     )
                                 }
                             }
@@ -451,6 +514,73 @@ struct CoachChatView: View {
                 viewModel.fileReport(note: note)
             }
         }
+        .sheet(item: $ratingDown) { message in
+            RatingReasonsView { reasons, comment in
+                viewModel.rate(message, up: false, reasons: reasons, comment: comment)
+            }
+        }
+    }
+}
+
+// MARK: - Rating Reasons
+
+/// Sheet behind a 👎: what was wrong with the reply, as fixed reasons plus free text.
+private struct RatingReasonsView: View {
+    let onSubmit: ([String], String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var reasons: Set<String> = []
+    @State private var comment = ""
+
+    /// Stored token → label.
+    private static let options = [
+        ("wrong_numbers", "Wrong numbers"),
+        ("ignored_limits", "Ignored my limits"),
+        ("ignored_data", "Didn't use my data"),
+        ("too_long", "Too long"),
+    ]
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("What was wrong?") {
+                    ForEach(Self.options, id: \.0) { token, label in
+                        Button {
+                            reasons.formSymmetricDifference([token])
+                        } label: {
+                            HStack {
+                                Text(label).foregroundStyle(.primary)
+                                Spacer()
+                                if reasons.contains(token) { Image(systemName: "checkmark") }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                Section {
+                    TextField("Anything else?", text: $comment, axis: .vertical)
+                        .lineLimit(3...8)
+                } footer: {
+                    Text("Optional. The conversation, the coach's instructions and the data it looked up are saved with your rating on this device only — export them in Settings.")
+                }
+            }
+            .navigationTitle("Rate this reply")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        onSubmit(Self.options.map(\.0).filter(reasons.contains), comment)
+                        dismiss()
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -527,6 +657,8 @@ private struct MessageBubble: View {
     /// Set only for user messages: long-press → "Retry" re-sends this message
     /// against the conversation rewound to just before it.
     var onRetry: (() -> Void)? = nil
+    /// Set only for the bubble that closes a coach reply: a thumb was tapped (`true` = 👍).
+    var onRate: ((Bool) -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
@@ -571,6 +703,17 @@ private struct MessageBubble: View {
                         WebSourcesBadge(citations: message.webCitations)
                     }
                     Text(message.timestamp, style: .time)
+                    if let onRate {
+                        ForEach([true, false], id: \.self) { up in
+                            Button { onRate(up) } label: {
+                                Image(systemName: "hand.thumbs\(up ? "up" : "down")\(message.activeRating?.isUp == up ? ".fill" : "")")
+                                    .font(.caption)
+                                    .padding(Theme.Spacing.xs)
+                                    .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
                 .font(.caption2)
                 .foregroundStyle(.tertiary)

@@ -10,8 +10,10 @@ struct ActivitiesView: View {
     @State private var loaded = false
     @State private var query = ""
     @State private var sport: SportFamily?
+    @Environment(CoachRouter.self) private var router
 
     var body: some View {
+        @Bindable var router = router
         let weeks = ActivityList.weeks(items, sport: sport, query: query)
         ScrollView {
             LazyVStack(alignment: .leading, spacing: Theme.Spacing.l) {
@@ -47,6 +49,7 @@ struct ActivitiesView: View {
         #if os(iOS)
         .toolbar(.hidden, for: .navigationBar)
         #endif
+        .navigationDestination(item: $router.openedWorkoutID) { WorkoutDetailDestination(id: $0) }
         .onAppear { if !loaded { reload() } }
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in reload() }
     }

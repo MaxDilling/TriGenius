@@ -161,6 +161,12 @@ final class CoachBrain {
     /// request so the provider's prompt cache hits, and the same instructions the
     /// Apple FM session was built with. Cleared wherever that session is rebuilt.
     @ObservationIgnored private var sessionSystemPrompt: String?
+    /// The `conversationHistory` index from which the frozen prompt and the active
+    /// backend apply — what a rating may attribute to a reply.
+    @ObservationIgnored private var sessionStartTurn = 0
+    /// Tool traffic of a self-managing backend, which keeps it out of
+    /// `conversationHistory`; `turn` is the history index of the reply it led to.
+    @ObservationIgnored private var toolLog: [(turn: Int, call: ToolCallRecord, result: ToolResultRecord)] = []
     /// The last time the model was told (the snapshot's or a message stamp).
     @ObservationIgnored private var lastTimeStamp: Date?
 
@@ -320,6 +326,7 @@ final class CoachBrain {
         let now = Date()
         let prompt = buildSystemPrompt(now: now)
         sessionSystemPrompt = prompt
+        sessionStartTurn = conversationHistory.count
         lastTimeStamp = now
         return prompt
     }
@@ -413,20 +420,53 @@ final class CoachBrain {
     /// their internal transcript, so their session is reset instead — the
     /// retried message starts fresh from the current system prompt.
     func rewind(toUserTurn n: Int) {
-        var seen = 0
-        for (index, turn) in conversationHistory.enumerated() where turn.role == .user {
-            let hasText = turn.parts.contains {
-                if case .text = $0 { return true } else { return false }
-            }
-            guard hasText else { continue }
-            seen += 1
-            if seen == n {
-                conversationHistory.removeSubrange(index...)
-                break
-            }
+        if let index = userTurnIndex(n) {
+            conversationHistory.removeSubrange(index...)
+            toolLog.removeAll { $0.turn > index }
+            sessionStartTurn = min(sessionStartTurn, index)
         }
         lastTimeStamp = nil
         if backend.managesOwnConversation { backend.resetConversation() }
+    }
+
+    /// History index of the n-th user message (1-based).
+    private func userTurnIndex(_ n: Int) -> Int? {
+        guard n > 0 else { return nil }
+        return conversationHistory.indices.filter { index in
+            conversationHistory[index].role == .user && conversationHistory[index].parts.contains {
+                if case .text = $0 { true } else { false }
+            }
+        }.dropFirst(n - 1).first
+    }
+
+    /// What a rating of the reply to the n-th user message stores: the conversation
+    /// up to and including that reply, with every tool call and its untruncated
+    /// result, and — only when the reply came from the current session — the frozen
+    /// system prompt and the backend that produced it. nil when the turn is gone.
+    func ratingContext(forReplyTo n: Int) -> [String: Any]? {
+        guard let start = userTurnIndex(n) else { return nil }
+        var messages: [[String: Any]] = []
+        for index in 0..<(userTurnIndex(n + 1) ?? conversationHistory.count) {
+            let turn = conversationHistory[index]
+            let logged = toolLog.filter { $0.turn == index }.flatMap { [TurnPart.toolCall($0.call), .toolResult($0.result)] }
+            for part in logged + turn.parts {
+                switch part {
+                case .text(let text):
+                    messages.append(["role": turn.role == .user ? "user" : "assistant", "text": text])
+                case .toolCall(let call):
+                    messages.append(["role": "assistant", "tool_call": ["name": call.name, "arguments": call.arguments]])
+                case .toolResult(let result):
+                    messages.append(["role": "tool", "name": result.name, "result": result.result])
+                }
+            }
+        }
+        var context: [String: Any] = ["messages": messages]
+        if start >= sessionStartTurn, let sessionSystemPrompt {
+            context["system_prompt"] = sessionSystemPrompt
+            context["backend"] = backend.displayName
+            context["model"] = backend.modelID
+        }
+        return context
     }
 
     // MARK: - Core tool-call loop
@@ -528,7 +568,10 @@ final class CoachBrain {
            let parsed = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
             arguments = parsed
         }
-        return await executeToolSafe(name: name, arguments: arguments)
+        let result = await executeToolSafe(name: name, arguments: arguments)
+        toolLog.append((conversationHistory.count, ToolCallRecord(name: name, arguments: arguments),
+                        ToolResultRecord(name: name, result: result)))
+        return result
     }
 
     // MARK: - Helpers
@@ -547,6 +590,7 @@ final class CoachBrain {
     /// session too, so it doesn't reappear on next launch.
     func reset() {
         conversationHistory = []
+        toolLog = []
         errorMessage = nil
         ChatStore.shared.clear()
         // Rebuild the persistent session next turn with a fresh system prompt
@@ -633,6 +677,7 @@ enum BackendType: String, CaseIterable, Identifiable {
 
 private final class NoAPIKeyBackend: LLMBackend {
     let displayName = "No backend configured"
+    let modelID = ""
     let supportsTools = false
     let isAvailable = false
 

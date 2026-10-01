@@ -91,6 +91,9 @@ struct TriGeniusApp: App {
         NotificationCenterService.shared.onNotificationTap = { [router] prompt in
             router.openChat(prefill: prompt)
         }
+        NotificationCenterService.shared.onWorkoutTap = { [router] id in
+            router.openWorkout(id: id)
+        }
         let b = CoachBrain(memory: memory, readSources: settings.readSources, writeTarget: settings.writeTarget)
         // Live read of Debug Mode — captured once so toggling never resets the chat.
         b.isDebugEnabled = { [weak settings] in settings?.debugMode ?? false }
@@ -106,6 +109,7 @@ struct TriGeniusApp: App {
         let writeTarget = settings.writeTarget
         Task {
             await DataSyncCoordinator.shared.syncAll(readSources)
+            askForWorkoutFeedback()
             // Push any upcoming plans the active write target hasn't seen yet (e.g. after
             // a target switch), so nothing is lost.
             await DataSyncCoordinator.shared.reconcileWriteTarget(writeTarget)
@@ -132,9 +136,18 @@ struct TriGeniusApp: App {
         let writeTarget = settings.writeTarget
         Task {
             await coordinator.syncAll(sources)
+            askForWorkoutFeedback()
             await coordinator.reconcileWriteTarget(writeTarget)
             isForegroundSyncing = false
         }
+    }
+
+    /// The post-workout question as a sheet, once a foreground sync has brought in
+    /// an unrated session.
+    private func askForWorkoutFeedback() {
+        guard let workout = BackgroundCoordinator.shared.workoutAwaitingFeedback() else { return }
+        BackgroundCoordinator.shared.markFeedbackAsked(workout)
+        router.feedbackWorkoutID = workout.id
     }
 
     private func applyBackend(to brain: CoachBrain) {
@@ -219,6 +232,10 @@ struct RootTabView: View {
         // hangs/hitches right after it attribute to that tab's first build + load.
         .onChange(of: router.selectedTab) { old, new in
             Perf.event("tabSwitch", "\(old)→\(new)")
+        }
+        .sheet(isPresented: Binding(get: { router.feedbackWorkoutID != nil },
+                                    set: { if !$0 { router.feedbackWorkoutID = nil } })) {
+            if let id = router.feedbackWorkoutID { WorkoutFeedbackPrompt(id: id) }
         }
         .sheet(isPresented: Binding(get: { !disclaimerAccepted }, set: { _ in })) {
             MedicalDisclaimerView { disclaimerAccepted = true }

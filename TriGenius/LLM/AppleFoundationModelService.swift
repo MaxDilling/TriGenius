@@ -11,6 +11,7 @@ import FoundationModels
 @MainActor
 final class AppleFoundationModelBackend: LLMBackend {
     let displayName = "Apple Intelligence"
+    var modelID: String { useCloud ? "private_cloud_compute" : "on_device" }
     let supportsTools = true
     let managesOwnConversation = true
 

@@ -21,12 +21,15 @@ struct SavedTurn {
     let timestamp: Date
     /// Set only for card rows — the serialized `ChatCard` (`nil` for text turns).
     let card: ChatCard?
+    /// The athlete's vote on the reply this turn closes, if any.
+    let rating: ReplyRating?
 
-    init(role: String, text: String, timestamp: Date, card: ChatCard? = nil) {
+    init(role: String, text: String, timestamp: Date, card: ChatCard? = nil, rating: ReplyRating? = nil) {
         self.role = role
         self.text = text
         self.timestamp = timestamp
         self.card = card
+        self.rating = rating
     }
 
     init?(from d: [String: Any]) {
@@ -35,11 +38,20 @@ struct SavedTurn {
         self.text = d["text"] as? String ?? ""
         self.timestamp = (d["timestamp"] as? TimeInterval).map(Date.init(timeIntervalSince1970:)) ?? Date()
         self.card = (d["card"] as? [String: Any]).flatMap(ChatCard.init(from:))
+        if let id = d["rating_id"] as? String, let up = d["rating_up"] as? Bool {
+            self.rating = ReplyRating(id: id, isUp: up)
+        } else {
+            self.rating = nil
+        }
     }
 
     func toDict() -> [String: Any] {
         var d: [String: Any] = ["role": role, "text": text, "timestamp": timestamp.timeIntervalSince1970]
         if let card { d["card"] = card.toDict() }
+        if let rating {
+            d["rating_id"] = rating.id
+            d["rating_up"] = rating.isUp
+        }
         return d
     }
 }
