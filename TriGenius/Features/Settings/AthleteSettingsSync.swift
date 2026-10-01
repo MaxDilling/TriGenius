@@ -11,6 +11,9 @@ import Foundation
 // `NSUbiquitousKeyValueStore` on top, the same mirror `IgnoredWorkouts` uses. One KVS
 // key per setting, so two devices changing different switches both keep their change;
 // the same switch is last-writer-wins, which for a boolean is the only merge there is.
+//
+// The dashboard layout rides the same mirror, so the athlete arranges it once. No
+// threshold reads it, so it takes its own path past the re-resolve.
 
 enum AthleteSettingsSync {
     private static let cloud = NSUbiquitousKeyValueStore.default
@@ -23,6 +26,11 @@ enum AthleteSettingsSync {
                                 AppSettings.estimateLTPaceFromRunsKey,
                                 AppSettings.estimateRunningVO2maxFromRunsKey]
     private static let numbers = [AppSettings.ltPaceFractionOfMASKey]
+    private static let layout = [AppSettings.dashboardSectionsKey, AppSettings.dashboardPinnedKey]
+
+    static func layoutDidChange() {
+        for key in layout { cloud.set(UserDefaults.standard.string(forKey: key), forKey: key) }
+    }
 
     /// One athlete setting changed on this device: mirror it, and re-resolve.
     ///
@@ -56,6 +64,14 @@ enum AthleteSettingsSync {
     /// object and every threshold reader see it. A key the cloud has never held is
     /// left alone — absent is not `false`.
     @MainActor private static func apply(to settings: AppSettings) {
+        var layoutChanged = false
+        for key in layout {
+            guard let value = cloud.string(forKey: key), UserDefaults.standard.string(forKey: key) != value else { continue }
+            UserDefaults.standard.set(value, forKey: key)
+            layoutChanged = true
+        }
+        if layoutChanged { settings.reloadDashboardLayout() }
+
         var changed = false
         for key in flags where cloud.object(forKey: key) != nil {
             let value = cloud.bool(forKey: key)

@@ -179,13 +179,25 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(proactiveNotifications, forKey: Self.proactiveNotificationsKey) }
     }
     static let proactiveNotificationsKey = "proactive_notifications"
-    /// Dashboard section order + visibility (Settings → Dashboard → Dashboard
-    /// layout). Persisted as an order-preserving CSV under `dashboard_sections`,
-    /// hidden sections prefixed `-`. Hiding the AI summary also skips its LLM call
-    /// (the card is off by default — it costs a call per load).
+    /// Dashboard section order + visibility (`DashboardLayoutView`). Persisted as an
+    /// order-preserving CSV under `dashboard_sections`, hidden sections prefixed `-`.
+    /// Hiding the AI summary also skips its LLM call (the card is off by default — it
+    /// costs a call per load).
     @Published var dashboardLayout: [DashboardLayoutItem] {
-        didSet { UserDefaults.standard.set(Self.encode(dashboardLayout), forKey: "dashboard_sections") }
+        didSet {
+            UserDefaults.standard.set(Self.encode(dashboardLayout), forKey: Self.dashboardSectionsKey)
+            AthleteSettingsSync.layoutDidChange()
+        }
     }
+    static let dashboardSectionsKey = "dashboard_sections"
+    /// The cards of the dashboard's Pinned section, in order — a CSV of `StatCard` ids.
+    @Published var pinnedCards: [StatCard] {
+        didSet {
+            UserDefaults.standard.set(pinnedCards.map(\.id).joined(separator: ","), forKey: Self.dashboardPinnedKey)
+            AthleteSettingsSync.layoutDidChange()
+        }
+    }
+    static let dashboardPinnedKey = "dashboard_pinned"
     /// How much of an over-delivered discipline's surplus TSS credits the other
     /// weekly rings (0 = strict per-discipline, 1 = fully fungible). Read by
     /// `BackgroundCoordinator` (outside SwiftUI) via `storedCreditFactor()`.
@@ -356,6 +368,7 @@ final class AppSettings: ObservableObject {
         debugMode = UserDefaults.standard.bool(forKey: "debug_mode")
         proactiveNotifications = UserDefaults.standard.bool(forKey: Self.proactiveNotificationsKey)
         dashboardLayout = Self.loadDashboardLayout()
+        pinnedCards = Self.loadPinnedCards()
         crossTrainingCreditFactor = Self.loadCreditFactor()
     }
 
@@ -371,6 +384,16 @@ final class AppSettings: ObservableObject {
         estimateLTPaceFromRuns = UserDefaults.standard.bool(forKey: Self.estimateLTPaceFromRunsKey)
         estimateRunningVO2maxFromRuns = UserDefaults.standard.bool(forKey: Self.estimateRunningVO2maxFromRunsKey)
         ltPaceFractionOfMAS = UserDefaults.standard.double(forKey: Self.ltPaceFractionOfMASKey)
+    }
+
+    /// Re-read the dashboard layout another device changed (`AthleteSettingsSync`).
+    func reloadDashboardLayout() {
+        dashboardLayout = Self.loadDashboardLayout()
+        pinnedCards = Self.loadPinnedCards()
+    }
+
+    func togglePin(_ card: StatCard) {
+        if pinnedCards.contains(card) { pinnedCards.removeAll { $0 == card } } else { pinnedCards.append(card) }
     }
 
     /// Whether a dashboard section is currently shown.
@@ -394,7 +417,7 @@ final class AppSettings: ObservableObject {
 
     private static func loadDashboardLayout() -> [DashboardLayoutItem] {
         var items: [DashboardLayoutItem] = []
-        if let csv = UserDefaults.standard.string(forKey: "dashboard_sections"), !csv.isEmpty {
+        if let csv = UserDefaults.standard.string(forKey: dashboardSectionsKey), !csv.isEmpty {
             for token in csv.split(separator: ",") {
                 let hidden = token.hasPrefix("-")
                 guard let section = DashboardSection(rawValue: String(hidden ? token.dropFirst() : token)) else { continue }
@@ -408,6 +431,11 @@ final class AppSettings: ObservableObject {
         let known = Set(items.map(\.section))
         items += DashboardSection.allCases.filter { !known.contains($0) }.map { DashboardLayoutItem(section: $0, isVisible: true) }
         return items
+    }
+
+    private static func loadPinnedCards() -> [StatCard] {
+        guard let csv = UserDefaults.standard.string(forKey: dashboardPinnedKey) else { return StatCard.defaultPinned }
+        return csv.split(separator: ",").compactMap { StatCard(stored: String($0)) }
     }
 
     // MARK: - Read-source / write-target persistence

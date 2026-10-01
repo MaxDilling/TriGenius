@@ -181,26 +181,21 @@ struct PerformanceMetric: Identifiable {
 
 // MARK: - Section
 
-/// The grid of physiological-marker cards on the Statistics screen.
-/// Reads each marker's history from the store on appear; renders nothing when
-/// no marker has any data yet.
+/// The physiological-marker tiles on the Statistics screen, from the view model's
+/// histories; a marker without data has no tile.
 struct PerformanceMetricsSection: View {
-    init(range: TimeRange) { self.range = range }
-
-    let range: TimeRange
+    let stats: StatisticsViewModel
 
     private var wide = WideLayout()
-    @State private var histories: [String: [MetricPoint]] = [:]
-    @State private var loaded = false
     @State private var showAdd = false
 
+    init(stats: StatisticsViewModel) { self.stats = stats }
+
     private func available(_ group: PerformanceMetric.Group) -> [PerformanceMetric] {
-        PerformanceMetric.all.filter { $0.group == group && (histories[$0.key]?.isEmpty == false) }
+        PerformanceMetric.all.filter { $0.group == group && stats.histories[$0.key] != nil }
     }
 
     var body: some View {
-        // A concrete VStack (not a transparent `Group`) so the `.task` loader
-        // fires reliably even while the section has nothing to show yet.
         VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
             VStack(alignment: .leading, spacing: Theme.Spacing.m) {
                 SectionHeading("Performance") {
@@ -212,7 +207,7 @@ struct PerformanceMetricsSection: View {
                 let performance = available(.performance)
                 if !performance.isEmpty {
                     grid(performance)
-                } else if loaded {
+                } else if stats.metricsLoaded {
                     Text("No performance metrics yet. VO₂max, FTP and your threshold values appear here once your data source reports them.")
                         .font(.subheadline).foregroundStyle(.secondary)
                         .contentCard()
@@ -227,32 +222,13 @@ struct PerformanceMetricsSection: View {
                 }
             }
         }
-        .task { await load() }
-        // A sync or manual entry appends to the metric time series; reload so the
-        // cards reflect new values without leaving and re-entering the screen.
-        .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
-            Task { await load() }
-        }
         .sheet(isPresented: $showAdd) { ManualMetricEntryView() }
     }
 
     private func grid(_ metrics: [PerformanceMetric]) -> some View {
         LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide), spacing: Theme.Spacing.m) {
-            ForEach(metrics) { metric in
-                MetricCard(metric: metric, points: histories[metric.key] ?? [], range: range)
-            }
+            ForEach(metrics) { StatCardView(card: .metric($0), stats: stats) }
         }
-    }
-
-    private func load() async {
-        let store = TrainingDataStore.shared
-        // Stored series first: they are one fetch each and must not wait for an estimate.
-        let estimated = Set(PerformanceHistory.estimatedKeys)
-        for metric in PerformanceMetric.all.sorted(by: { !estimated.contains($0.key) && estimated.contains($1.key) }) {
-            let points = await store.metricHistory(metric.key)
-            histories[metric.key] = points.isEmpty ? nil : points
-        }
-        loaded = true
     }
 }
 

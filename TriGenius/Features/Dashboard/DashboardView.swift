@@ -9,11 +9,12 @@ import Combine
 // athlete's configured order/visibility (`AppSettings.dashboardLayout`):
 //   • Up Next: today's completed + upcoming planned workouts, one row per
 //     workout → its detail screen.
-//   • Pinned: CTL / ATL / TSB + ramp-rate summary tiles → Fitness & Form detail; fitness vs
-//     the ATP plan and this week's per-discipline rings → Plan tab; the heading's
-//     "All Stats" → StatisticsView.
+//   • Pinned: the athlete's pick of `StatCard`s (`AppSettings.pinnedCards`), each
+//     opening its own detail; the heading's "All Stats" → StatisticsView.
 //   • Tissue Load: the structural load card → its grid / group detail.
 //   • AI insight: the coach's one-line read on the week → chat, prefilled.
+//
+// "Edit Dashboard" beneath them opens `DashboardLayoutView` as a sheet.
 //
 // Everything that leads somewhere carries a `Chevron`.
 //
@@ -38,6 +39,7 @@ struct DashboardView: View {
     @State private var showsTissueGrid = false
     /// The group a tapped Tissue Load row opens.
     @State private var selectedGroup: TissueGroup?
+    @State private var showsLayout = false
 
     private var wide = WideLayout()
 
@@ -46,14 +48,15 @@ struct DashboardView: View {
             readSources: readSources,
             weeklyStructure: weeklyStructure,
             makeBackend: makeBackend,
-            aiInsightEnabled: settings.isVisible(.aiInsight)
+            aiInsightEnabled: settings.isVisible(.aiInsight),
+            pinnedCards: settings.pinnedCards
         )
     }
 
     var body: some View {
         ScrollView {
             VStack(spacing: Theme.Spacing.xl) {
-                if viewModel.isLoading && viewModel.pmc == nil {
+                if viewModel.isLoading && viewModel.stats.pmc == nil {
                     ProgressView("Loading…").padding(.top, 60)
                 } else {
                     if let error = viewModel.errorMessage {
@@ -63,6 +66,8 @@ struct DashboardView: View {
                     ForEach(settings.dashboardLayout.filter(\.isVisible)) { item in
                         sectionView(item.section)
                     }
+                    Button("Edit Dashboard") { showsLayout = true }
+                        .buttonStyle(.glass)
                 }
             }
             .padding(Theme.Spacing.l)
@@ -99,6 +104,20 @@ struct DashboardView: View {
         // visibility, not the whole layout, so a mere reorder never re-loads.
         .onChange(of: settings.isVisible(.aiInsight)) {
             Task { await viewModel.load(context: context) }
+        }
+        .onChange(of: settings.pinnedCards) { old, new in
+            if !Set(new).isSubset(of: old) { Task { await viewModel.loadPinned(context: context) } }
+        }
+        .sheet(isPresented: $showsLayout) {
+            NavigationStack {
+                DashboardLayoutView(settings: settings)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) { Button("Done") { showsLayout = false } }
+                    }
+            }
+            #if os(macOS)
+            .frame(minWidth: 420, minHeight: 640)
+            #endif
         }
     }
 
@@ -149,7 +168,7 @@ struct DashboardView: View {
                 .buttonStyle(.plain)
                 .headerPill()
             }
-            if let plan = viewModel.atpPlan, !plan.weeks.isEmpty {
+            if let plan = viewModel.stats.plan, !plan.weeks.isEmpty {
                 NavigationLink { ATPView() } label: { TrainingPlanBanner(plan: plan) }
                     .buttonStyle(.plain)
             }
@@ -174,20 +193,21 @@ struct DashboardView: View {
                 }
                 .buttonStyle(.plain)
             }
-            if let result = viewModel.pmc, result.snapshot != nil {
-                LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide, fill: 4), spacing: Theme.Spacing.m) {
-                    PMCStatTiles(result: result, range: .oneMonth, maxRampRate: viewModel.atpPlan?.maxRampRate)
-                }
-                if !viewModel.ctlTrend.actual.isEmpty {
-                    FitnessVsPlanCard(model: viewModel.ctlTrend)
-                }
-            } else {
+            let stats = viewModel.stats
+            if stats.pmc?.snapshot == nil {
                 Text("No training-load data yet. Sync your activities to see CTL / ATL / TSB.")
                     .font(.subheadline).foregroundStyle(.secondary)
                     .contentCard()
             }
-            if let week = viewModel.week, !week.visibleFamilies.isEmpty {
-                WeeklyTargetCard(week: week)
+            let cards = settings.pinnedCards.filter { $0.metric.map { stats.histories[$0.key] != nil } ?? true }
+            ForEach(StatCard.rows(cards), id: \.self) { row in
+                if row[0].isTile {
+                    LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide, fill: 4), spacing: Theme.Spacing.m) {
+                        ForEach(row) { StatCardView(card: $0, stats: stats) }
+                    }
+                } else {
+                    StatCardView(card: row[0], stats: stats)
+                }
             }
         }
     }

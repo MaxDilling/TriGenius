@@ -5,8 +5,9 @@ import SwiftUI
 // The analysis screen behind the dashboard's "All Stats" link, grouped by the
 // question it answers: Fitness & Form (am I fit and fresh), Plan (am I on plan),
 // Training Mix (is my training balanced), Power Curve and Performance / Recovery
-// (am I actually faster). One range control beneath the navigation bar governs every card below it and
-// opens each detail page at the same window. All charts render shared
+// (am I actually faster) — every card a `StatCard`. One range control beneath the
+// navigation bar governs every card below it and opens each detail page at the
+// same window. All charts render shared
 // `Shared/Charts/` components from plain value models; missing data shows as
 // absence, never a fabricated distribution.
 
@@ -21,32 +22,29 @@ struct StatisticsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
-                if let pmc = viewModel.pmc {
+                if viewModel.pmc != nil {
                     section("Fitness & Form") {
                         LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide, fill: 4), spacing: Theme.Spacing.m) {
-                            PMCStatTiles(result: pmc, range: viewModel.range, maxRampRate: viewModel.maxRampRate)
+                            ForEach(StatCard.pmcTiles) { card($0) }
                         }
                     }
                 }
 
-                let week = viewModel.week.flatMap { $0.visibleFamilies.isEmpty ? nil : $0 }
-                if !viewModel.ctlTrend.actual.isEmpty || week != nil {
+                if !viewModel.ctlTrend.actual.isEmpty || viewModel.week?.visibleFamilies.isEmpty == false {
                     section("Plan") {
-                        if !viewModel.ctlTrend.actual.isEmpty {
-                            FitnessVsPlanCard(model: viewModel.ctlTrend)
-                        }
-                        if let week { WeeklyTargetCard(week: week) }
+                        card(.fitnessPlan)
+                        card(.weeklyTarget)
                     }
                 }
 
                 section("Training Mix") {
-                    shareCard
-                    zonesCard
+                    card(.sportShare)
+                    card(.timeInZone)
                 }
 
-                powerCurveCard
+                card(.powerCurve)
 
-                PerformanceMetricsSection(range: viewModel.range)
+                PerformanceMetricsSection(stats: viewModel)
             }
             .padding(Theme.Spacing.l)
         }
@@ -56,10 +54,18 @@ struct StatisticsView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .rangeBar($viewModel.range)
-        .task { viewModel.load() }
+        .task {
+            viewModel.load()
+            await viewModel.loadMetrics()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
             viewModel.load()
+            Task { await viewModel.loadMetrics() }
         }
+    }
+
+    private func card(_ card: StatCard) -> some View {
+        StatCardView(card: card, stats: viewModel)
     }
 
     private func section<Content: View>(_ title: String,
@@ -68,57 +74,5 @@ struct StatisticsView: View {
             SectionHeading(title)
             content()
         }
-    }
-
-    // MARK: Sport share
-
-    private var shareCard: some View {
-        Group {
-            if viewModel.share.weeks.allSatisfy(\.slices.isEmpty) {
-                Text("No completed workouts in this range.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            } else {
-                SportShareChart(model: viewModel.share)
-            }
-        }
-        .cardTitle("Sport share") {
-            SegmentedPicker("Metric", selection: $viewModel.shareMetric,
-                            options: SportShareModel.Metric.allCases, label: \.label)
-        }
-        .contentCard()
-    }
-
-    // MARK: Time in zone
-
-    private var zonesCard: some View {
-        Group {
-            if ZoneDistributionStack.isEmpty(viewModel.zones) {
-                Text("No zone data recorded in this range.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            } else {
-                ZoneDistributionStack(seconds: viewModel.zones, bounds: viewModel.zoneBounds,
-                                      boundsNote: "current thresholds")
-            }
-        }
-        .cardTitle("Time in zone") {
-            SegmentedPicker("Sport", selection: $viewModel.zoneSport,
-                            options: SportFamily.triathlon, label: \.displayName)
-        }
-        .contentCard()
-    }
-
-    // MARK: Power curve
-
-    private var powerCurveCard: some View {
-        Group {
-            if viewModel.powerCurve.isEmpty {
-                Text("No cycling power data in this range.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            } else {
-                PowerCurveChart(model: PowerCurveModel(points: viewModel.powerCurve))
-            }
-        }
-        .cardTitle("Power curve")
-        .contentCard()
     }
 }

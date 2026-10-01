@@ -75,9 +75,11 @@ struct SummaryTile: View {
                 }
             }
             .padding([.top, .horizontal], Theme.Spacing.l)
-            sparkline.frame(height: 48)
+            // Without a status line the sparkline takes that line's room, so every tile
+            // is one height; in a grid row it stretches to the tallest.
+            sparkline.frame(minHeight: status == nil ? 74 : 48, maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         .cardSurface(padding: 0)
         .clipShape(.rect(cornerRadius: Theme.Radius.l, style: .continuous))
     }
@@ -217,11 +219,11 @@ func tightDomain(_ points: [MetricPoint], minSpan: Double = 0,
 
 // MARK: - PMC tiles
 
-/// The CTL / ATL / TSB + ramp-rate tiles. The dashboard and Statistics show the same
-/// four numbers, so their names, colours, rounding and status wording live here. The
-/// tiles flatten into the caller's grid; `range` is the sparkline window and the
+/// One of the CTL / ATL / TSB / ramp-rate tiles (`StatCard.pmcTiles`): colours,
+/// rounding and status wording live here. `range` is the sparkline window and the
 /// one the Fitness & Form detail opens at.
-struct PMCStatTiles: View {
+struct PMCTile: View {
+    let card: StatCard
     let result: PMCResult
     let range: TimeRange
     /// The season plan's max ramp rate; nil without a plan, and then the ramp tile has no status.
@@ -229,12 +231,15 @@ struct PMCStatTiles: View {
 
     var body: some View {
         if let s = result.snapshot {
-            tile("Fitness (CTL)", Theme.Palette.fitness, s.ctl, fitnessStatus(delta: result.delta(daysAgo: 7) { $0.ctl })) { $0.ctl }
-            tile("Fatigue (ATL)", Theme.Palette.fatigue, s.atl, s.atl > s.ctl ? "High load" : "Moderate load") { $0.atl }
-            tile("Form (TSB)", Theme.Palette.form, s.tsb, formStatus(tsb: s.tsb), zeroLine: true) { $0.tsb }
-            let ramp = RampRate.weeklySeries(points: result.points, weeks: range.weeks(first: result.points.first?.date))
-            if let week = ramp.last {
-                rampTile(week, series: ramp)
+            switch card {
+            case .ctl: tile(Theme.Palette.fitness, s.ctl, fitnessStatus(delta: result.delta(daysAgo: 7) { $0.ctl })) { $0.ctl }
+            case .atl: tile(Theme.Palette.fatigue, s.atl, s.atl > s.ctl ? "High load" : "Moderate load") { $0.atl }
+            case .tsb: tile(Theme.Palette.form, s.tsb, formStatus(tsb: s.tsb), zeroLine: true) { $0.tsb }
+            default:
+                let ramp = RampRate.weeklySeries(points: result.points, weeks: range.weeks(first: result.points.first?.date))
+                if let week = ramp.last {
+                    rampTile(week, series: ramp)
+                }
             }
         }
     }
@@ -242,7 +247,7 @@ struct PMCStatTiles: View {
     private func rampTile(_ week: RampWeek, series: [RampWeek]) -> some View {
         let format: (Double) -> String = { $0.formatted(.number.precision(.fractionLength(1)).sign(strategy: .always())) }
         return NavigationLink { PMCDetailView(result: result, range: range) } label: {
-            SummaryTile(title: "Ramp rate", color: Theme.Palette.fitness,
+            SummaryTile(title: card.title, color: Theme.Palette.fitness,
                         value: format(week.delta),
                         unit: "CTL/wk",
                         status: maxRampRate.map { week.delta > $0 ? "Above your max ramp" : "Within your max ramp" },
@@ -252,11 +257,11 @@ struct PMCStatTiles: View {
         .buttonStyle(.plain)
     }
 
-    private func tile(_ title: String, _ color: Color, _ value: Double, _ status: String,
+    private func tile(_ color: Color, _ value: Double, _ status: String,
                       zeroLine: Bool = false, _ metric: @escaping (PMCPoint) -> Double) -> some View {
         let delta = result.delta(daysAgo: 7, metric)
         return NavigationLink { PMCDetailView(result: result, range: range) } label: {
-            SummaryTile(title: title, color: color, value: "\(Int(value.rounded()))",
+            SummaryTile(title: card.title, color: color, value: "\(Int(value.rounded()))",
                         delta: delta == 0 ? nil : .init(value: "\(abs(delta))", isRise: delta > 0, color: color),
                         status: status,
                         series: result.points.filter { range.contains($0.date) }

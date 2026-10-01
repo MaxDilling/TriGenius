@@ -14,6 +14,8 @@ struct DashboardContext {
     let makeBackend: () -> LLMBackend
     /// Whether the athlete opted into the AI insight card (Settings → Dashboard).
     let aiInsightEnabled: Bool
+    /// The Pinned section's cards — the only ones `stats` loads for.
+    var pinnedCards: [StatCard] = []
 }
 
 /// One day in the forward-looking Agenda: completed activities (today) and
@@ -28,14 +30,10 @@ struct AgendaDay: Identifiable {
 @MainActor
 @Observable
 final class DashboardViewModel {
-    var pmc: PMCResult?
-    /// The derived season plan — feeds the training-plan banner (current period +
-    /// countdown to the next A event) and the CTL trend below.
-    var atpPlan: ATPPlan?
-    var ctlTrend = CTLTrendModel(actual: [], planned: [])
-    /// Actual vs ATP-planned CTL around today — the dashboard Fitness & Form chart.
+    /// The Pinned cards' state, at the dashboard's one-month window. Its PMC, season
+    /// plan and week targets also feed the banner, the insight and the widget.
+    let stats = StatisticsViewModel(weeklyStructure: WeeklyStructure(), range: .oneMonth)
     var weeklyBuckets: [TrainingVolume.WeekBucket] = []
-    var week: WeekTargets?
     var agendaDays: [AgendaDay] = []
     /// Tissue Load, from `TissueLoadModel` over the store (`TissueCardModel.Input.live`).
     var tissueCard: TissueCardModel?
@@ -75,17 +73,12 @@ final class DashboardViewModel {
 
         let store = TrainingDataStore.shared
         let records = store.activities() // newest first
-        let pmc = PMCEngine.current()
-        self.pmc = pmc
+        stats.weeklyStructure = context.weeklyStructure
+        stats.cards = context.pinnedCards
+        stats.load()
         weeklyBuckets = TrainingVolume.weeklyBuckets(records: records)
-        let atpPlan = ATPEngine.current()
-        self.atpPlan = atpPlan
-        ctlTrend = CTLTrendModel.around(pmc: pmc, planCurve: atpPlan?.planCurve ?? [])
-
-        let week = WeeklyTargets.thisWeek(weeklyStructure: context.weeklyStructure, atpPlan: atpPlan,
-                                          creditFactor: AppSettings.storedCreditFactor(), store: store)
-        self.week = week
-        WeeklyTargetSnapshotWriter.write(week)
+        let atpPlan = stats.plan
+        if let week = stats.week { WeeklyTargetSnapshotWriter.write(week) }
 
         agendaDays = Self.buildAgenda(records: records, store: store)
 
@@ -99,6 +92,14 @@ final class DashboardViewModel {
         isLoading = false
 
         refreshInsight(context: context)
+        await stats.loadMetrics()
+    }
+
+    /// A newly pinned card needs its data; nothing else on the dashboard moved.
+    func loadPinned(context: DashboardContext) async {
+        stats.cards = context.pinnedCards
+        stats.load()
+        await stats.loadMetrics()
     }
 
     // MARK: - Agenda
@@ -136,16 +137,16 @@ final class DashboardViewModel {
             insight = nil
             return
         }
-        let targets = week?.targets ?? [:]
+        let targets = stats.week?.targets ?? [:]
         let fallback = Self.heuristicInsight(targets: targets, currentWeek: currentWeek)
         let (summary, signature) = DashboardInsightInput.build(
             store: TrainingDataStore.shared,
-            pmc: pmc,
+            pmc: stats.pmc,
             weeklyBuckets: weeklyBuckets,
             targets: targets,
-            projections: week?.projections ?? [:],
+            projections: stats.week?.projections ?? [:],
             weeklyStructure: context.weeklyStructure,
-            atpPlan: ATPEngine.current()
+            atpPlan: stats.plan
         )
 
         if let cached = DashboardInsight.cached(signature: signature) {
@@ -190,7 +191,7 @@ final class DashboardViewModel {
     /// Deterministic chat prompt to pre-fill (unsent) when the athlete taps the AI
     /// insight card — mirrors the same worst-gap read the card itself is built on.
     var insightFollowUpPrompt: String {
-        if let worst = Self.worstGap(targets: week?.targets ?? [:], currentWeek: currentWeek) {
+        if let worst = Self.worstGap(targets: stats.week?.targets ?? [:], currentWeek: currentWeek) {
             return "Plan a \(worst.family.displayName.lowercased()) workout for me this week."
         }
         return "Give me a quick review of my training week."
