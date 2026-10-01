@@ -163,26 +163,26 @@ nonisolated enum LTPaceEstimate {
         return inBand.count >= minimumBuckets ? inBand.max() : nil
     }
 
-    /// One run's evidence: its heart rate → best grade-adjusted speed profile.
+    /// One run's evidence: its heart rate → best grade-adjusted speed profile, and the
+    /// HRmax and resting-HR baseline in force on its date.
     struct Run: Sendable {
         let date: Date
         let profile: [Int: Double]
+        let hrMax: Double
+        let hrRest: Double
     }
 
     /// Reconstructed MAS as a filtered state (`VO2maxEstimate.track`, offset 0), or nil below
-    /// its `minimumRides` observations. HRmax is the athlete's current value aged to each
-    /// run's date; `sessions` are every training session of any sport, so a bike block does
-    /// not read as detraining.
+    /// its `minimumRides` observations. `sessions` are every training session of any sport,
+    /// so a bike block does not read as detraining.
     ///
     /// MAS, not LT speed: two thresholds read it — LT pace through
     /// `ltSpeed(mas:fractionOfMAS:)` and running VO2max through `VO2maxEstimate.running(mas:)`
     /// — so the two can never describe different athletes.
-    static func track(runs: [Run], sessions: [Date], hrMax: Double, hrMaxDate: Date,
-                      hrRest: Double) -> VO2maxEstimate.Track? {
+    static func track(runs: [Run], sessions: [Date]) -> VO2maxEstimate.Track? {
         let observations = runs.compactMap { run -> (date: Date, log: Double)? in
-            reading(profile: run.profile,
-                    hrMax: VO2maxEstimate.hrMax(hrMax, measured: hrMaxDate, on: run.date),
-                    hrRest: hrRest).map { (run.date, log($0)) }
+            reading(profile: run.profile, hrMax: run.hrMax, hrRest: run.hrRest)
+                .map { (run.date, log($0)) }
         }
         return VO2maxEstimate.track(observations: observations, sessions: sessions, offset: 0)
     }

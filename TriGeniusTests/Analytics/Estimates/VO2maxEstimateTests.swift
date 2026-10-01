@@ -75,14 +75,16 @@ struct VO2maxEstimateTests {
         let watts = [220.0, 260, 210, 250, 200, 265, 230, 245]
         let hrs = [150.0, 152, 149, 155, 151, 156, 150, 149]
         return (0 ..< 8).map { k in
-            .init(date: day(Double(3 * k + (k >= 6 ? 10 : 0))),
-                  profile: [480: (watts[k], hrs[k]), 1200: (watts[k] - 15, hrs[k] + 4)])
+            let date = day(Double(3 * k + (k >= 6 ? 10 : 0)))
+            return .init(date: date,
+                         profile: [480: (watts[k], hrs[k]), 1200: (watts[k] - 15, hrs[k] + 4)],
+                         hrMax: VO2maxEstimate.hrMax(190, measured: day(30), on: date),
+                         hrRest: 50, massKg: 70)
         }
     }
 
     private func track(_ rides: [VO2maxEstimate.Ride]) -> VO2maxEstimate.Track? {
-        VO2maxEstimate.track(rides: rides, sessions: [day(19), day(22)], hrMax: 190,
-                             hrMaxDate: day(30), hrRest: 50, massKg: 70)
+        VO2maxEstimate.track(rides: rides, sessions: [day(19), day(22)])
     }
 
     @Test func filterMatchesTheLabReference() throws {

@@ -643,28 +643,14 @@ nonisolated struct PerformanceHistory: Sendable {
     /// to show how the pace itself moved.
     private var ltPaceFraction: Double?
     private let evidence: [ActivityEvidence]
-    /// The cycling VO2max filter and every ride's W′ floors, built once: the filter reads
-    /// the athlete as they are now — today's HRmax aged to each ride's date, resting HR
-    /// and mass — which is how the lab validated it, and runs over every ride at once.
+    /// The cycling VO2max filter and every ride's W′ floors, built once over every ride.
     private var cycling: Cycling?
     /// The running MAS filter, built once the same way (`LTPaceEstimate.track`).
     private var running: VO2maxEstimate.Track?
 
     private struct Cycling: Sendable {
         let track: VO2maxEstimate.Track
-        let massKg: Double
         let floors: [CriticalPowerEstimate.Ride]
-
-        /// The aerobic CP (W) and its log sd — the prior `CriticalPowerEstimate` reads.
-        func aerobic(_ date: Date) -> (cp: Double, logSD: Double)? {
-            track.state(at: date).map {
-                (CriticalPowerEstimate.wattsPerAbsoluteVO2 * massKg * exp($0.log), $0.sd)
-            }
-        }
-
-        func estimate(_ date: Date) -> CriticalPowerEstimate.Estimate? {
-            CriticalPowerEstimate.estimate(asOf: date, rides: floors, aerobic: aerobic)
-        }
 
         /// The newest ride the posterior at `date` rests on — a filter observation or a floor.
         func lastEvidence(_ date: Date) -> Date? {
@@ -769,27 +755,40 @@ nonisolated struct PerformanceHistory: Sendable {
         return evidence.map { e.date >= $0 } ?? true
     }
 
-    /// Resting HR is a hard input, not a defaulted one: without it the reserve the
-    /// reconstruction scales by does not exist. A ride peaking above the athlete's own
-    /// maximum has a misreading sensor, and an HR wrong in either direction moves that
-    /// reserve, so its heart rate is dropped whole; its watts still prove floors.
+    /// HRmax and the resting-HR baseline in force on `date`. Resting HR is a hard input,
+    /// not a defaulted one: without it the reserve the reconstructions scale by does not
+    /// exist.
+    private func heartRange(on date: Date) -> (max: Double, rest: Double)? {
+        guard let hrMax = entry("max_hr", asOf: date), hrMax.value > 0,
+              let hrRest = restingHR(asOf: date), hrRest > 0 else { return nil }
+        return (VO2maxEstimate.hrMax(hrMax.value, measured: hrMax.date, on: date), hrRest)
+    }
+
+    private func mass(on date: Date) -> Double? {
+        value("weight_kg", asOf: date).flatMap { $0 > 0 ? $0 : nil }
+    }
+
+    /// A ride peaking above the athlete's own maximum has a misreading sensor, and an HR
+    /// wrong in either direction moves the reserve, so its heart rate is dropped whole;
+    /// its watts still prove floors.
     private func buildCycling(sessionDates: [Date]) -> Cycling? {
-        let now = Date()
-        guard let hrMax = entry("max_hr", asOf: now), hrMax.value > 0,
-              let hrRest = restingHR(asOf: now), hrRest > 0,
-              let mass = value("weight_kg", asOf: now), mass > 0 else { return nil }
         let rides = evidence.compactMap { o -> VO2maxEstimate.Ride? in
             guard o.family == .bike, !o.submaxProfile.isEmpty,
-                  o.peakHR <= VO2maxEstimate.hrMax(hrMax.value, measured: hrMax.date, on: o.date)
-            else { return nil }
-            return .init(date: o.date, profile: o.submaxProfile)
+                  let hr = heartRange(on: o.date), o.peakHR <= hr.max,
+                  let mass = mass(on: o.date) else { return nil }
+            return .init(date: o.date, profile: o.submaxProfile,
+                         hrMax: hr.max, hrRest: hr.rest, massKg: mass)
         }
-        guard let track = VO2maxEstimate.track(rides: rides, sessions: sessionDates,
-                                               hrMax: hrMax.value, hrMaxDate: hrMax.date,
-                                               hrRest: hrRest, massKg: mass) else { return nil }
-        return Cycling(track: track, massKg: mass,
+        guard let track = VO2maxEstimate.track(rides: rides, sessions: sessionDates) else { return nil }
+        return Cycling(track: track,
                        floors: evidence.filter { !$0.wPrimeFloors.isEmpty }
                            .map { .init(date: $0.date, floors: $0.wPrimeFloors) })
+    }
+
+    /// The aerobic CP (W) and its log sd on `date` — the prior `CriticalPowerEstimate` reads.
+    private func aerobicCP(_ date: Date) -> (cp: Double, logSD: Double)? {
+        guard let state = cycling?.track.state(at: date), let mass = mass(on: date) else { return nil }
+        return (CriticalPowerEstimate.wattsPerAbsoluteVO2 * mass * exp(state.log), state.sd)
     }
 
     /// Runs only: a triathlon or brick leg carries a `ZoneMetric.pace` stream like any run,
@@ -797,17 +796,12 @@ nonisolated struct PerformanceHistory: Sendable {
     /// `MAS = v / %HRR` reads high — one race leg moved a real athlete's peak 12 s/km. A run
     /// peaking above the athlete's own maximum has a misreading sensor and is dropped.
     private func buildRunning(sessionDates: [Date]) -> VO2maxEstimate.Track? {
-        let now = Date()
-        guard let hrMax = entry("max_hr", asOf: now), hrMax.value > 0,
-              let hrRest = restingHR(asOf: now), hrRest > 0 else { return nil }
         let runs = evidence.compactMap { o -> LTPaceEstimate.Run? in
             guard o.family == .run, !o.paceProfile.isEmpty,
-                  o.peakHR <= VO2maxEstimate.hrMax(hrMax.value, measured: hrMax.date, on: o.date)
-            else { return nil }
-            return .init(date: o.date, profile: o.paceProfile)
+                  let hr = heartRange(on: o.date), o.peakHR <= hr.max else { return nil }
+            return .init(date: o.date, profile: o.paceProfile, hrMax: hr.max, hrRest: hr.rest)
         }
-        return LTPaceEstimate.track(runs: runs, sessions: sessionDates, hrMax: hrMax.value,
-                                    hrMaxDate: hrMax.date, hrRest: hrRest)
+        return LTPaceEstimate.track(runs: runs, sessions: sessionDates)
     }
 
     /// The metric snapshot as it stood on `date`, assembled for the TSS engine.
@@ -857,7 +851,8 @@ nonisolated struct PerformanceHistory: Sendable {
             && !manualStands("w_prime", asOf: date, over: cyclingEvidence)
         let wantsFTP = estimateFTPFromCP && wanted("cycling_ftp")
             && !manualStands("cycling_ftp", asOf: date, over: cyclingEvidence)
-        if wantsCP || wantsWPrime || wantsFTP, let cycling, let est = cycling.estimate(anchor) {
+        if wantsCP || wantsWPrime || wantsFTP, let cycling,
+           let est = CriticalPowerEstimate.estimate(asOf: anchor, rides: cycling.floors, aerobic: aerobicCP) {
             let confidence = cycling.track.confidence(at: anchor)
             // Without a single ride's floor the priors alone answered — W′ is the
             // population's — and that must not read as "backed by recent efforts".

@@ -100,14 +100,14 @@ struct LTPaceEstimateTests {
     private var runs: [LTPaceEstimate.Run] {
         let fast = [3.30, 3.45, 3.25, 3.40, 3.20, 3.50, 3.35, 3.42]
         return (0 ..< 8).map { k in
-            .init(date: day(Double(3 * k + (k >= 6 ? 10 : 0))),
-                  profile: [160: fast[k], 166: fast[k] + 0.12])
+            let date = day(Double(3 * k + (k >= 6 ? 10 : 0)))
+            return .init(date: date, profile: [160: fast[k], 166: fast[k] + 0.12],
+                         hrMax: VO2maxEstimate.hrMax(190, measured: day(30), on: date), hrRest: 50)
         }
     }
 
     private func track(_ runs: [LTPaceEstimate.Run]) -> VO2maxEstimate.Track? {
-        LTPaceEstimate.track(runs: runs, sessions: [day(19), day(22)], hrMax: 190,
-                             hrMaxDate: day(30), hrRest: 50)
+        LTPaceEstimate.track(runs: runs, sessions: [day(19), day(22)])
     }
 
     @Test func filterMatchesTheLabReference() throws {
@@ -126,7 +126,7 @@ struct LTPaceEstimateTests {
         // Five runs, one of them holding a single in-band bucket: four observations, below
         // the filter's five.
         var five = Array(runs.prefix(5))
-        five[2] = .init(date: five[2].date, profile: [160: 3.25])
+        five[2] = .init(date: five[2].date, profile: [160: 3.25], hrMax: five[2].hrMax, hrRest: 50)
         #expect(track(five) == nil)
         #expect(track(Array(runs.prefix(5))) != nil)
     }

@@ -97,10 +97,14 @@ nonisolated enum VO2maxEstimate {
     /// Beyond this the level rests on no ride newer than a training block.
     static let staleDays = 42.0
 
-    /// One ride's evidence: its best-power/HR profile (`profile`).
+    /// One ride's evidence: its best-power/HR profile (`profile`) and the athlete on
+    /// its date — HRmax, the resting-HR baseline and body mass in force that day.
     struct Ride: Sendable {
         let date: Date
         let profile: [Int: (watts: Double, hr: Double)]
+        let hrMax: Double
+        let hrRest: Double
+        let massKg: Double
     }
 
     /// HRmax on `date`, from a value measured on `measured`, declining with age.
@@ -169,17 +173,15 @@ nonisolated enum VO2maxEstimate {
     /// The filter over every ride, or nil below `minimumRides` rides with a reading.
     ///
     /// One observation per ride — the mean log reading of its gated efforts, which share
-    /// that day's heart-rate offset and are one piece of evidence, not six. HRmax is the
-    /// athlete's current value, aged to each ride's date; `sessions` are every training
-    /// session, any sport, so running through a riding break does not detrain.
-    static func track(rides: [Ride], sessions: [Date], hrMax: Double, hrMaxDate: Date,
-                      hrRest: Double, massKg: Double) -> Track? {
+    /// that day's heart-rate offset and are one piece of evidence, not six. `sessions`
+    /// are every training session, any sport, so running through a riding break does
+    /// not detrain.
+    static func track(rides: [Ride], sessions: [Date]) -> Track? {
         let observations = rides.compactMap { ride -> (date: Date, log: Double)? in
-            let hm = Self.hrMax(hrMax, measured: hrMaxDate, on: ride.date)
             let logs = durations.compactMap { d in
                 ride.profile[d].flatMap {
-                    reading(seconds: d, watts: $0.watts, heartRate: $0.hr, hrMax: hm,
-                            hrRest: hrRest, massKg: massKg)
+                    reading(seconds: d, watts: $0.watts, heartRate: $0.hr, hrMax: ride.hrMax,
+                            hrRest: ride.hrRest, massKg: ride.massKg)
                 }
             }.map(log)
             return logs.isEmpty ? nil : (ride.date, logs.reduce(0, +) / Double(logs.count))

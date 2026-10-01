@@ -34,7 +34,7 @@ struct PerformanceHistoryTests {
     private func cycling(ftp: Bool = true, cp: Bool = true, vo2: Bool = false,
                          extra: [String: [PerformanceHistory.Entry]] = [:]) -> PerformanceHistory {
         PerformanceHistory(
-            byKey: ["max_hr": [entry(ago(100), 190)], "resting_hr": [entry(ago(5), 50)],
+            byKey: ["max_hr": [entry(ago(100), 190)], "resting_hr": [entry(ago(100), 50)],
                     "weight_kg": [entry(ago(100), 70)]].merging(extra) { $1 },
             estimateFTPFromCP: ftp, estimateVO2maxFromRides: vo2, estimateCPFromRides: cp,
             evidence: rides)
@@ -59,7 +59,7 @@ struct PerformanceHistoryTests {
                                                 submaxProfile: $0.submaxProfile, family: .bike)
         }
         let snap = PerformanceHistory(
-            byKey: ["max_hr": [entry(ago(100), 190)], "resting_hr": [entry(ago(5), 50)],
+            byKey: ["max_hr": [entry(ago(100), 190)], "resting_hr": [entry(ago(100), 50)],
                     "weight_kg": [entry(ago(100), 70)]],
             estimateFTPFromCP: true, estimateCPFromRides: true, evidence: bare).snapshot(asOf: now)
         #expect(snap.criticalPower != nil)
@@ -99,6 +99,15 @@ struct PerformanceHistoryTests {
         #expect(snap.cyclingFTP == 250 && !snap.cyclingFTPIsEstimated)
         #expect(snap.criticalPower == 280 && !snap.criticalPowerIsEstimated)
         #expect(snap.wPrimeIsEstimated)
+    }
+
+    /// Every ride reads the athlete of its own date, so a weight entered later moves no
+    /// earlier value.
+    @Test func aLaterWeightDoesNotMoveAnEarlierCP() throws {
+        let heavier = cycling(extra: ["weight_kg": [entry(ago(100), 70), entry(ago(1), 80)]])
+        let before = try #require(cycling().snapshot(asOf: ago(2)).criticalPower)
+        #expect(heavier.snapshot(asOf: ago(2)).criticalPower == before)
+        #expect(heavier.snapshot(asOf: now).criticalPower != before)
     }
 
     /// Without resting HR there is no reserve to scale by, so no cycling estimate at all —
@@ -330,9 +339,11 @@ struct PerformanceHistoryTests {
     }
 
     @Test func theLTPaceSeriesIsTheFilterAtEveryDate() throws {
-        let runs = pacedRuns.map { LTPaceEstimate.Run(date: $0.date, profile: $0.paceProfile) }
-        let track = try #require(LTPaceEstimate.track(runs: runs, sessions: [], hrMax: 206,
-                                                      hrMaxDate: ago(400), hrRest: 48))
+        let runs = pacedRuns.map {
+            LTPaceEstimate.Run(date: $0.date, profile: $0.paceProfile,
+                               hrMax: VO2maxEstimate.hrMax(206, measured: ago(400), on: $0.date), hrRest: 48)
+        }
+        let track = try #require(LTPaceEstimate.track(runs: runs, sessions: []))
         let series = ltPaceSeries(lthr: [entry(ago(300), 184)])
         for point in series {
             let state = try #require(track.state(at: point.date))
