@@ -424,8 +424,10 @@ final class AppSettings: ObservableObject {
                 items.append(DashboardLayoutItem(section: section, isVisible: !hidden))
             }
         } else {
-            // First run: everything visible except the opt-in AI summary.
-            items = DashboardSection.allCases.map { DashboardLayoutItem(section: $0, isVisible: $0 != .aiInsight) }
+            // First run: Tissue Load and the AI summary are opt-in.
+            items = DashboardSection.allCases.map {
+                DashboardLayoutItem(section: $0, isVisible: $0 == .upNext || $0 == .pinned)
+            }
         }
         // Sections the app gained after the layout was stored surface at the end.
         let known = Set(items.map(\.section))
