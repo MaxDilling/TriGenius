@@ -112,7 +112,7 @@ enum PlannedTSS {
     static func estimate(rawSteps: [RawStep], family: SportFamily, thresholds: PerformanceSnapshot) -> Double? {
         guard !rawSteps.isEmpty else { return nil }
         var total = 0.0
-        for step in rawSteps {
+        for step in rawSteps where !isWallRest(step, family: family) {
             let ifValue = intensity(for: step, family: family, thresholds: thresholds)
             let secs = durationSeconds(for: step, family: family, thresholds: thresholds)
             guard secs > 0 else { continue }
@@ -127,7 +127,8 @@ enum PlannedTSS {
     /// Estimated total distance for a planned workout plus how it was obtained.
     /// Distance-based steps contribute their meters directly (exact); time-based
     /// steps are converted via their pace/speed target when present, else the
-    /// assumed speed (`assumedSpeedMPS`). The `source` classifies the whole
+    /// assumed speed (`assumedSpeedMPS`); a swim's timed rest contributes nothing
+    /// and is no time step. The `source` classifies the whole
     /// workout: `.fixed` when every measurable step is distance-prescribed,
     /// `.estimatedFromPace` when all time steps carried a pace/speed target, else
     /// `.estimatedFromDuration` (at least one time step fell back to the assumed
@@ -138,7 +139,7 @@ enum PlannedTSS {
         var meters = 0.0
         var hasTimeStep = false
         var allTimeStepsPaced = true
-        for step in raw {
+        for step in raw where !isWallRest(step, family: family) {
             if step.isDistance {
                 meters += max(0, step.endValue)
             } else {
@@ -172,6 +173,12 @@ enum PlannedTSS {
             seconds += durationSeconds(for: step, family: family, thresholds: thresholds)
         }
         return seconds > 0 ? seconds : nil
+    }
+
+    /// A swim's timed rest is spent at the wall: elapsed time, but no metres and
+    /// no load. Run/bike recoveries are jogged or spun, so they keep both.
+    private static func isWallRest(_ step: RawStep, family: SportFamily) -> Bool {
+        family == .swim && !step.isDistance && (step.typeKey.contains("rest") || step.typeKey.contains("recover"))
     }
 
     // MARK: Step → duration
