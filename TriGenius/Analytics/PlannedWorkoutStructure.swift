@@ -284,7 +284,7 @@ enum PlannedWorkoutFormat {
     }
 
     static func distance(_ meters: Double) -> String {
-        if meters >= 1000 {
+        if meters >= 2000 {
             let km = meters / 1000
             return km.truncatingRemainder(dividingBy: 1) == 0
                 ? String(format: "%.0f km", km) : String(format: "%.1f km", km)
