@@ -30,8 +30,9 @@ struct AgendaDay: Identifiable {
 @MainActor
 @Observable
 final class DashboardViewModel {
-    /// The Pinned cards' state, at the dashboard's one-month window. Its PMC, season
-    /// plan and week targets also feed the banner, the insight and the widget.
+    /// The Pinned cards' state, at the dashboard's one-month window (the marker tiles
+    /// take three months, `DashboardView`). Its PMC, season plan and week targets also
+    /// feed the banner, the insight and the widget.
     let stats = StatisticsViewModel(weeklyStructure: WeeklyStructure(), range: .oneMonth)
     var weeklyBuckets: [TrainingVolume.WeekBucket] = []
     var agendaDays: [AgendaDay] = []

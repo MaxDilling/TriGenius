@@ -203,10 +203,10 @@ struct DashboardView: View {
             ForEach(StatCard.rows(cards), id: \.self) { row in
                 if row[0].isTile {
                     LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide, fill: 4), spacing: Theme.Spacing.m) {
-                        ForEach(row) { StatCardView(card: $0, stats: stats) }
+                        ForEach(row) { StatCardView(card: $0, stats: stats, markerRange: .threeMonths) }
                     }
                 } else {
-                    StatCardView(card: row[0], stats: stats)
+                    StatCardView(card: row[0], stats: stats, markerRange: .threeMonths)
                 }
             }
         }

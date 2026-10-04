@@ -81,6 +81,8 @@ struct StatCard: Hashable, Identifiable {
 struct StatCardView: View {
     let card: StatCard
     @Bindable var stats: StatisticsViewModel
+    /// The marker tiles' window when it differs from the view model's range.
+    var markerRange: TimeRange?
     @EnvironmentObject private var settings: AppSettings
 
     var body: some View {
@@ -111,7 +113,7 @@ struct StatCardView: View {
         case .routes: routesCard
         default:
             if let metric = card.metric, let points = stats.histories[metric.key] {
-                MetricCard(metric: metric, points: points, range: stats.range)
+                MetricCard(metric: metric, points: points, range: markerRange ?? stats.range)
             }
         }
     }
