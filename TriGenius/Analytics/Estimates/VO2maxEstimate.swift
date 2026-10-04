@@ -170,6 +170,59 @@ nonisolated enum VO2maxEstimate {
         }
     }
 
+    /// What the athlete is shown of a track: the filter through an EMA whose time constant is
+    /// `smoothingGapFactor` x the mean of the last `smoothingGaps` gaps between observations,
+    /// the open one included, clamped to `smoothingDays`. Over a gap without any session the
+    /// detraining slides the level down and the next session snaps it back. Both halves are
+    /// right, but an isolated session in a sparse period draws a tooth; dense training keeps
+    /// nearly no lag. Read by the running MAS (LT pace and running VO2max).
+    ///
+    /// Causal: one value per midnight (days since 1970) from the first after the
+    /// `minimumRides`-th observation; a date between midnights steps on from the one before
+    /// it, and before the first the filter's own value stands. The sd and the evidence stay
+    /// the filter's. Display constants fitted to a target drawn over one athlete's curve, not
+    /// physiology: `ref/threshold_lab/running/FINDINGS.md` "Smoothing the curve".
+    struct SmoothedTrack: Sendable {
+        let track: Track
+        private let firstDay: Double
+        private let levels: [Double]
+
+        init(_ track: Track, through end: Date) {
+            self.track = track
+            firstDay = track.days[minimumRides - 1].rounded(.down) + 1
+            var levels: [Double] = []
+            var day = firstDay
+            while day <= VO2maxEstimate.day(end),
+                  let x = track.state(at: Date(timeIntervalSince1970: day * 86_400))?.log {
+                levels.append(levels.last.map { $0 + Self.weight(1, at: day, observations: track.days) * (x - $0) } ?? x)
+                day += 1
+            }
+            self.levels = levels
+        }
+
+        func state(at date: Date) -> (log: Double, sd: Double)? {
+            guard let raw = track.state(at: date) else { return nil }
+            let t = VO2maxEstimate.day(date)
+            guard t >= firstDay, !levels.isEmpty else { return raw }
+            let j = min(Int(t - firstDay), levels.count - 1)
+            let y = levels[j]
+            return (y + Self.weight(t - firstDay - Double(j), at: t, observations: track.days) * (raw.log - y), raw.sd)
+        }
+
+        /// The EMA's weight on the filter's value over `dt` days ending on day `t`.
+        private static func weight(_ dt: Double, at t: Double, observations: [Double]) -> Double {
+            let k = count(observations, atMost: t), m = min(k, smoothingGaps)
+            let tau = m == 0 ? smoothingDays.upperBound
+                : min(max(smoothingGapFactor * (t - observations[k - m]) / Double(m), smoothingDays.lowerBound),
+                      smoothingDays.upperBound)
+            return 1 - exp(-dt / tau)
+        }
+    }
+
+    static let smoothingGapFactor = 1.5
+    static let smoothingGaps = 3
+    static let smoothingDays = 5.0 ... 45.0
+
     /// The filter over every ride, or nil below `minimumRides` rides with a reading.
     ///
     /// One observation per ride — the mean log reading of its gated efforts, which share

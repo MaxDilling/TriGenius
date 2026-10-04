@@ -122,6 +122,20 @@ struct LTPaceEstimateTests {
         }
     }
 
+    @Test func curveMatchesTheLabReference() throws {
+        // `scorecard.curve` on the same runs. Day 12 (the fifth run) precedes the first
+        // midnight, so the filter's own value stands; the sd is always the filter's.
+        let track = try #require(track(runs))
+        let curve = VO2maxEstimate.SmoothedTrack(track, through: day(100))
+        for (d, log) in [(12.0, 1.4428074340439363), (20.0, 1.4475865855411942),
+                         (36.0, 1.4501738880317916), (40.25, 1.44985246897239),
+                         (80.0, 1.4260562904983383)] {
+            let state = try #require(curve.state(at: day(d)))
+            #expect(abs(state.log - log) < 1e-10)
+            #expect(state.sd == track.state(at: day(d))?.sd)
+        }
+    }
+
     @Test func runsWithoutAnObservationDoNotCount() throws {
         // Five runs, one of them holding a single in-band bucket: four observations, below
         // the filter's five.

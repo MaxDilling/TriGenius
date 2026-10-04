@@ -646,8 +646,9 @@ nonisolated struct PerformanceHistory: Sendable {
     private let evidence: [ActivityEvidence]
     /// The cycling VO2max filter and every ride's W′ floors, built once over every ride.
     private var cycling: Cycling?
-    /// The running MAS filter, built once the same way (`LTPaceEstimate.track`).
-    private var running: VO2maxEstimate.Track?
+    /// The running MAS filter as the athlete is shown it, built once the same way
+    /// (`LTPaceEstimate.track` through `VO2maxEstimate.SmoothedTrack`).
+    private var running: VO2maxEstimate.SmoothedTrack?
 
     private struct Cycling: Sendable {
         let track: VO2maxEstimate.Track
@@ -797,13 +798,13 @@ nonisolated struct PerformanceHistory: Sendable {
     /// but after hours of prior work heart rate no longer tracks the metabolic cost, so
     /// `MAS = v / %HRR` reads high — one race leg moved a real athlete's peak 12 s/km. A run
     /// peaking above the athlete's own maximum has a misreading sensor and is dropped.
-    private func buildRunning(sessionDates: [Date]) -> VO2maxEstimate.Track? {
+    private func buildRunning(sessionDates: [Date]) -> VO2maxEstimate.SmoothedTrack? {
         let runs = evidence.compactMap { o -> LTPaceEstimate.Run? in
             guard o.family == .run, !o.paceProfile.isEmpty,
                   let hr = heartRange(on: o.date), o.peakHR <= hr.max else { return nil }
             return .init(date: o.date, profile: o.paceProfile, hrMax: hr.max, hrRest: hr.rest)
         }
-        return LTPaceEstimate.track(runs: runs, sessions: sessionDates)
+        return LTPaceEstimate.track(runs: runs, sessions: sessionDates).map { .init($0, through: .now) }
     }
 
     /// The metric snapshot as it stood on `date`, assembled for the TSS engine.
@@ -919,13 +920,13 @@ nonisolated struct PerformanceHistory: Sendable {
         }
         // One reconstruction, two thresholds: MAS is LT pace in one unit and running
         // VO2max in another, so it is resolved once here and read by both opt-ins.
-        let runEvidence = running?.lastObservation(at: anchor)
+        let runEvidence = running?.track.lastObservation(at: anchor)
         let wantsPace = estimateLTPaceFromRuns && wanted("lactate_threshold_speed")
             && !manualStands("lactate_threshold_speed", asOf: date, over: runEvidence)
         let wantsVO2 = estimateRunningVO2maxFromRuns && wanted("vo2max_running")
             && !manualStands("vo2max_running", asOf: date, over: runEvidence)
         if wantsPace || wantsVO2, let running, let state = running.state(at: anchor) {
-            let mas = exp(state.log), confidence = running.confidence(at: anchor)
+            let mas = exp(state.log), confidence = running.track.confidence(at: anchor)
             snap.ltPaceFractionUsed = ltPaceFraction
             if wantsPace, let fraction = ltPaceFraction,
                let speed = LTPaceEstimate.ltSpeed(mas: mas, fractionOfMAS: fraction) {

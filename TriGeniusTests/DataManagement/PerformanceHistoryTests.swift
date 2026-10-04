@@ -346,15 +346,16 @@ struct PerformanceHistoryTests {
         runHistory(pacedRuns, lthr: lthr).estimatedSeries("lactate_threshold_speed")
     }
 
-    @Test func theLTPaceSeriesIsTheFilterAtEveryDate() throws {
+    @Test func theLTPaceSeriesIsTheSmoothedFilterAtEveryDate() throws {
         let runs = pacedRuns.map {
             LTPaceEstimate.Run(date: $0.date, profile: $0.paceProfile,
                                hrMax: VO2maxEstimate.hrMax(206, measured: ago(400), on: $0.date), hrRest: 48)
         }
-        let track = try #require(LTPaceEstimate.track(runs: runs, sessions: []))
+        let curve = VO2maxEstimate.SmoothedTrack(try #require(LTPaceEstimate.track(runs: runs, sessions: [])),
+                                                 through: .now)
         let series = ltPaceSeries(lthr: [entry(ago(300), 184)])
         for point in series {
-            let state = try #require(track.state(at: point.date))
+            let state = try #require(curve.state(at: point.date))
             #expect(point.value == LTPaceEstimate.ltSpeed(mas: exp(state.log), fractionOfMAS: fraction))
         }
         // The faster block moves it: the pace today is quicker than the first answer.
