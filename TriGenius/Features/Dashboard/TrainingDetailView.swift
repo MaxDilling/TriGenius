@@ -248,7 +248,7 @@ struct TrainingDetailView: View {
         } message: {
             Text("Removes this workout and stops it from re-syncing — for a duplicate recorded on another device. Restore it anytime from Settings → Ignored workouts.")
         }
-        .sheet(item: $exportFile) { file in ShareSheet(items: [file.url]) }
+        .sheet(item: $exportFile) { file in ShareSheet(items: file.urls) }
         .sheet(isPresented: Binding(get: { editingSets != nil }, set: { if !$0 { editingSets = nil } })) {
             StrengthSetsEditorSheet(activityId: record.id, rows: editingSets ?? [])
         }
@@ -1132,7 +1132,7 @@ struct TrainingDetailView: View {
             let filename = "workout_\(record.source)_\(Int(record.date.timeIntervalSince1970)).json"
             let url = FileManager.default.temporaryDirectory.appendingPathComponent(filename)
             try data.write(to: url)
-            exportFile = ExportFile(url: url)
+            exportFile = ExportFile(urls: [url])
         } catch {
             actionError = error.localizedDescription
         }
@@ -1147,7 +1147,7 @@ struct TrainingDetailView: View {
 /// Wraps an exported file URL so it can drive a `.sheet(item:)` presentation.
 struct ExportFile: Identifiable {
     let id = UUID()
-    let url: URL
+    let urls: [URL]
 }
 
 /// Bridges the platform-native share UI into SwiftUI for the system share sheet.

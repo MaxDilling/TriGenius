@@ -18,7 +18,7 @@ struct FeedbackView: View {
         Form {
             Section {
                 Button {
-                    exportFile = FeedbackExport.file(athleteName: athleteName).map(ExportFile.init)
+                    exportFile = FeedbackExport.file(athleteName: athleteName).map { ExportFile(urls: [$0]) }
                 } label: {
                     Label("Export my feedback", systemImage: "square.and.arrow.up")
                 }
@@ -62,7 +62,7 @@ struct FeedbackView: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .onAppear { ratings = ReplyRatingStore.shared.all() }
-        .sheet(item: $exportFile) { file in ShareSheet(items: [file.url]) }
+        .sheet(item: $exportFile) { file in ShareSheet(items: file.urls) }
         .alert("Delete all chat ratings?", isPresented: $showDeleteConfirm) {
             Button("Delete", role: .destructive) {
                 ReplyRatingStore.shared.deleteAll()

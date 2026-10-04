@@ -547,6 +547,7 @@ struct SettingsView: View {
     @State private var garminConnected = true
     @State private var calendarAccess = CalendarService.shared.accessState
     @State private var showClearDataConfirm = false
+    @State private var dataExport: ExportFile?
     #if DEBUG
     @State private var showClearDBConfirm = false
     @State private var showDeletePerfConfirm = false
@@ -601,7 +602,7 @@ struct SettingsView: View {
             }
 
             // Privacy & Data — user-facing controls Apple review expects: the
-            // privacy policy, a medical disclaimer, and full data deletion.
+            // privacy policy, a medical disclaimer, and full data export and deletion.
             Section {
                 Link(destination: URL(string: Self.privacyPolicyURL)!) {
                     Label("Privacy Policy", systemImage: "hand.raised")
@@ -609,6 +610,12 @@ struct SettingsView: View {
                 row("Feedback", icon: "hand.thumbsup", value: feedbackValue) {
                     FeedbackView(athleteName: memory.userProfile.name)
                 }
+                Button {
+                    dataExport = exportData()
+                } label: {
+                    Label("Export my data", systemImage: "square.and.arrow.up")
+                }
+                .sheet(item: $dataExport) { file in ShareSheet(items: file.urls) }
                 Button(role: .destructive) {
                     showClearDataConfirm = true
                 } label: {
@@ -820,6 +827,17 @@ struct SettingsView: View {
         settings.cloudAIConsent = false
         settings.selectedBackend = .appleIntelligence
         onBackendChanged()
+    }
+
+    /// The store and this app's UserDefaults: the estimate opt-ins and the LT-pace fraction
+    /// live there, so the store alone does not reproduce the athlete's thresholds.
+    private func exportData() -> ExportFile? {
+        let settingsURL = FileManager.default.temporaryDirectory.appendingPathComponent("TriGenius-settings.plist")
+        guard let store = TrainingDataStore.shared.exportCopy(),
+              let domain = UserDefaults.standard.persistentDomain(forName: Bundle.main.bundleIdentifier ?? ""),
+              let plist = try? PropertyListSerialization.data(fromPropertyList: domain, format: .xml, options: 0),
+              (try? plist.write(to: settingsURL, options: .atomic)) != nil else { return nil }
+        return ExportFile(urls: [store, settingsURL])
     }
 
     static let privacyPolicyURL = "https://trigenius.narica.net/privacy"

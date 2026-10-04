@@ -2,6 +2,7 @@ import Foundation
 import OSLog
 import SwiftData
 import CoreData
+import SQLite3
 
 extension Notification.Name {
     /// Posted (on the main actor) whenever the local training store is mutated —
@@ -1104,6 +1105,18 @@ final class TrainingDataStore {
     /// fallback configuration.
     var storeFilePath: String {
         container.configurations.first?.url.path ?? "in-memory store"
+    }
+
+    /// A single-file copy of the store for the athlete to share. `VACUUM INTO` folds in the
+    /// write-ahead log, which copying the file alone would miss.
+    func exportCopy() -> URL? {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("TriGenius.store")
+        try? FileManager.default.removeItem(at: url)
+        var db: OpaquePointer?
+        defer { sqlite3_close(db) }
+        guard sqlite3_open_v2(storeFilePath, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+              sqlite3_exec(db, "VACUUM INTO '\(url.path)'", nil, nil, nil) == SQLITE_OK else { return nil }
+        return url
     }
 
     private init() {
