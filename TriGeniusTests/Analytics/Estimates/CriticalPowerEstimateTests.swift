@@ -35,8 +35,9 @@ struct CriticalPowerEstimateTests {
         #expect(f[index(450)] == 0)
     }
 
-    @Test func gapsAreInterpolatedAndTheEdgesAreNotRide() {
+    @Test func shortGapsAreInterpolatedStopsReadZeroAndTheEdgesAreNotRide() {
         #expect(CriticalPowerEstimate.oneHertz([nil, 100, nil, nil, 400, nil]) == [100, 200, 300, 400])
+        #expect(CriticalPowerEstimate.oneHertz([0, nil, nil, nil, 800, 300]) == [0, 0, 0, 0, 800, 300])
         #expect(CriticalPowerEstimate.floors(power: [nil, nil]).isEmpty)
     }
 

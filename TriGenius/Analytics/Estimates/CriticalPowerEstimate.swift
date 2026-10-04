@@ -118,8 +118,14 @@ nonisolated enum CriticalPowerEstimate {
         return peak
     }
 
-    /// 1 Hz bins with gaps filled linearly between the readings around them; the empty
-    /// bins before the first and after the last reading are not part of the ride.
+    /// Longest run of empty bins that is sampling jitter; a longer one is a stop.
+    static let maxInterpolatedGapSeconds = 2
+
+    /// Watts in 1 Hz bins: a gap of up to `maxInterpolatedGapSeconds` is filled linearly
+    /// between the readings around it, a longer one is a stop and reads 0 W — a line
+    /// across it would ramp from the standstill into the restart sprint, work never
+    /// ridden. The empty bins before the first and after the last reading are not part
+    /// of the ride.
     static func oneHertz(_ bins: [Double?]) -> [Double] {
         guard let first = bins.firstIndex(where: { $0 != nil }),
               let last = bins.lastIndex(where: { $0 != nil }) else { return [] }
@@ -128,9 +134,12 @@ nonisolated enum CriticalPowerEstimate {
         out[0] = bins[first]!
         for i in (first + 1) ... last {
             guard let v = bins[i] else { continue }
-            let a = bins[prev]!
-            for k in (prev + 1) ... i {
-                out[k - first] = a + (v - a) * Double(k - prev) / Double(i - prev)
+            out[i - first] = v
+            if i - prev - 1 <= maxInterpolatedGapSeconds {
+                let a = bins[prev]!
+                for k in (prev + 1) ..< i {
+                    out[k - first] = a + (v - a) * Double(k - prev) / Double(i - prev)
+                }
             }
             prev = i
         }
