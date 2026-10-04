@@ -226,8 +226,8 @@ nonisolated enum GarminTransform {
     /// Walk the activity-detail rows once into `directSpeed` samples (m/s) with their
     /// offset into the activity and their gradient: `directGrade` (percent) per row
     /// when present — Garmin pre-smooths it — else the de-noised
-    /// `GradeAdjustedPace.smoothedGrades` over the `directElevation`/`sumDistance`
-    /// series (last values carried across the odd missing row), else flat.
+    /// `GradeAdjustedPace.smoothedGrades` over `directElevation` (last value carried
+    /// across the odd missing row) and the speed samples' own durations, else flat.
     ///
     /// The offset comes from `directTimestamp`; without it the row index stands in,
     /// which is the old fixed-interval behaviour and the best the payload supports.
@@ -244,8 +244,6 @@ nonisolated enum GarminTransform {
         guard let speedIdx = indexes["directSpeed"] else { return [] }
         let gradeIdx = indexes["directGrade"]
         let elevIdx = indexes["directElevation"]
-        let distIdx = indexes["sumDistance"]
-        let haveElevation = elevIdx != nil && distIdx != nil
 
         func value(_ metrics: [Any], _ idx: Int?) -> Double? {
             guard let idx, idx < metrics.count else { return nil }
@@ -258,8 +256,7 @@ nonisolated enum GarminTransform {
         var speeds: [Double] = []
         var directGrades: [Double] = []
         var elevations: [Double] = []
-        var distances: [Double] = []
-        var lastElevation = 0.0, lastDistance = 0.0
+        var lastElevation = 0.0
 
         for row in rows {
             guard let metrics = row["metrics"] as? [Any],
@@ -276,10 +273,9 @@ nonisolated enum GarminTransform {
             }
             speeds.append(speed)
             if let g = value(metrics, gradeIdx) { directGrades.append(g / 100.0) }
-            if haveElevation {
+            if elevIdx != nil {
                 lastElevation = value(metrics, elevIdx) ?? lastElevation
-                lastDistance = value(metrics, distIdx) ?? lastDistance
-                elevations.append(lastElevation); distances.append(lastDistance)
+                elevations.append(lastElevation)
             }
         }
         guard !speeds.isEmpty else { return [] }
@@ -287,8 +283,11 @@ nonisolated enum GarminTransform {
         let grades: [Double]
         if directGrades.count == speeds.count {
             grades = directGrades
-        } else if haveElevation {
-            grades = GradeAdjustedPace.smoothedGrades(distance: distances, altitude: elevations)
+        } else if elevIdx != nil {
+            let timed = ZoneBucketing.durationSamples(zip(offsets, speeds).map { (offset: $0, value: $1) })
+            grades = GradeAdjustedPace.smoothedGrades(zip(timed, elevations).map {
+                (speed: $0.value, seconds: $0.seconds, altitude: $1)
+            })
         } else {
             grades = Array(repeating: 0, count: speeds.count)
         }

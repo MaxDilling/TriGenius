@@ -34,25 +34,32 @@ nonisolated enum GradeAdjustedPace {
         samples.map { (value: $0.speed * gradeFactor($0.grade), seconds: $0.seconds) }
     }
 
-    /// Gradient (rise/run) at each point by central difference over ~`window` horizontal
-    /// metres — the shared de-noising every source feeds raw altitude through before the
-    /// cost factor. Raw per-sample Δaltitude/Δrun is noisy (GPS/barometer), and because
-    /// `gradeFactor` is convex, symmetric noise rectifies into a systematic UPWARD bias;
-    /// differencing over a fixed horizontal span removes it while preserving real terrain
-    /// (validated against the athlete's heart rate — see ref/tss_lab). `distance` is
-    /// cumulative horizontal metres (monotonic), `altitude` aligned to it; both equal
-    /// length. A point whose window spans < 1 m gets grade 0. Garmin's pre-smoothed
-    /// `directGrade`, when present, skips this and is used directly.
-    static func smoothedGrades(distance: [Double], altitude: [Double], window: Double = 12) -> [Double] {
-        let n = distance.count
-        guard n > 0, altitude.count == n else { return Array(repeating: 0, count: n) }
+    /// Gradient (rise/run) at each speed sample by central difference over ~`window`
+    /// horizontal metres — the shared de-noising every source feeds raw altitude through
+    /// before the cost factor. Raw per-sample Δaltitude/Δrun is noisy (GPS/barometer), and
+    /// because `gradeFactor` is convex, symmetric noise rectifies into a systematic UPWARD
+    /// bias; differencing over a fixed horizontal span removes it while preserving real
+    /// terrain (validated against the athlete's heart rate — see ref/tss_lab). `altitude`
+    /// is the one at each sample's start. A point whose window spans < 1 m gets grade 0.
+    /// Garmin's pre-smoothed `directGrade`, when present, skips this and is used directly.
+    ///
+    /// The run is the distance the speed stream covers (Σ speed × seconds), never the GPS
+    /// track's: on a short steep pitch the track stalls, and a stalled run reads a
+    /// walked climb as 15-30 % (ref/threshold_lab/running FINDINGS).
+    static func smoothedGrades(_ samples: [(speed: Double, seconds: Double, altitude: Double)],
+                               window: Double = 12) -> [Double] {
+        let n = samples.count
+        var distance = Array(repeating: 0.0, count: n)
+        for i in samples.indices.dropFirst() {
+            distance[i] = distance[i - 1] + samples[i - 1].speed * samples[i - 1].seconds
+        }
         var grades = Array(repeating: 0.0, count: n)
         var lo = 0, hi = 0
         for i in 0..<n {
             while lo < i && distance[i] - distance[lo] > window { lo += 1 }
             while hi < n - 1 && distance[hi] - distance[i] < window { hi += 1 }
             let run = distance[hi] - distance[lo]
-            grades[i] = run > 1 ? (altitude[hi] - altitude[lo]) / run : 0
+            grades[i] = run > 1 ? (samples[hi].altitude - samples[lo].altitude) / run : 0
         }
         return grades
     }
