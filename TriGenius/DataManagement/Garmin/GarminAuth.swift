@@ -33,6 +33,11 @@ nonisolated struct GarminTokens: Codable {
 
 // MARK: - Errors
 
+extension Notification.Name {
+    /// Posted when Garmin goes from signed out to signed in or back — not on token refresh.
+    nonisolated static let garminAuthDidChange = Notification.Name("trigenius.garminAuthDidChange")
+}
+
 enum GarminAuthError: LocalizedError {
     case mfaRequired
     case invalidCredentials
@@ -91,7 +96,13 @@ actor GarminAuth {
     private let tokenAccount = KeychainStore.garminTokens
 
     private let session: URLSession
-    private(set) var tokens: GarminTokens?
+    private(set) var tokens: GarminTokens? {
+        didSet {
+            if (oldValue == nil) != (tokens == nil) {
+                NotificationCenter.default.post(name: .garminAuthDidChange, object: nil)
+            }
+        }
+    }
 
     // Pending MFA state captured between login() and resumeLogin(code:).
     private var pendingConfig: SSOConfig?
@@ -195,9 +206,9 @@ actor GarminAuth {
     func resumeLogin(code: String) async throws {
         guard let config = pendingConfig else { throw GarminAuthError.ticketNotFound }
         let method = pendingMFAMethod ?? "email"
-        let trimmedCode = code.trimmingCharacters(in: .whitespaces)
+        let trimmedCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
         log("MFA verify: method=\(method), code length=\(trimmedCode.count), flow=\(config.clientId)")
-        logCookies("vor MFA-Verify")
+        logCookies("before MFA verify")
         let body: [String: Any] = [
             "mfaMethod": method,
             "mfaVerificationCode": trimmedCode,
@@ -245,7 +256,7 @@ actor GarminAuth {
         }
 
         if rateLimited && lastDetail.isEmpty { throw GarminAuthError.tooManyRequests }
-        throw GarminAuthError.oauthExchangeFailed("MFA-Verifizierung abgelehnt (\(lastDetail)). Code ggf. abgelaufen – neu anfordern.")
+        throw GarminAuthError.oauthExchangeFailed("MFA verification rejected (\(lastDetail)). The code may have expired — tap Resend code.")
     }
 
     func logout() {
@@ -287,7 +298,7 @@ actor GarminAuth {
         )
         if getStatus == 429 { throw GarminAuthError.tooManyRequests }
         guard (200..<400).contains(getStatus) else {
-            throw GarminAuthError.network("Sign-in-Seite HTTP \(getStatus)")
+            throw GarminAuthError.network("Sign-in page HTTP \(getStatus)")
         }
 
         // Step 2: Cloudflare anti-rate-limit delay.
@@ -315,7 +326,7 @@ actor GarminAuth {
 
         let type = (json["responseStatus"] as? [String: Any])?["type"] as? String
         log("Login POST \(config.loginURL) → HTTP \(status), responseStatus.type=\(type ?? "nil")")
-        logCookies("nach Login-POST")
+        logCookies("after login POST")
         switch type {
         case "SUCCESSFUL":
             guard let ticket = json["serviceTicketId"] as? String else {
@@ -383,9 +394,9 @@ actor GarminAuth {
             return
         }
         if hadAuthFailure {
-            throw GarminAuthError.oauthExchangeFailed("Ticket abgelehnt (\(lastDetail))")
+            throw GarminAuthError.oauthExchangeFailed("Ticket rejected (\(lastDetail))")
         }
-        throw GarminAuthError.oauthExchangeFailed(lastDetail.isEmpty ? "alle Client-IDs fehlgeschlagen" : lastDetail)
+        throw GarminAuthError.oauthExchangeFailed(lastDetail.isEmpty ? "all client IDs failed" : lastDetail)
     }
 
     private func refresh() async throws {
@@ -402,7 +413,7 @@ actor GarminAuth {
               let accessToken = json["access_token"] as? String else {
             // Refresh failed — drop tokens so the user is prompted to log in again.
             logout()
-            throw GarminAuthError.oauthExchangeFailed("Token-Refresh fehlgeschlagen (HTTP \(status))")
+            throw GarminAuthError.oauthExchangeFailed("Token refresh failed (HTTP \(status))")
         }
         // RFC 6749 §6: an omitted refresh_token means the existing one stays valid.
         let newRefresh = (json["refresh_token"] as? String) ?? current.refreshToken

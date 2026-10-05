@@ -753,6 +753,9 @@ struct SettingsView: View {
             calendarAccess = CalendarService.shared.accessState
             garminConnected = await GarminAuth.shared.isAuthenticated
         }
+        .onReceive(NotificationCenter.default.publisher(for: .garminAuthDidChange)) { _ in
+            Task { garminConnected = await GarminAuth.shared.isAuthenticated }
+        }
     }
 
     private func row<Destination: View>(_ title: String, icon: String, value: String? = nil, warning: Bool = false,
@@ -901,10 +904,12 @@ struct GarminLoginSection: View {
     @State private var password = ""
     @State private var mfaCode = ""
     @State private var needsMFA = false
-    @State private var isWorking = false
+    @State private var working: Step?
     @State private var statusMessage: String?
     @State private var isError = false
     @State private var isConnected = false
+
+    private enum Step { case login, mfa }
 
     var body: some View {
         Group {
@@ -930,33 +935,41 @@ struct GarminLoginSection: View {
                     #endif
                     .textContentType(.username)
                     .disableAutocorrection(true)
+                    .disabled(needsMFA)
 
                 SecureField("Password", text: $password)
                     .textContentType(.password)
+                    .disabled(needsMFA)
 
                 if needsMFA {
                     TextField("MFA code (from email)", text: $mfaCode)
                         #if os(iOS)
                         .keyboardType(.numberPad)
                         #endif
+                        .textContentType(.oneTimeCode)
                     Button {
                         Task { await submitMFA() }
                     } label: {
-                        Label("Confirm code", systemImage: "key.fill")
-                    }
-                    .disabled(isWorking || mfaCode.isEmpty)
-                } else {
-                    Button {
-                        Task { await login() }
-                    } label: {
-                        if isWorking {
+                        if working == .mfa {
                             ProgressView()
                         } else {
-                            Label("Connect to Garmin", systemImage: "link")
+                            Label("Confirm code", systemImage: "key.fill")
                         }
                     }
-                    .disabled(isWorking || settings.garminEmail.isEmpty || password.isEmpty)
+                    .disabled(working != nil || mfaCode.isEmpty)
                 }
+                Button {
+                    Task { await login() }
+                } label: {
+                    if working == .login {
+                        ProgressView()
+                    } else if needsMFA {
+                        Label("Resend code", systemImage: "arrow.clockwise")
+                    } else {
+                        Label("Connect to Garmin", systemImage: "link")
+                    }
+                }
+                .disabled(working != nil || settings.garminEmail.isEmpty || password.isEmpty)
             }
 
             if let statusMessage {
@@ -969,35 +982,33 @@ struct GarminLoginSection: View {
     }
 
     private func login() async {
-        isWorking = true
+        working = .login
         // Garmin's Cloudflare WAF forces a 5–20s delay between the sign-in page
         // load and the credential submit, so the login deliberately takes a while.
         statusMessage = "Connecting to Garmin… this takes about 5–20 seconds."
         isError = false
-        defer { isWorking = false }
+        defer { working = nil }
         do {
             try await GarminAuth.shared.login(email: settings.garminEmail, password: password)
             await finishConnected()
-        } catch let error as GarminAuthError {
-            if case .mfaRequired = error {
-                needsMFA = true
-                statusMessage = error.errorDescription
-                isError = false
-            } else {
-                statusMessage = error.errorDescription
-                isError = true
-            }
+        } catch GarminAuthError.mfaRequired {
+            needsMFA = true
+            mfaCode = ""
+            statusMessage = GarminAuthError.mfaRequired.errorDescription
+            isError = false
         } catch {
+            // A failed login drops GarminAuth's pending challenge — an old code can't be confirmed.
+            needsMFA = false
             statusMessage = error.localizedDescription
             isError = true
         }
     }
 
     private func submitMFA() async {
-        isWorking = true
+        working = .mfa
         statusMessage = nil
         isError = false
-        defer { isWorking = false }
+        defer { working = nil }
         do {
             try await GarminAuth.shared.resumeLogin(code: mfaCode)
             await finishConnected()
