@@ -471,7 +471,7 @@ struct WorkoutStreamChart: View {
         // After the update, never during it: the zone is derived from the same
         // bucketing the marks are drawn from.
         .onChange(of: highlightedZone) { _, zone in highlight?.wrappedValue = zone }
-        .onChange(of: onRibbon ? nil : scrubOffset) { _, offset in
+        .onChange(of: highlightedZone == nil ? scrubOffset : nil) { _, offset in
             reading?.wrappedValue = offset.flatMap(read(at:))
             routeCursor?.offset = offset.map { $0 + routeCursorBase }
         }
