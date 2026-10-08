@@ -33,6 +33,7 @@ struct MedicalDisclaimerView: View {
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .frame(maxWidth: 460)
         }
         .padding()

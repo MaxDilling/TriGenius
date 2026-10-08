@@ -49,6 +49,7 @@ struct CloudAIConsentView: View {
                             .frame(maxWidth: .infinity)
                     }
                 }
+                .controlSize(.large)
                 .padding()
                 .background(.bar)
             }
