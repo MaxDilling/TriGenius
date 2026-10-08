@@ -70,11 +70,13 @@ struct WorkoutStreamDetail: View {
     /// in a short one (a phone in landscape), where the page scrolls instead.
     @State private var viewport: CGFloat = 0
     @State private var rest: CGFloat = 0
-    /// The window's figures change with the window, not with the pointer.
+    /// The figures change with the window or the scrubbed bucket, not with every
+    /// pointer event.
     @State private var summaryMemo = Memo<SummaryKey, [(label: String, value: String)]>()
 
     private struct SummaryKey: Equatable {
         let window: ClosedRange<Double>
+        let scrubbed: Bool
         let metrics: [WorkoutStreamModel]
     }
 
@@ -104,7 +106,11 @@ struct WorkoutStreamDetail: View {
                                        height: chartHeight, zoom: $zoom,
                                        highlight: $hoveredZone, reading: $reading)
                     let stats = summary
-                    if !stats.isEmpty { StatStrip(title: "Visible range", stats: stats) }
+                    if !stats.isEmpty {
+                        StatStrip(title: reading.map { "At " + model.timeLabel($0.vertex.offset, withSeconds: true) }
+                                      ?? "Visible range",
+                                  stats: stats)
+                    }
                 }
                 .padding(Theme.Spacing.l)
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
@@ -168,23 +174,29 @@ struct WorkoutStreamDetail: View {
     }
 
     /// The visible stretch across the workout's other metrics — zoom onto the
-    /// climb and read what it cost. The trace's own summary heads the sheet;
-    /// elevation has no meaningful one.
+    /// climb and read what it cost — or, while scrubbing, the bucket under the
+    /// pointer and the distance covered up to it. The trace's own summary heads
+    /// the sheet; elevation has no meaningful one.
     private var summary: [(label: String, value: String)] {
-        let window = zoom.window
-        return summaryMemo(SummaryKey(window: window, metrics: [model] + overlays)) {
+        let vertex = reading?.vertex
+        let window = vertex.map { $0.start...$0.end } ?? zoom.window
+        return summaryMemo(SummaryKey(window: window, scrubbed: vertex != nil, metrics: [model] + overlays)) {
             var stats: [(label: String, value: String)] = []
             if let speed = ([model] + overlays).first(where: \.kind.isSpeed) {
                 let metres = StreamPlot.distance(speeds: speed.values, binSeconds: speed.binSeconds,
-                                                 in: window)
+                                                 in: vertex.map { 0...$0.end } ?? window)
                 stats.append(("Distance", speed.kind == .swimPace || metres < 1000
                                           ? "\(Int(metres.rounded())) m"
                                           : String(format: "%.2f km", metres / 1000)))
             }
             for other in overlays where other.kind != .elevation {
                 if let value = other.kind.summary(other.samples(in: window)) {
-                    stats.append((other.kind == .wPrimeBalance ? "Lowest W′" : other.kind.label,
-                                  other.kind.format(value)))
+                    let label = switch other.kind {
+                    case .wPrimeBalance where vertex == nil: "Lowest W′"
+                    case .heartRate: "HR"
+                    default: other.kind.label
+                    }
+                    stats.append((label, other.kind.format(value)))
                 }
             }
             return stats
