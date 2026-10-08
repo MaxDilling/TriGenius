@@ -46,6 +46,7 @@ final class DataSyncCoordinator {
 
     /// How many recent activities to pull per sync.
     private let syncCount = 100
+    private static let lookbackDays = 7
 
     // MARK: - Sync state (last successful sync per source)
 
@@ -89,10 +90,9 @@ final class DataSyncCoordinator {
     // MARK: - Sync
 
     /// Pull activities from `source` into the local database. Incremental: only
-    /// fetches activities since the last successful sync (inclusive of that day,
-    /// so same-day activities added after the last sync are picked up). The first
-    /// ever sync does a full recent backfill. Ingest upserts by id, so re-fetching
-    /// the last sync day is harmless.
+    /// fetches the `windowDays` before today. The first ever sync does a full
+    /// recent backfill. Ingest upserts by id, so re-fetching days already synced
+    /// is harmless.
     /// Returns the number of activities now stored, or nil on failure.
     @discardableResult
     func sync(source: DataSource) async -> Int? {
@@ -488,14 +488,16 @@ final class DataSyncCoordinator {
         return out
     }
 
-    /// Calendar days from the last sync's start-of-day to today, or nil if never
-    /// synced (→ full backfill). Day 0 (synced today) still re-fetches today.
+    /// Calendar days an incremental sync reaches back, or nil if never synced
+    /// (→ full backfill): from the last sync's start-of-day, and never fewer than
+    /// `lookbackDays` — a watch can hand a workout to its provider days after it
+    /// was recorded, behind a sync that already ran.
     private func windowDays(since last: Date?) -> Int? {
         guard let last else { return nil }
         let cal = Calendar.current
         let from = cal.startOfDay(for: last)
         let to = cal.startOfDay(for: Date())
-        return max(0, cal.dateComponents([.day], from: from, to: to).day ?? 0)
+        return max(Self.lookbackDays, cal.dateComponents([.day], from: from, to: to).day ?? 0)
     }
 
     // MARK: - Coach read path — unified workouts (planned + completed, local)
