@@ -59,8 +59,11 @@ struct WorkoutEditorSheet: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }
-                        .disabled(saving)
+                    if saving {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Button("Save") { Task { await save() } }
+                    }
                 }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
