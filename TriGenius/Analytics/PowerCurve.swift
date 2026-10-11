@@ -98,6 +98,23 @@ enum PowerCurve {
         })
     }
 
+    // MARK: CP/W′ model
+
+    /// The power the two-parameter critical-power model allows for one all-out effort
+    /// from a full W′: CP + W′/t — the same bound the W′ floors are read against
+    /// (`CriticalPowerEstimate`). Valid only inside `window`: shorter, sprint power
+    /// (Pmax, which this model lacks) caps it; longer, real power fades below CP.
+    struct Model: Codable, Equatable {
+        let cp: Double
+        let wPrimeKJ: Double
+
+        nonisolated static let window = 90...1800
+
+        nonisolated func watts(at seconds: Int) -> Double? {
+            Self.window.contains(seconds) ? cp + wPrimeKJ * 1000 / Double(seconds) : nil
+        }
+    }
+
     /// Compact duration label, exact for non-round grid points ("1m30s", not "1m").
     nonisolated static func durationLabel(_ seconds: Int) -> String {
         if seconds < 60 { return "\(seconds)s" }
@@ -107,5 +124,13 @@ enum PowerCurve {
         }
         let h = seconds / 3600, m = (seconds % 3600) / 60
         return m == 0 ? "\(h)h" : "\(h)h\(m)m"
+    }
+}
+
+extension PowerCurve.Model {
+    /// The model from a snapshot's CP and W′; nil unless both are known.
+    nonisolated init?(snapshot: PerformanceSnapshot) {
+        guard let cp = snapshot.criticalPower, let wPrime = snapshot.wPrimeKJ else { return nil }
+        self.init(cp: cp, wPrimeKJ: wPrime)
     }
 }

@@ -29,6 +29,8 @@ final class StatisticsViewModel {
     /// change, so the card labels them as current (`ZoneDistributionStack`).
     private(set) var zoneBounds: [ZoneMetric: [Double]] = [:]
     private(set) var powerCurve: [PowerCurve.Point] = []
+    /// Today's CP/W′ model, whatever the range.
+    private(set) var cpModel: PowerCurve.Model?
     /// The range's GPS tracks; nil until `RouteCache` has delivered them.
     private(set) var routes: [RouteLine]?
     /// Each marker's whole history by key; a marker without data has no entry.
@@ -69,6 +71,7 @@ final class StatisticsViewModel {
         rebuildShare()
         rebuildZones()
         powerCurve = PowerCurve.aggregate(records: records)
+        cpModel = PowerCurve.Model(snapshot: TrainingDataStore.shared.latestSnapshot())
     }
 
     /// The marker histories, which no range change touches.

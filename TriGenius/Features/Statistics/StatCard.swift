@@ -152,16 +152,19 @@ struct StatCardView: View {
     }
 
     private var powerCurveCard: some View {
-        Group {
-            if stats.powerCurve.isEmpty {
-                Text("No cycling power data in this range.")
-                    .font(.subheadline).foregroundStyle(.secondary)
-            } else {
-                PowerCurveChart(model: PowerCurveModel(points: stats.powerCurve))
+        NavigationLink { PowerCurveDetailView(range: stats.range) } label: {
+            Group {
+                if stats.powerCurve.isEmpty {
+                    Text("No cycling power data in this range.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                } else {
+                    PowerCurveChart(model: PowerCurveModel(points: stats.powerCurve, cpModel: stats.cpModel))
+                }
             }
+            .cardTitle(card.title) { Chevron() }
+            .contentCard()
         }
-        .cardTitle(card.title)
-        .contentCard()
+        .buttonStyle(.plain)
     }
 
     private var routesCard: some View {

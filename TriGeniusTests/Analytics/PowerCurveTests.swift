@@ -50,3 +50,13 @@ import Testing
     #expect(PowerCurve.durations.map(PowerCurve.durationLabel).joined(separator: ",") ==
         "1s,2s,3s,5s,8s,10s,15s,20s,30s,45s,1m,1m30s,2m,2m30s,3m,4m,5m,7m,10m,15m,20m,30m,40m,1h,1h30m,2h,3h,4h,5h,6h")
 }
+
+@Test func model_cpPlusWPrimeOverDuration() {
+    let model = PowerCurve.Model(cp: 250, wPrimeKJ: 18)
+    #expect([90, 300, 1800].map { model.watts(at: $0) } == [450, 310, 260])
+}
+
+@Test func model_outsideWindow_absent() {
+    let model = PowerCurve.Model(cp: 250, wPrimeKJ: 18)
+    #expect([60, 2400].map { model.watts(at: $0) } == [nil, nil])
+}
