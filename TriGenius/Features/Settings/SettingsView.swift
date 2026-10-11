@@ -321,6 +321,7 @@ final class AppSettings: ObservableObject {
     /// are the ones worth defaulting to for the coach.
     static let availableOpenRouterModels: [OpenRouterModel] = [
         ("openrouter/auto", "medium"),
+        ("anthropic/claude-haiku-5.5", "high"),
         ("z-ai/glm-5.3", "low"),
         ("google/gemini-3.8-flash", "medium"),
         ("openai/gpt-6-luna", "max"),
