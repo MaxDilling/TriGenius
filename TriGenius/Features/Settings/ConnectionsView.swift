@@ -35,11 +35,10 @@ struct ConnectionsView: View {
             }
 
             // Per-source controls — one section each, headed by the provider, so it's
-            // clear what belongs to whom. Each carries a Re-sync that re-pulls and
-            // recomputes that source's history in place.
+            // clear what belongs to whom.
             if settings.readSources.contains(.appleHealth) {
                 Section {
-                    ReadSourceSyncSection(source: .appleHealth)
+                    AppleHealthResyncRow()
                 } header: {
                     Label(DataSource.appleHealth.displayName, systemImage: DataSource.appleHealth.icon)
                 } footer: {
@@ -48,12 +47,11 @@ struct ConnectionsView: View {
             }
             if settings.readSources.contains(.garmin) {
                 Section {
-                    GarminLoginSection(settings: settings)
-                    ReadSourceSyncSection(source: .garmin)
+                    GarminLoginSection(settings: settings) { GarminSyncSection() }
                 } header: {
                     Label(DataSource.garmin.displayName, systemImage: DataSource.garmin.icon)
                 } footer: {
-                    Text("Re-sync re-fetches your Garmin history and recomputes TSS for every activity.")
+                    Text("Syncs run automatically and fetch only what's missing — workouts stored by an older TriGenius version are re-fetched along the way. Import reaches back the chosen history.")
                 }
             }
 

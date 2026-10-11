@@ -22,11 +22,12 @@ final class DataSyncCoordinator {
 
     private let store = TrainingDataStore.shared
 
-    /// Progress of the running sync's activity loop, nil when idle. Only that loop
-    /// is counted: it is the part that costs one network round-trip per workout,
-    /// while the metric range calls are a handful of requests that finish before any
-    /// total is known.
+    /// Progress of the running sync, nil when idle; `total` stays 0 until its
+    /// activity loop starts. Only that loop is counted: it is the part that costs one
+    /// network round-trip per workout, while the metric range calls are a handful of
+    /// requests that finish before any total is known.
     struct SyncProgress: Equatable {
+        var source: DataSource
         var done: Int
         var total: Int
     }
@@ -35,16 +36,17 @@ final class DataSyncCoordinator {
     /// The handler handed to a source, plus the guarantee that the bar clears however
     /// the sync ends. Nested syncs would fight over one bar, so the inner one reports
     /// nothing rather than resetting the outer's total.
-    private func withProgress<T>(_ body: (SyncProgressHandler?) async throws -> T) async rethrows -> T {
+    private func withProgress<T>(_ source: DataSource,
+                                 _ body: (SyncProgressHandler?) async throws -> T) async rethrows -> T {
         guard progress == nil else { return try await body(nil) }
-        progress = SyncProgress(done: 0, total: 0)
+        progress = SyncProgress(source: source, done: 0, total: 0)
         defer { progress = nil }
         return try await body { @Sendable @MainActor done, total in
-            self.progress = SyncProgress(done: done, total: total)
+            self.progress = SyncProgress(source: source, done: done, total: total)
         }
     }
 
-    /// How many recent activities to pull per sync.
+    /// How many recent workouts an Apple Health sync reads.
     private let syncCount = 100
     private static let lookbackDays = 7
 
@@ -64,35 +66,37 @@ final class DataSyncCoordinator {
         UserDefaults.standard.set(date.timeIntervalSince1970, forKey: lastSyncKey(source))
     }
 
-    /// Forget the last-sync watermark for every source so the next sync does a
-    /// full backfill. Pairs with wiping the local database.
+    /// Forget the last-sync watermark for every source so the next sync reaches back
+    /// its full history. Pairs with wiping the local database.
     func resetSyncState() {
         for source in DataSource.allCases {
             UserDefaults.standard.removeObject(forKey: lastSyncKey(source))
         }
     }
 
-    /// Re-pull one source from scratch, recomputing each activity in place (`ingest`
-    /// upserts by id, overwriting `detailsJSON` + TSS). Forgets the source's
-    /// watermark, then: Garmin force-re-fetches its activity streams over the deep
-    /// window (so cached rows pick up recomputed/new fields); Apple Health re-reads
-    /// every workout fresh (re-extracting HR/power/zones). Returns the activity
-    /// count, or nil on failure. Surfaced as the per-source "Re-sync" Settings action.
+    /// Re-read every Apple Health workout fresh, recomputing each in place (`ingest`
+    /// upserts by id, overwriting `detailsJSON` + TSS). Returns the activity count,
+    /// or nil on failure. Garmin needs no counterpart: its sync re-fetches every row
+    /// below `GarminService.ingestVersion` on its own.
     @discardableResult
-    func resync(source: DataSource) async -> Int? {
-        UserDefaults.standard.removeObject(forKey: lastSyncKey(source))
-        switch source {
-        case .garmin: return await deepBackfill(source: .garmin, force: true)
-        case .appleHealth: return await sync(source: .appleHealth)
-        }
+    func resyncAppleHealth() async -> Int? {
+        UserDefaults.standard.removeObject(forKey: lastSyncKey(.appleHealth))
+        return await sync(source: .appleHealth)
+    }
+
+    /// Remove everything Garmin synced (`TrainingDataStore.deleteSourceData`) and
+    /// forget its watermark, so the next sync reaches back the full `GarminHistory`.
+    func deleteGarminData() {
+        store.deleteSourceData("garmin")
+        UserDefaults.standard.removeObject(forKey: lastSyncKey(.garmin))
     }
 
     // MARK: - Sync
 
     /// Pull activities from `source` into the local database. Incremental: only
-    /// fetches the `windowDays` before today. The first ever sync does a full
-    /// recent backfill. Ingest upserts by id, so re-fetching days already synced
-    /// is harmless.
+    /// fetches the `windowDays` before today; the first ever sync reaches back the
+    /// full history. Ingest upserts by id, so re-fetching days already synced is
+    /// harmless.
     /// Returns the number of activities now stored, or nil on failure.
     @discardableResult
     func sync(source: DataSource) async -> Int? {
@@ -102,37 +106,9 @@ final class DataSyncCoordinator {
 
         switch source {
         case .garmin:
-            guard await GarminAuth.shared.isAuthenticated else { return nil }
-            // Ingest the performance + wellness metric history FIRST: activity TSS is
-            // scored by the store at ingest against the thresholds current on each
-            // activity's own date (`snapshot(asOf:)`), so the FTP/CSS/threshold series
-            // must already be present when the activities land. Non-fatal on its own.
-            // Only when Garmin is the chosen metrics source — otherwise the metrics
-            // come from the other provider and pulling them here would double-source.
-            if AppSettings.storedMetricsSource() == .garmin {
-                let metricsDays = days ?? 14   // seed ~2 weeks on a first/full sync
-                if let from = Calendar.current.date(byAdding: .day, value: -metricsDays, to: Calendar.current.startOfDay(for: Date())) {
-                    let m = Perf.begin("garmin.metrics")
-                    await syncGarminMetrics(from: from, to: Date())
-                    Perf.end(m)
-                }
-            }
-            // getActivities ingests (and the store scores) into the store as a side effect.
-            let ap = Perf.begin("garmin.activities")
-            let result = await withProgress {
-                await GarminService.shared.getActivities(sport: nil, count: syncCount, days: days, progress: $0)
-            }
-            Perf.end(ap)
-            // Only advance the watermark on success, else a network failure would
-            // skip the failed window on the next (now smaller) incremental sync.
-            guard !result.hasPrefix("✗") else { return nil }
-            // Mirror planned calendar workouts into the local scheduled store so
-            // the dashboard Agenda, calendar screen and weekly targets reflect them.
-            let sp = Perf.begin("garmin.scheduled")
-            await syncScheduledWorkouts(source: .garmin)
-            Perf.end(sp)
-            markSynced(source)
-            return store.count
+            let cal = Calendar.current
+            let from = days.flatMap { cal.date(byAdding: .day, value: -$0, to: cal.startOfDay(for: Date())) }
+            return await syncGarmin(from: from ?? GarminHistory.stored.start)
         case .appleHealth:
             do {
                 try await HealthKitService.shared.requestAuthorization()
@@ -153,7 +129,7 @@ final class DataSyncCoordinator {
                 // Build the rich per-workout record (HR/power/pace + the raw zone
                 // streams); the store buckets and scores it against each workout's own
                 // thresholds at ingest.
-                let dtos = try await withProgress {
+                let dtos = try await withProgress(.appleHealth) {
                     try await HealthKitService.shared.fetchActivities(count: count, since: since, progress: $0)
                 }
                 store.ingest(dtos)
@@ -200,53 +176,47 @@ final class DataSyncCoordinator {
         return allSucceeded
     }
 
-    // MARK: - Deep history backfill
+    // MARK: - Garmin sync
 
-    /// How far back a deep backfill / re-sync reaches.
-    ///
-    /// A full year, so the Statistics charts can actually fill the 1Y range they
-    /// offer, and so the threshold estimates resolve off a whole history rather than
-    /// a truncated one — the filters calibrate over their first eight weeks and
-    /// `LTHREstimate` reads 365 days, and a window that runs out mid-series makes the
-    /// estimate step for want of evidence in a way that reads as adaptation. Comfortably
-    /// past the 42-day CTL warm-up the backfill originally existed for.
-    static let deepHistoryDays = 365
-
-    /// Pull a deep slice of history (`deepHistoryDays`) into the local database, so
-    /// the PMC engine's CTL has a proper warm-up and the charts and threshold
-    /// estimates have a full year behind them. Garmin only — the Apple Health sync
-    /// already backfills generously on its first run. Returns the number of activities
-    /// ingested, or nil if unavailable / failed.
-    /// `force` re-fetches every activity in the window (ignoring the per-activity
-    /// cache) and recomputes its TSS + distance — used by the "recompute all" action
-    /// so existing activities pick up newly-computed fields (normalized pace, swim
-    /// length cleaning). Manual distance overrides are preserved.
+    /// Bring Garmin up to date from `from` to today: the metric history first, then
+    /// every activity the store lacks or holds below `GarminService.ingestVersion` —
+    /// reaching further back when an outdated row is older than `from`. The
+    /// incremental sync, the history import and an ignored workout's restore all run
+    /// through here. Returns the stored activity count, or nil on failure.
     @discardableResult
-    func deepBackfill(source: DataSource, days: Int = deepHistoryDays,
-                      force: Bool = false) async -> Int? {
-        guard source == .garmin, await GarminAuth.shared.isAuthenticated else { return nil }
-        let cal = Calendar.current
-        let today = cal.startOfDay(for: Date())
-        guard let from = cal.date(byAdding: .day, value: -days, to: today) else { return nil }
-        // Backfill the full window's wellness + historical performance series FIRST
-        // — both the primary path that populates deep marker/recovery history AND the
-        // prerequisite for as-of-date TSS scoring of the activities ingested next
-        // (each scored against the FTP/threshold current on its own date). Skipped when
-        // Garmin isn't the chosen metrics source — those markers come from the other
-        // provider then, and activities are scored against whatever it already ingested.
-        if AppSettings.storedMetricsSource() == .garmin {
-            await syncGarminMetrics(from: from, to: today)
-        }
-        let count = await withProgress {
-            await GarminService.shared.backfillActivities(
-                startDate: DateFormatter.ymd.string(from: from),
+    func syncGarmin(from: Date) async -> Int? {
+        guard await GarminAuth.shared.isAuthenticated else { return nil }
+        let today = Date()
+        let outdated = store.oldestOutdatedActivity(source: "garmin", version: GarminService.ingestVersion)
+        let start = min(Calendar.current.startOfDay(for: from), outdated ?? .distantFuture)
+        return await withProgress(.garmin) { progress in
+            // Metrics FIRST: activity TSS is scored by the store at ingest against the
+            // thresholds current on each activity's own date (`snapshot(asOf:)`), so
+            // the FTP/CSS/threshold series must already be present when the
+            // activities land. Only when Garmin is the chosen metrics source —
+            // otherwise they come from the other provider.
+            if AppSettings.storedMetricsSource() == .garmin {
+                let m = Perf.begin("garmin.metrics")
+                await syncGarminMetrics(from: start, to: today)
+                Perf.end(m)
+            }
+            let ap = Perf.begin("garmin.activities")
+            let fetched = await GarminService.shared.syncActivities(
+                startDate: DateFormatter.ymd.string(from: start),
                 endDate: DateFormatter.ymd.string(from: today),
-                force: force,
-                progress: $0
-            )
+                progress: progress)
+            Perf.end(ap)
+            // Only advance the watermark on success, else a network failure would
+            // skip the failed window on the next (now smaller) incremental sync.
+            guard fetched != nil else { return nil }
+            // Mirror planned calendar workouts into the local scheduled store so
+            // the dashboard Agenda, calendar screen and weekly targets reflect them.
+            let sp = Perf.begin("garmin.scheduled")
+            await syncScheduledWorkouts(source: .garmin)
+            Perf.end(sp)
+            markSynced(.garmin)
+            return store.count
         }
-        if count != nil { markSynced(source) }
-        return count
     }
 
     /// Re-fetch one completed activity fresh from its source and re-ingest it
@@ -258,7 +228,7 @@ final class DataSyncCoordinator {
         if id.hasPrefix("garmin:") {
             guard await GarminAuth.shared.isAuthenticated else { return false }
             let day = DateFormatter.ymd.string(from: date)
-            return await GarminService.shared.backfillActivities(startDate: day, endDate: day, force: true) != nil
+            return await GarminService.shared.syncActivities(startDate: day, endDate: day, force: true) != nil
         }
         if id.hasPrefix("healthkit:") {
             guard let uuid = UUID(uuidString: TrainingDataStore.rawId(id)),
@@ -292,8 +262,10 @@ final class DataSyncCoordinator {
         let (text, settings) = await settingsTask
         if !history.isEmpty { store.ingestMetrics(history) }
         if let settings {
+            // No later than the window's start: on a first sync the activities it
+            // covers are not stored yet.
             store.ingestMetrics(Self.metrics(fromGarminSettings: settings, date: Date(),
-                                             maxHRSeed: store.seedDate(for: "max_hr")))
+                                             maxHRSeed: store.seedDate(for: "max_hr").map { min($0, from) }))
         }
         return text
     }
@@ -421,15 +393,16 @@ final class DataSyncCoordinator {
     /// `maxHRSeed` is the date a first HRmax belongs on, or nil when one is already
     /// stored. HRmax is an athlete constant and the dominant input to every threshold
     /// estimate — 4 bpm is worth up to 10 s/km of LT pace — so it is taken from the
-    /// watch profile **once**, as the athlete's own value: written `manual`, which
-    /// outranks every synced source, so a correction here survives the next sync
-    /// instead of being overwritten by whatever the watch still has configured.
+    /// watch profile **once** and never re-synced: whatever the watch still has
+    /// configured never replaces it, and the athlete's own entry outranks it
+    /// (`PerformanceHistory.manualFirstKeys`). Written as `garmin`, so deleting the
+    /// Garmin data takes it along and leaves the athlete's own entries.
     static func metrics(fromGarminSettings settings: [String: Any], date: Date,
                         maxHRSeed: Date?) -> [IngestedMetric] {
         var out: [IngestedMetric] = []
         if let maxHRSeed, let maxHR = (settings["max_hr"] as? NSNumber)?.doubleValue, maxHR > 0 {
             out.append(IngestedMetric(metricKey: "max_hr", value: maxHR, unit: "bpm",
-                                      source: "manual", date: maxHRSeed))
+                                      source: "garmin", date: maxHRSeed))
         }
         out += zoneMetrics(settings["hr_zones"], prefix: "hr_zone", unit: "bpm", source: "garmin", date: date)
         out += zoneMetrics(settings["power_zones"], prefix: "power_zone", unit: "watts", source: "garmin", date: date)

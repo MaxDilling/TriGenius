@@ -899,8 +899,11 @@ struct AthleteProfileView: View {
 
 // MARK: - Garmin Login Section
 
-struct GarminLoginSection: View {
+/// Garmin sign-in, or once connected the account row, `connected` (the rows that
+/// need the account) and Sign out last.
+struct GarminLoginSection<Connected: View>: View {
     @ObservedObject var settings: AppSettings
+    @ViewBuilder let connected: Connected
 
     @State private var password = ""
     @State private var mfaCode = ""
@@ -915,18 +918,19 @@ struct GarminLoginSection: View {
     var body: some View {
         Group {
             if isConnected {
-                Label("Connected to Garmin", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(Theme.Palette.success)
-                    .font(.caption)
-                if !settings.garminEmail.isEmpty {
-                    Text(settings.garminEmail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                Label {
+                    Text(settings.garminEmail.isEmpty ? "Connected" : "Connected as \(settings.garminEmail)")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } icon: {
+                    Image(systemName: "checkmark.circle.fill").foregroundStyle(Theme.Palette.success)
                 }
+                connected
                 Button(role: .destructive) {
                     Task { await logout() }
                 } label: {
                     Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                        .foregroundStyle(Theme.Palette.danger)
                 }
             } else {
                 TextField("Garmin email", text: $settings.garminEmail)
@@ -1020,13 +1024,12 @@ struct GarminLoginSection: View {
     }
 
     private func finishConnected() async {
-        let name = (try? await GarminClient.shared.fullName()) ?? nil
         password = ""
         mfaCode = ""
         needsMFA = false
         isConnected = true
         isError = false
-        statusMessage = name.map { "Connected as \($0)" } ?? "Successfully connected."
+        statusMessage = nil
     }
 
     private func logout() async {
@@ -1035,6 +1038,10 @@ struct GarminLoginSection: View {
         statusMessage = "Signed out."
         isError = false
     }
+}
+
+extension GarminLoginSection where Connected == EmptyView {
+    init(settings: AppSettings) { self.init(settings: settings) { EmptyView() } }
 }
 
 // MARK: - Memory Debug View
@@ -1307,14 +1314,9 @@ private struct CalendarSelectionList: View {
 
 // MARK: - Re-sync Section
 
-/// Per-source "Re-sync" row: forgets the source's watermark and re-pulls its
-/// history, recomputing each activity in place. One instance per enabled read
-/// source (Garmin / Apple Health), so the action reads as belonging to that source.
-/// Garmin re-pulls `DataSyncCoordinator.deepHistoryDays`; Apple Health re-reads
-/// every workout it can see.
-struct ReadSourceSyncSection: View {
-    let source: DataSource
-
+/// Apple Health's "Re-sync" row: re-reads every workout it can see, recomputing
+/// each activity in place.
+struct AppleHealthResyncRow: View {
     @State private var isWorking = false
     @State private var statusMessage: String?
     @State private var isError = false
@@ -1327,12 +1329,12 @@ struct ReadSourceSyncSection: View {
                 if isWorking {
                     HStack { ProgressView(); Text("Re-syncing…") }
                 } else {
-                    Label("Re-sync \(source.displayName)", systemImage: "arrow.triangle.2.circlepath")
+                    Label("Re-sync Apple Health", systemImage: "arrow.triangle.2.circlepath")
                 }
             }
             .disabled(isWorking)
 
-            if isWorking, let p = DataSyncCoordinator.shared.progress, p.total > 0 {
+            if isWorking, let p = DataSyncCoordinator.shared.progress, p.source == .appleHealth, p.total > 0 {
                 ProgressView(value: Double(p.done), total: Double(p.total)) {
                     Text("Activity \(p.done) of \(p.total)…")
                 }
@@ -1350,18 +1352,13 @@ struct ReadSourceSyncSection: View {
         isWorking = true
         statusMessage = nil
         defer { isWorking = false }
-        if source == .garmin, await GarminAuth.shared.isAuthenticated == false {
-            statusMessage = "Connect to Garmin first."
-            isError = true
-            return
-        }
-        let count = await DataSyncCoordinator.shared.resync(source: source)
+        let count = await DataSyncCoordinator.shared.resyncAppleHealth()
         if let count {
             isError = false
             statusMessage = "Re-synced \(count) activities — TSS recomputed."
         } else {
             isError = true
-            statusMessage = source == .garmin ? "Re-sync failed — check your Garmin connection." : "Re-sync failed."
+            statusMessage = "Re-sync failed."
         }
     }
 }

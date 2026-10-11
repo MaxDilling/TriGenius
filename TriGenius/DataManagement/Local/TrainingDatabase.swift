@@ -157,6 +157,10 @@ final class WorkoutRecord {
     /// single-sport row. When present, `tss` and `distanceKm` are the sum over
     /// these and every per-sport reader goes through `sportContributions`.
     var segmentsJSON: String = ""
+    /// The source extractor version that wrote the completed section
+    /// (`GarminService.ingestVersion`); a sync re-fetches every row below the
+    /// current one. 0 for sources that don't version their extraction.
+    var ingestVersion: Int = 0
 
     init(
         id: String,
@@ -340,13 +344,8 @@ struct IngestedActivity: Sendable {
     /// own, and one entry per multisport leg keyed by that leg's `sourceId`.
     let zoneSamples: ZoneSamples
     let legZoneSamples: [String: ZoneSamples]
-}
-
-/// The cached, already-computed result of a stored activity — lets a resync reuse
-/// it instead of re-fetching streams / recomputing TSS for a known workout.
-struct CachedActivity: Sendable {
-    let tss: Double?
-    let detailsJSON: String
+    /// See `WorkoutRecord.ingestVersion`.
+    var ingestVersion = 0
 }
 
 /// Sendable snapshot used to hand planned workouts from the (non-MainActor)
@@ -1508,6 +1507,7 @@ final class TrainingDataStore {
         let paceHRProfileJSON: String
         let submaxProfileJSON: String
         let wPrimeFloorsJSON: String
+        let ingestVersion: Int
 
         init(_ a: IngestedActivity, scored: ScoredActivity) {
             source = a.source; date = a.date
@@ -1522,6 +1522,7 @@ final class TrainingDataStore {
             paceHRProfileJSON = scored.paceHRProfileJSON
             submaxProfileJSON = scored.submaxProfileJSON
             wPrimeFloorsJSON = scored.wPrimeFloorsJSON
+            ingestVersion = a.ingestVersion
         }
 
         init(_ r: WorkoutRecord) {
@@ -1536,6 +1537,7 @@ final class TrainingDataStore {
             paceHRProfileJSON = r.paceHRProfileJSON
             submaxProfileJSON = r.submaxProfileJSON
             wPrimeFloorsJSON = r.wPrimeFloorsJSON
+            ingestVersion = r.ingestVersion
         }
     }
 
@@ -1569,6 +1571,7 @@ final class TrainingDataStore {
         record.steadyHR20 = c.steadyHR20
         record.peakHR = c.peakHR
         record.paceHRProfileJSON = c.paceHRProfileJSON
+        record.ingestVersion = c.ingestVersion
     }
 
     /// Re-materialize the athlete's stored edits (`overridesJSON`) onto a freshly
@@ -1699,27 +1702,52 @@ final class TrainingDataStore {
                               zoneHistogramData: ZoneHistogram.encode(a.zoneSamples))
     }
 
-    /// Cached `(tss, detailsJSON)` for the given ids — a resync passes the ids it is
-    /// about to fetch so already-stored workouts can be reused without re-fetching
-    /// their streams / recomputing TSS (purely a fetch-avoidance cache; the
-    /// athlete's manual edits survive independently via the override layer).
-    /// Resolves the raw provider id against folded plan rows too.
-    func cachedActivities(ids: Set<String>) -> [String: CachedActivity] {
-        guard !ids.isEmpty else { return [:] }
-        let all = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
-            predicate: #Predicate { $0.isCompleted }))) ?? []
-        var out: [String: CachedActivity] = [:]
-        for r in all {
-            if ids.contains(r.id) {
-                out[r.id] = CachedActivity(tss: r.tss, detailsJSON: r.detailsJSON)
-            }
-            // A completed activity folded into a plan is keyed by the plan id; expose
-            // it under the linked activity's id too so the resync can still find it.
-            if let cid = r.externalRefs[Self.completedRefKey], ids.contains(cid) {
-                out[cid] = CachedActivity(tss: r.tss, detailsJSON: r.detailsJSON)
-            }
+    /// The rows holding an activity of `source` written below `version`, oldest
+    /// first, each with its provider activity id (`garmin:123`) — a folded plan is
+    /// keyed by the plan id and carries the activity's in `externalRefs`.
+    private func completedActivities(of source: String, below version: Int = .max)
+        -> [(record: WorkoutRecord, activityId: String)] {
+        let prefix = source + ":"
+        let rows = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
+            predicate: #Predicate {
+                $0.isCompleted && $0.ingestVersion < version && ($0.source == source || $0.isPlanned)
+            },
+            sortBy: [SortDescriptor(\.date)]))) ?? []
+        return rows.compactMap { r in
+            let id = r.isPlanned ? r.externalRefs[Self.completedRefKey] : r.id
+            return id.flatMap { $0.hasPrefix(prefix) ? (r, $0) : nil }
         }
-        return out
+    }
+
+    /// Which of `ids` a sync of `source` has to fetch: those not stored yet or
+    /// stored below `version`. The athlete's ignored workouts never are — `ingest`
+    /// would drop them anyway.
+    func idsNeedingFetch(_ ids: Set<String>, source: String, version: Int) -> Set<String> {
+        let current = completedActivities(of: source)
+            .filter { $0.record.ingestVersion >= version }.map(\.activityId)
+        return ids.subtracting(current).subtracting(IgnoredWorkouts.ids)
+    }
+
+    /// The day of the oldest `source` activity stored below `version` — how far back
+    /// a sync has to reach to bring every row up to date. Nil when none is outdated.
+    func oldestOutdatedActivity(source: String, version: Int) -> Date? {
+        completedActivities(of: source, below: version).first?.record.date
+    }
+
+    /// Remove everything `source` synced: its activities, with the athlete's edits
+    /// on them, and its metrics. A plan keeps its completion link, so the re-import
+    /// folds the activity back in; plans and manual metrics stay.
+    func deleteSourceData(_ source: String) {
+        for (r, _) in completedActivities(of: source) {
+            RouteCache.invalidate(r.id)
+            if r.isPlanned { Self.clearCompleted(r) } else { context.delete(r) }
+        }
+        for m in (try? context.fetch(FetchDescriptor<PerformanceMetricRecord>(
+            predicate: #Predicate { $0.source == source }))) ?? [] {
+            context.delete(m)
+        }
+        try? context.save()
+        markChanged()
     }
 
     /// Manually override one completed activity's distance (km). The edit lives in
@@ -2076,6 +2104,12 @@ final class TrainingDataStore {
         activity.name = SportFamily(sportKey: plan.sport).displayName
         activity.overridesJSON = plan.overridesJSON
         context.insert(activity)
+        Self.clearCompleted(plan)
+        plan.setExternalRef(target: Self.completedRefKey, externalId: nil)
+    }
+
+    /// Strip a folded plan back to an open one on its planned slot.
+    private static func clearCompleted(_ plan: WorkoutRecord) {
         plan.isCompleted = false
         plan.date = plan.plannedDate ?? plan.date
         plan.startMinute = plan.plannedStartMinute
@@ -2093,8 +2127,8 @@ final class TrainingDataStore {
         plan.paceHRProfileJSON = ""
         plan.submaxProfileJSON = ""
         plan.wPrimeFloorsJSON = ""
+        plan.ingestVersion = 0
         plan.overridesJSON = "{}"
-        plan.setExternalRef(target: Self.completedRefKey, externalId: nil)
     }
 
     /// Apply the provider's authoritative plan→activity completion links to plans
@@ -2190,7 +2224,7 @@ final class TrainingDataStore {
     /// Fetch a single completed activity by id — the stored id or the raw
     /// provider id the coach sees (completed rows are keyed `source:rawId`).
     /// Falls back to folded plan rows, whose linked activity id lives in
-    /// `externalRefs` (see `cachedActivities`).
+    /// `externalRefs` (see `completedActivities`).
     func activity(id: String) -> WorkoutRecord? {
         let candidates = [id, "garmin:\(id)", "healthkit:\(id)", "local:\(id)"]
         if let hit = (try? context.fetch(

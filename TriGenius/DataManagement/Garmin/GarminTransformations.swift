@@ -76,30 +76,6 @@ nonisolated enum GarminTransform {
         return String(format: "0:%04.1f", rem)
     }
 
-    static func countBySport(_ activities: [[String: Any]]) -> [String: Int] {
-        var counts: [String: Int] = [:]
-        for a in activities {
-            let sport = a["sport"] as? String ?? "other"
-            counts[sport, default: 0] += 1
-        }
-        return counts
-    }
-
-    static func calculateActivitySummary(_ activities: [[String: Any]]) -> [String: Any] {
-        guard !activities.isEmpty else { return [:] }
-        let totalDuration = activities.reduce(0.0) { $0 + (($1["duration_minutes"] as? Double) ?? 0) }
-        let totalDistance = activities.reduce(0.0) { $0 + (($1["distance_km"] as? Double) ?? 0) }
-        let avgHR = activities.compactMap { $0["avg_hr"] as? Int }
-        var out: [String: Any] = [
-            "total_activities": activities.count,
-            "total_duration_minutes": (totalDuration * 10).rounded() / 10,
-            "total_distance_km": (totalDistance * 100).rounded() / 100,
-            "sports_breakdown": countBySport(activities)
-        ]
-        out["avg_heart_rate"] = avgHR.isEmpty ? NSNull() : Int((Double(avgHR.reduce(0, +)) / Double(avgHR.count)).rounded())
-        return out
-    }
-
     /// Contiguous sample segments for a named time-series metric (e.g. `directPower`,
     /// `directSpeed`) from Garmin activity details, split on recording gaps (>1 s).
     static func metricSegments(_ details: [String: Any], key: String) -> [[Double]] {

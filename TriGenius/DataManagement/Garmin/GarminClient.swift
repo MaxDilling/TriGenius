@@ -68,7 +68,7 @@ nonisolated final class GarminClient: Sendable {
         guard let http = response as? HTTPURLResponse else { throw GarminAuthError.network("no response") }
         guard (200..<300).contains(http.statusCode) else {
             let body = String(data: data, encoding: .utf8) ?? ""
-            throw GarminAuthError.network("HTTP \(http.statusCode) on \(path): \(body.prefix(160))")
+            throw GarminAuthError.http(status: http.statusCode, detail: "on \(path): \(body.prefix(160))")
         }
         if data.isEmpty { return nil }
         return try? JSONSerialization.jsonObject(with: data)
@@ -78,22 +78,7 @@ nonisolated final class GarminClient: Sendable {
         s.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? s
     }
 
-    // MARK: - Profile
-
-    func fullName() async throws -> String? {
-        let profile = try await connectapi("/userprofile-service/socialProfile") as? [String: Any]
-        return profile?["fullName"] as? String
-    }
-
     // MARK: - Activities
-
-    func getActivities(start: Int = 0, limit: Int = 20) async throws -> [[String: Any]] {
-        let result = try await connectapi(
-            "/activitylist-service/activities/search/activities",
-            query: [("start", String(start)), ("limit", String(limit))]
-        )
-        return result as? [[String: Any]] ?? []
-    }
 
     func getActivitiesByDate(start: String, end: String) async throws -> [[String: Any]] {
         var activities: [[String: Any]] = []

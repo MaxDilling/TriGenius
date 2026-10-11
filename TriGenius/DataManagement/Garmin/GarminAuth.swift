@@ -46,6 +46,8 @@ enum GarminAuthError: LocalizedError {
     case oauthExchangeFailed(String)
     case notAuthenticated
     case network(String)
+    /// A non-2xx connectapi response.
+    case http(status: Int, detail: String)
 
     var errorDescription: String? {
         switch self {
@@ -63,6 +65,8 @@ enum GarminAuthError: LocalizedError {
             return "Not connected to Garmin. Please sign in from Settings."
         case .network(let detail):
             return "Network error: \(detail)"
+        case .http(let status, let detail):
+            return "Network error: HTTP \(status) \(detail)"
         }
     }
 }

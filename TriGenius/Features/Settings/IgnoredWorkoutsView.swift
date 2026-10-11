@@ -3,9 +3,9 @@ import SwiftUI
 // MARK: - Ignored workouts management
 //
 // Lists the athlete's blacklisted workouts (see `IgnoredWorkouts`) and lets them
-// restore one. Restoring removes it from the blacklist and re-syncs its source
-// from scratch — an incremental sync won't re-fetch past its watermark, so the
-// full `resync` is what brings the row back.
+// restore one. Restoring removes it from the blacklist and re-fetches it — an
+// incremental sync won't reach back past its watermark: Garmin syncs from the
+// workout's day, Apple Health re-reads every workout.
 
 struct IgnoredWorkoutsView: View {
     @State private var entries = IgnoredWorkouts.entries
@@ -66,7 +66,10 @@ struct IgnoredWorkoutsView: View {
         restoring = entry.id
         TrainingDataStore.shared.restoreIgnoredWorkout(id: entry.id)
         Task {
-            _ = await DataSyncCoordinator.shared.resync(source: source)
+            switch source {
+            case .garmin: await DataSyncCoordinator.shared.syncGarmin(from: entry.date)
+            case .appleHealth: await DataSyncCoordinator.shared.resyncAppleHealth()
+            }
             restoring = nil
             entries = IgnoredWorkouts.entries
         }

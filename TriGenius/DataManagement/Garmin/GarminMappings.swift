@@ -16,17 +16,6 @@ nonisolated enum GarminMappings {
         29: "trail_running", 37: "virtual_cycling", 60: "other", 89: "running"
     ]
 
-    /// Coach-facing sport name → Garmin sportTypeId set used to filter activities.
-    static let sportFilterIDs: [String: [Int]] = [
-        "running": [1, 17, 29, 89],
-        "cycling": [2, 25, 37],
-        "swimming": [5, 26, 27],
-        "strength": [9, 10],
-        "gym": [9, 10],
-        "hiking": [3],
-        "walking": [6]
-    ]
-
     struct SportType { let sportTypeId: Int; let sportTypeKey: String; let displayOrder: Int
         var dict: [String: Any] { ["sportTypeId": sportTypeId, "sportTypeKey": sportTypeKey, "displayOrder": displayOrder] }
     }

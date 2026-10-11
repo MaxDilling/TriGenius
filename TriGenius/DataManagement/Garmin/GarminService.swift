@@ -84,6 +84,14 @@ nonisolated final class GarminService: Sendable {
         return detail
     }
 
+    /// `fetch`'s result, or nil when Garmin holds none for the activity (HTTP 404).
+    /// Any other failure throws: an activity is stored only once every fetch went
+    /// through, so a dropped connection leaves it missing for the next sync to retry
+    /// rather than stored without the data that fetch carried.
+    private func ifPresent<T>(_ fetch: () async throws -> T) async throws -> T? {
+        do { return try await fetch() } catch GarminAuthError.http(status: 404, detail: _) { return nil }
+    }
+
     /// The legs of a multisport parent, shaped into segments. Garmin files each leg
     /// (and each transition) as its own activity, reachable only via the parent's
     /// `metadataDTO.childIds` — the activity list returns the parent alone. Each
@@ -92,7 +100,7 @@ nonisolated final class GarminService: Sendable {
     /// scores the same TSS. Returns the segments plus the bike leg's power curve
     /// (the only leg whose power belongs under the cycling key) and each leg's zone
     /// streams, keyed by its `sourceId`. Empty when not a multisport parent.
-    private func multisportSegments(_ activity: [String: Any], dto: [String: Any]?) async
+    private func multisportSegments(_ activity: [String: Any], dto: [String: Any]?) async throws
         -> (segmentsJSON: String, powerCurveJSON: String, legZoneSamples: [String: ZoneSamples]) {
         // The list entry only *flags* a multisport parent (`parent: true`); the
         // child ids live in the activity's own DTO.
@@ -106,8 +114,8 @@ nonisolated final class GarminService: Sendable {
         var powerCurveJSON = ""
         var legZoneSamples: [String: ZoneSamples] = [:]
         for child in childIds {
-            guard let dto = try? await client.getActivity(id: "\(child)") else { continue }
-            let leg = await formatActivityRecord(GarminTransform.flattenActivity(dto), dto: dto)
+            guard let dto = try await ifPresent({ try await client.getActivity(id: "\(child)") }) else { continue }
+            let leg = try await formatActivityRecord(GarminTransform.flattenActivity(dto), dto: dto)
             if leg.record["cycling"] != nil, !leg.powerCurveJSON.isEmpty { powerCurveJSON = leg.powerCurveJSON }
             let start = GarminTransform.timestamp((dto["summaryDTO"] as? [String: Any])?["startTimeGMT"]) ?? parentStart
             let sourceId = "garmin:\(child)"
@@ -135,7 +143,7 @@ nonisolated final class GarminService: Sendable {
     /// `dto` is the activity's own DTO when the caller already holds it (a multisport
     /// leg); otherwise it is fetched here — the list entry lacks the athlete's
     /// rating and a parent's child ids.
-    private func formatActivityRecord(_ activity: [String: Any], dto: [String: Any]? = nil) async -> FormattedActivity {
+    private func formatActivityRecord(_ activity: [String: Any], dto: [String: Any]? = nil) async throws -> FormattedActivity {
         let startTime = activity["startTimeLocal"] as? String ?? ""
         let activityType = (activity["activityType"] as? [String: Any])?["typeKey"] as? String ?? "unknown"
         let activityId = activity["activityId"].map { "\($0)" }
@@ -143,15 +151,15 @@ nonisolated final class GarminService: Sendable {
         // A multisport parent carries no per-discipline data of its own — its legs
         // do, as segments. The bike leg's power curve becomes the row's.
         var dto = dto
-        if dto == nil, let activityId { dto = try? await client.getActivity(id: activityId) }
-        let (segmentsJSON, legPowerCurve, legZoneSamples) = await multisportSegments(activity, dto: dto)
+        if dto == nil, let activityId { dto = try await ifPresent { try await client.getActivity(id: activityId) } }
+        let (segmentsJSON, legPowerCurve, legZoneSamples) = try await multisportSegments(activity, dto: dto)
         var powerCurveJSON = legPowerCurve
 
         // One full-details fetch feeds NGP, the power curve and the metric streams
         // (callers gate this function to new/forced activities only). A parent needs
         // none of the three — each leg fetched its own — so it skips the fetch.
         var details: [String: Any]?
-        if let activityId, segmentsJSON.isEmpty { details = try? await fetchFullDetails(id: activityId) }
+        if let activityId, segmentsJSON.isEmpty { details = try await ifPresent { try await fetchFullDetails(id: activityId) } }
 
         func intOrNull(_ key: String) -> Any { Coerce.double(activity[key]).map { Int($0.rounded()) } ?? NSNull() }
 
@@ -227,7 +235,7 @@ nonisolated final class GarminService: Sendable {
             var intervals: [[String: Any]]? = nil
             var lengths: [[String: Any]] = []
             if let activityId {
-                if let splits = try? await client.getActivitySplits(id: activityId),
+                if let splits = try await ifPresent({ try await client.getActivitySplits(id: activityId) }),
                    let lapDTOs = splits["lapDTOs"] as? [[String: Any]], !lapDTOs.isEmpty {
                     let built = GarminTransform.buildSwimIntervals(lapDTOs, poolLengthM: poolLengthM)
                     intervals = built.isEmpty ? nil : built
@@ -254,7 +262,7 @@ nonisolated final class GarminService: Sendable {
             // Effective distance + sTSS are resolved by the store at ingest
             // (`TrainingDataStore.ingest` → `TSSScoring.score`).
         } else if family == .strength, let activityId,
-                  let sets = try? await client.getActivityExerciseSets(id: activityId),
+                  let sets = try await ifPresent({ try await client.getActivityExerciseSets(id: activityId) }),
                   let exercises = GarminTransform.strengthExercises(sets), !exercises.isEmpty {
             data["strength"] = ["exercises": exercises]
         }
@@ -338,103 +346,60 @@ nonisolated final class GarminService: Sendable {
             streamsData: formatted.streamsData,
             segmentsJSON: formatted.segmentsJSON,
             zoneSamples: formatted.zoneSamples,
-            legZoneSamples: formatted.legZoneSamples
+            legZoneSamples: formatted.legZoneSamples,
+            ingestVersion: Self.ingestVersion
         )
     }
 
-    // MARK: - Activity fetch
+    // MARK: - Activity sync
 
-    func getActivities(sport: String?, count: Int = 10, days: Int?,
-                       progress: SyncProgressHandler? = nil) async -> String {
-        do {
-            let fetchCount = sport != nil ? count * 3 : count
-            let raw = try await client.getActivities(start: 0, limit: min(fetchCount, 100))
-            // Cutoff at the start of the day so `days: 1` keeps all of yesterday
-            // (and today), not just the last 24h from now. See DataSyncCoordinator.
-            let cutoff: Date? = days.map {
-                Calendar.current.date(byAdding: .day, value: -$0, to: Calendar.current.startOfDay(for: Date()))!
+    /// The shape `formatActivityRecord` fetches and extracts. Bump it with every
+    /// change there that stored rows have to be re-fetched for — the next sync then
+    /// refreshes each older row. A change derivable from the stored streams is a
+    /// local recompute instead.
+    static let ingestVersion = 1
+
+    /// Activities per store write. The batches run oldest first, so each scores
+    /// against the threshold evidence of every earlier activity, exactly as one
+    /// write of the whole range would.
+    private static let ingestBatch = 25
+
+    /// Bring `[startDate, endDate]` (`yyyy-MM-dd`, inclusive) up to date: fetch every
+    /// activity Garmin lists there that the store lacks or holds below
+    /// `ingestVersion` — with `force`, every one — and ingest it. Returns how many
+    /// were fetched, or nil when the listing or any activity failed: that activity
+    /// stays missing or outdated, and the caller keeps its watermark so the next
+    /// sync retries it.
+    func syncActivities(startDate: String, endDate: String, force: Bool = false,
+                        progress: SyncProgressHandler? = nil) async -> Int? {
+        guard let listed = try? await client.getActivitiesByDate(start: startDate, end: endDate) else { return nil }
+        let ids = Set(listed.compactMap(Self.storedId))
+        let needed = force ? ids : await TrainingDataStore.shared.idsNeedingFetch(
+            ids, source: "garmin", version: Self.ingestVersion)
+        let toFetch = listed.filter { Self.storedId($0).map(needed.contains) ?? false }
+            .sorted { ($0["startTimeLocal"] as? String ?? "") < ($1["startTimeLocal"] as? String ?? "") }
+        var batch: [IngestedActivity] = []
+        var failed = 0
+        for (i, activity) in toFetch.enumerated() {
+            await progress?(i, toFetch.count)
+            do {
+                if let dto = ingestDTO(try await formatActivityRecord(activity)) { batch.append(dto) }
+            } catch {
+                failed += 1
+                log.error("\(Self.storedId(activity) ?? "activity", privacy: .public) not stored: \(error.localizedDescription, privacy: .public)")
             }
-            let targetIDs = sport.flatMap { GarminMappings.sportFilterIDs[$0.lowercased()] }
-
-            // Cache: reuse already-stored activities verbatim; only NEW workouts pay
-            // the extra stream/splits fetch. TSS is scored by the store at ingest.
-            let candidateIDs = Set(raw.compactMap { ($0["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" } })
-            let cache = await TrainingDataStore.shared.cachedActivities(ids: candidateIDs)
-
-            var formatted: [[String: Any]] = []
-            var toIngest: [IngestedActivity] = []
-            for (i, activity) in raw.enumerated() {
-                await progress?(i, raw.count)
-                if let targetIDs, let sid = (activity["sportTypeId"] as? NSNumber)?.intValue, !targetIDs.contains(sid) {
-                    continue
-                }
-                let startTime = activity["startTimeLocal"] as? String ?? ""
-                if let cutoff, startTime.count >= 10, let aDate = GarminTransform.date(from: String(startTime.prefix(10))), aDate < cutoff {
-                    continue
-                }
-                let gid = (activity["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" }
-                if let gid, let cached = cache[gid],
-                   let cachedData = cached.detailsJSON.data(using: .utf8),
-                   let cachedRec = (try? JSONSerialization.jsonObject(with: cachedData)) as? [String: Any] {
-                    formatted.append(cachedRec)            // already stored & computed
-                } else {
-                    // New (uncached) activity: pays the extra serial detail/splits
-                    // fetch inside formatActivityRecord. One span per activity, so the
-                    // timeline shows whether these round-trips are the launch bottleneck.
-                    let dp = Perf.begin("garmin.activityDetail")
-                    let shaped = await formatActivityRecord(activity)
-                    Perf.end(dp)
-                    formatted.append(shaped.record)
-                    if let dto = ingestDTO(shaped) { toIngest.append(dto) }
-                }
-                if formatted.count >= count { break }
+            if batch.count == Self.ingestBatch {
+                await TrainingDataStore.shared.ingest(batch)
+                batch = []
             }
-
-            // Persist into the local time-series database (GOAL.md step 1).
-            await TrainingDataStore.shared.ingest(toIngest)
-
-            var data: [String: Any] = [
-                "activities": formatted,
-                "count": formatted.count,
-                "summary": GarminTransform.calculateActivitySummary(formatted)
-            ]
-            data["filter"] = (sport != nil || days != nil) ? ["sport": sport as Any, "days": days as Any] : NSNull()
-            return resultString(success: true, data: data, message: "Retrieved \(formatted.count) \(sport ?? "all") activities")
-        } catch {
-            return resultString(success: false, data: nil, message: "Failed to fetch activities: \(authMessage(error))")
         }
+        await TrainingDataStore.shared.ingest(batch)
+        await progress?(toFetch.count, toFetch.count)
+        return failed == 0 ? toFetch.count : nil
     }
 
-    // MARK: - Deep history backfill
-    //
-    // CTL (Fitness, 42-day EWMA) needs a long warm-up to be reliable; the regular
-    // incremental sync only keeps recently-synced activities. This pulls a whole
-    // date range (paginated, not capped at 100) into the local database to give
-    // the PMC engine a proper warm-up. Returns the number of activities ingested,
-    // or nil on failure. FEATURES.md "Deeper Garmin history backfill".
-    /// `force` re-fetches & recomputes even already-stored activities (the
-    /// "recompute all" path); otherwise stored activities are skipped (the cache).
-    func backfillActivities(startDate: String, endDate: String, force: Bool = false,
-                            progress: SyncProgressHandler? = nil) async -> Int? {
-        do {
-            let raw = try await client.getActivitiesByDate(start: startDate, end: endDate)
-            let candidateIDs = Set(raw.compactMap { ($0["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" } })
-            let cache = await TrainingDataStore.shared.cachedActivities(ids: candidateIDs)
-            var toIngest: [IngestedActivity] = []
-            for (i, activity) in raw.enumerated() {
-                await progress?(i, raw.count)
-                let gid = (activity["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" }
-                if !force, let gid, cache[gid] != nil { continue }   // cache: skip known
-                // TSS + effective distance are scored by the store at ingest; the
-                // athlete's manual edits re-apply there from the override layer.
-                if let dto = ingestDTO(await formatActivityRecord(activity)) { toIngest.append(dto) }
-            }
-            await progress?(raw.count, raw.count)
-            await TrainingDataStore.shared.ingest(toIngest)
-            return toIngest.count
-        } catch {
-            return nil
-        }
+    private static func storedId(_ activity: [String: Any]) -> String? {
+        (activity["activityId"] as? NSNumber).map { "garmin:\($0.intValue)" }
     }
 
     // MARK: - fetchMetricHistory (wellness + performance range endpoints)
