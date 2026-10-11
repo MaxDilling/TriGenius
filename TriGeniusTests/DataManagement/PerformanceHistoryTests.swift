@@ -185,8 +185,9 @@ struct PerformanceHistoryTests {
             estimateLTHRFromHRMax: true,
             // Peaking above the athlete's maximum is a sensor fault, not an effort.
             evidence: [run(ago(100), steady: 175, peak: 205)])
-        // Nothing moves, so the fraction's own date and today are the whole series.
-        #expect(history.estimatedSeries("lactate_threshold_hr").map(\.value) == [162, 162])
+        // Only the fraction answers, falling with HRmax: 0.85 × 190 = 161.5 on the day it
+        // was measured, 0.85 × (190 − 0.7 × 100/365.25) = 161.3 when the run was logged.
+        #expect(history.estimatedSeries("lactate_threshold_hr").map(\.value) == [162, 161, 161])
     }
 
     // MARK: Chart stretches
@@ -317,8 +318,9 @@ struct PerformanceHistoryTests {
             evidence: evidence)
     }
 
-    /// (184 - 48) / (206 - 48): the reserve held at the fixtures' LTHR.
-    private let fraction = 136.0 / 158.0
+    /// (184 - 48) / (HRmax - 48): the reserve held at the fixtures' LTHR, against today's
+    /// HRmax — 206 measured 400 days ago.
+    private var fraction: Double { 136.0 / (VO2maxEstimate.hrMax(206, measured: ago(400), on: now) - 48) }
 
     /// A triathlon or brick leg has a pace stream and a heart-rate stream like any run, but
     /// after hours of prior work heart rate no longer tracks the metabolic cost, so
@@ -337,7 +339,9 @@ struct PerformanceHistoryTests {
     @Test func runningVO2maxAndThresholdPaceReadTheSameReconstruction() throws {
         let snap = runHistory(pacedRuns, lthr: [entry(ago(300), 184)]).snapshot(asOf: now)
         let mas = (try #require(snap.vo2maxRunning) - 3.5) / (0.2 * 60)
-        #expect(snap.lactateThrPaceSeconds == 1000 / LTPaceEstimate.ltSpeed(mas: mas, fractionOfMAS: fraction)!)
+        let pace = try #require(snap.lactateThrPaceSeconds)
+        let speed = try #require(LTPaceEstimate.ltSpeed(mas: mas, fractionOfMAS: fraction))
+        #expect(abs(pace - 1000 / speed) < 1e-9)
         #expect(snap.vo2maxRunningIsEstimated)
         #expect(snap.vo2maxRunningConfidence == .anchored)
     }
@@ -356,7 +360,8 @@ struct PerformanceHistoryTests {
         let series = ltPaceSeries(lthr: [entry(ago(300), 184)])
         for point in series {
             let state = try #require(curve.state(at: point.date))
-            #expect(point.value == LTPaceEstimate.ltSpeed(mas: exp(state.log), fractionOfMAS: fraction))
+            let speed = try #require(LTPaceEstimate.ltSpeed(mas: exp(state.log), fractionOfMAS: fraction))
+            #expect(abs(point.value - speed) < 1e-9)
         }
         // The faster block moves it: the pace today is quicker than the first answer.
         #expect(series.last!.value > series.first!.value)
@@ -441,7 +446,8 @@ struct PerformanceHistoryTests {
             estimateLTHRFromHRMax: true,
             evidence: [.init(date: ago(100), steadyHR20: 178, peakHR: 185, family: .bike)])
         // Cycling LTHR runs 5-10 bpm under running LTHR in the same athlete, so a ride
-        // must not answer for a run.
-        #expect(history.snapshot(asOf: now).lactateThrHR == 162)
+        // must not answer for a run. Only the fraction is left: 0.85 × today's HRmax,
+        // 190 − 0.7 × 200/365.25 = 189.6, is 161.2.
+        #expect(history.snapshot(asOf: now).lactateThrHR == 161)
     }
 }

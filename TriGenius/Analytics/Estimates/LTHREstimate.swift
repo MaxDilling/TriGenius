@@ -9,8 +9,8 @@ import Foundation
 /// reading above the true maximum is by definition a sensor fault. Age formulas are
 /// deliberately not used; they under-predict trained athletes by 7–19 bpm.
 ///
-/// Derivation, rejected alternatives and the validation limits:
-/// `ref/threshold_lab/cycling/FINDINGS.md`, "LTHR rebuilt".
+/// The lab twin, with the derivation and rejected alternatives in its comments:
+/// `ref/threshold_lab/cycling/lthr.py` (`estimate_lthr`).
 nonisolated enum LTHREstimate {
 
     /// LTHR sits at 85–92 % of HRmax in trained athletes. The conservative end is
@@ -90,15 +90,18 @@ nonisolated enum LTHREstimate {
         return best
     }
 
-    /// One observed steady effort, and the power held across the same 20 minutes when
-    /// the sport measures it.
+    /// One session of the sport: its best steady 20-minute HR (0 when it holds none, or its
+    /// sensor misread), the power held across the same 20 minutes when the sport measures
+    /// it, and the HRmax of its own date — each effort is gated against the maximum it was
+    /// produced under, not today's.
     struct Effort: Sendable, Equatable {
         let date: Date
         let steadyHR: Double
         let watts: Double?
+        let hrMax: Double
 
-        init(date: Date, steadyHR: Double, watts: Double? = nil) {
-            self.date = date; self.steadyHR = steadyHR; self.watts = watts
+        init(date: Date, steadyHR: Double, watts: Double? = nil, hrMax: Double) {
+            self.date = date; self.steadyHR = steadyHR; self.watts = watts; self.hrMax = hrMax
         }
     }
 
@@ -163,46 +166,112 @@ nonisolated enum LTHREstimate {
     /// twice in six months, which is a real case rather than a pathological one.
     static let minimumEfforts = 4
 
-    /// LTHR from a known HRmax and the steady efforts observed in one sport.
-    ///
-    /// Efforts are gated to the ones hard enough to inform a threshold, then reduced by a
-    /// recency-weighted quantile. **Filter `efforts` to a single sport before calling.**
-    /// Pooling sports reads a cycling ride as a running threshold, and the two differ by
-    /// 5–10 bpm in the same athlete.
-    ///
-    /// With no gated effort in the window the last answer that had one is carried forward
-    /// as `.stale`, never replaced by the population fraction: that fraction is a different
-    /// quantity, and substituting it mid-series draws a cliff that reads as a change in the
-    /// athlete when it only means the window went quiet. Only when nothing has *ever*
-    /// qualified does the fraction stand, as `.rough`.
-    static func estimate(efforts: [Effort], hrMax: Double, gate: Gate,
-                         asOf: Date) -> Estimate? {
-        guard hrMax > 0 else { return nil }
-        let usable = efforts
-            .filter { $0.steadyHR > 0 && $0.steadyHR <= hrMax && $0.date <= asOf }
-            .sorted { $0.date < $1.date }
+    /// No single session may carry more than this share of the pool's weight. The kernel
+    /// gives today's effort weight 1 against 0.2 for a year-old one, so in a pool of five
+    /// the run that just happened held half the weight on a reference athlete and moved
+    /// the quantile 6.9 bpm in a day. On a pool of ten no effort reaches it.
+    static let maxWeightShare = 0.25
 
-        if let value = windowed(usable, hrMax: hrMax, gate: gate, endingAt: asOf) {
-            return value
+    /// LTHR moves a few bpm per season, so a jump of several bpm between two sessions is a
+    /// thin pool re-ranking itself as one effort enters or leaves the window, not the
+    /// athlete. 1 bpm a month leaves room for a few bpm per training block while no single
+    /// effort redraws the level. Slower limits (0.25–0.5) read no closer to a field test
+    /// and show a real change half as fast.
+    static let maxDriftBpmPerDay = 1.0 / 30.0
+
+    /// LTHR for one sport, walked forward over every session date. **Build it from a single
+    /// sport's efforts.** Pooling sports reads a cycling ride as a running threshold, and
+    /// the two differ by 5–10 bpm in the same athlete.
+    ///
+    /// At each date the gated efforts are reduced by a recency-weighted quantile, and while
+    /// the pool is `.anchored` the answer may travel at most `maxDriftBpmPerDay` from the
+    /// previous date's. The limit binds the *series*: a value read today carries the whole
+    /// history that produced it. A pool that is not anchored releases it — that is a cold
+    /// start or a break emptying the window, and pinning to it is worse than being free.
+    struct Track: Sendable {
+        private let gate: Gate
+        /// Efforts that can inform a threshold — a steady window at or below their HRmax.
+        private let evidence: [Effort]
+        /// Every distinct session date, ascending: the steps the limit walks.
+        private let steps: [Date]
+        /// After each step, the limited answer while the pool is anchored, else nil.
+        private let held: [Held?]
+
+        private struct Held: Sendable {
+            let bpm: Double
+            let date: Date
         }
-        for effort in usable.reversed() {
-            if let held = windowed(usable, hrMax: hrMax, gate: gate, endingAt: effort.date) {
-                return Estimate(bpm: held.bpm, confidence: .stale, effortCount: 0,
-                                evidenceDate: held.evidenceDate)
+
+        init(efforts: [Effort], gate: Gate) {
+            let sorted = efforts.sorted { $0.date < $1.date }
+            self.gate = gate
+            evidence = sorted.filter { $0.steadyHR > 0 && $0.steadyHR <= $0.hrMax }
+            var steps: [Date] = [], held: [Held?] = []
+            var state: Held?
+            for effort in sorted where effort.date != steps.last {
+                state = Self.step(evidence, gate, from: state, at: effort.date, hrMax: effort.hrMax).held
+                steps.append(effort.date)
+                held.append(state)
             }
+            self.steps = steps
+            self.held = held
         }
-        return Estimate(bpm: fractionOfHRMax * hrMax, confidence: .rough, effortCount: 0,
-                        evidenceDate: nil)
+
+        /// Every date the series can move on: each session, and each day an effort leaves
+        /// the window.
+        var changeDates: [Date] {
+            steps + evidence.map { $0.date.addingTimeInterval(Double(historyDays) * 86_400) }
+        }
+
+        /// The answer on `asOf`, with `hrMax` that day's maximum.
+        ///
+        /// With no gated effort in the window the last answer that had one is carried
+        /// forward as `.stale`, never replaced by the population fraction: that fraction
+        /// is a different quantity, and substituting it mid-series draws a cliff that reads
+        /// as a change in the athlete when it only means the window went quiet. Only when
+        /// nothing has *ever* qualified does the fraction stand, as `.rough`.
+        func estimate(hrMax: Double, asOf: Date) -> Estimate? {
+            guard hrMax > 0 else { return nil }
+            let prior = steps.lastIndex { $0 < asOf }.flatMap { held[$0] }
+            if let value = Self.step(evidence, gate, from: prior, at: asOf, hrMax: hrMax).estimate {
+                return value
+            }
+            for effort in evidence.reversed() where effort.date <= asOf {
+                if let last = LTHREstimate.windowed(evidence, gate: gate, endingAt: effort.date,
+                                                    hrMax: effort.hrMax) {
+                    return Estimate(bpm: last.bpm, confidence: .stale, effortCount: 0,
+                                    evidenceDate: last.evidenceDate)
+                }
+            }
+            return Estimate(bpm: fractionOfHRMax * hrMax, confidence: .rough, effortCount: 0,
+                            evidenceDate: nil)
+        }
+
+        /// The windowed aggregate on `date`, limited against `prior` when anchored.
+        private static func step(_ evidence: [Effort], _ gate: Gate, from prior: Held?,
+                                 at date: Date, hrMax: Double) -> (estimate: Estimate?, held: Held?) {
+            let raw = LTHREstimate.windowed(evidence, gate: gate, endingAt: date, hrMax: hrMax)
+            guard let raw, raw.confidence == .anchored else { return (raw, nil) }
+            var bpm = raw.bpm
+            if let prior {
+                let budget = maxDriftBpmPerDay * date.timeIntervalSince(prior.date) / 86_400
+                bpm = min(max(bpm, prior.bpm - budget), prior.bpm + budget)
+            }
+            return (Estimate(bpm: bpm, confidence: .anchored, effortCount: raw.effortCount,
+                             evidenceDate: raw.evidenceDate), Held(bpm: bpm, date: date))
+        }
     }
 
-    private static func windowed(_ efforts: [Effort], hrMax: Double, gate: Gate,
-                                 endingAt end: Date) -> Estimate? {
+    /// The unlimited aggregate of the window ending at `end`; `hrMax` is that day's, which
+    /// only the plausibility floor reads — the intensity gate takes each effort's own.
+    private static func windowed(_ efforts: [Effort], gate: Gate, endingAt end: Date,
+                                 hrMax: Double) -> Estimate? {
         let cutoff = end.addingTimeInterval(-Double(historyDays) * 86_400)
         let window = efforts.filter { $0.date > cutoff && $0.date <= end }
         let gated: [Effort]
         switch gate {
         case .heartRate:
-            gated = window.filter { $0.steadyHR >= effortGateFractionOfHRMax * hrMax }
+            gated = window.filter { $0.steadyHR >= effortGateFractionOfHRMax * $0.hrMax }
         case .power:
             let powered = window.filter { ($0.watts ?? 0) > 0 }
             guard let best = powered.compactMap(\.watts).max() else { return nil }
@@ -210,10 +279,10 @@ nonisolated enum LTHREstimate {
         }
         guard !gated.isEmpty else { return nil }
 
-        let weights = gated.map {
+        let weights = RecencyWeighting.capped(gated.map {
             RecencyWeighting.weight(ageDays: end.timeIntervalSince($0.date) / 86_400,
                                     tauDays: ageTauDays)
-        }
+        }, share: maxWeightShare)
         guard let bpm = RecencyWeighting.quantile(gated.map(\.steadyHR),
                                                   weights: weights, q: quantile),
               bpm >= minimumFractionOfHRMax * hrMax else { return nil }

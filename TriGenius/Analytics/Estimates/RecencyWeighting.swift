@@ -17,6 +17,20 @@ nonisolated enum RecencyWeighting {
         1 / (1 + (ageDays / tauDays) * (ageDays / tauDays))
     }
 
+    /// `weights` rescaled so no single one holds more than `share` of their total. Clamping
+    /// one lowers the total and pushes it back over, so the clamp repeats — once per
+    /// weight at most, which with fewer than `1/share` weights ends near uniform rather
+    /// than at it.
+    static func capped(_ weights: [Double], share: Double) -> [Double] {
+        var w = weights
+        for _ in w.indices {
+            let limit = share * w.reduce(0, +)
+            guard w.contains(where: { $0 > limit }) else { break }
+            w = w.map { min($0, limit) }
+        }
+        return w
+    }
+
     /// Quantile `q` of `values` under `weights`, linearly interpolated.
     ///
     /// Returns nil only for an empty sample; a single value is its own quantile.

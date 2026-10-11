@@ -648,6 +648,9 @@ nonisolated struct PerformanceHistory: Sendable {
     /// The running MAS filter as the athlete is shown it, built once the same way
     /// (`LTPaceEstimate.track` through `VO2maxEstimate.SmoothedTrack`).
     private var running: VO2maxEstimate.SmoothedTrack?
+    /// Running and cycling LTHR, each walked once over its sport's sessions.
+    private var runLTHR: LTHREstimate.Track?
+    private var bikeLTHR: LTHREstimate.Track?
 
     private struct Cycling: Sendable {
         let track: VO2maxEstimate.Track
@@ -684,6 +687,8 @@ nonisolated struct PerformanceHistory: Sendable {
         if estimateLTPaceFromRuns || estimateRunningVO2maxFromRuns {
             running = buildRunning(sessionDates: sessionDates)
         }
+        if estimateLTHRFromHRMax { runLTHR = buildLTHR(.heartRate) }
+        if estimateCyclingLTHRFromRides { bikeLTHR = buildLTHR(.power) }
         guard estimateLTPaceFromRuns else { return }
         if let ltPaceFractionOverride {
             ltPaceFraction = ltPaceFractionOverride
@@ -693,7 +698,7 @@ nonisolated struct PerformanceHistory: Sendable {
         // The resolved LTHR, so the fraction matches the threshold HR the athlete is
         // shown rather than whichever reading happens to be stored.
         guard let lthr = snapshot(asOf: now, resolving: ["lactate_threshold_hr"]).lactateThrHR,
-              let hrMax = value("max_hr", asOf: now), let hrRest = restingHR(asOf: now)
+              let hrMax = hrMax(on: now), let hrRest = restingHR(asOf: now)
         else { return }
         ltPaceFraction = LTPaceEstimate.fractionOfMAS(lthr: Double(lthr), hrRest: hrRest,
                                                       hrMax: hrMax)
@@ -761,9 +766,15 @@ nonisolated struct PerformanceHistory: Sendable {
     /// not a defaulted one: without it the reserve the reconstructions scale by does not
     /// exist.
     private func heartRange(on date: Date) -> (max: Double, rest: Double)? {
-        guard let hrMax = entry("max_hr", asOf: date), hrMax.value > 0,
-              let hrRest = restingHR(asOf: date), hrRest > 0 else { return nil }
-        return (VO2maxEstimate.hrMax(hrMax.value, measured: hrMax.date, on: date), hrRest)
+        guard let hrMax = hrMax(on: date), let hrRest = restingHR(asOf: date), hrRest > 0
+        else { return nil }
+        return (hrMax, hrRest)
+    }
+
+    /// HRmax on `date`: the reading in force, through the decline since it was taken.
+    private func hrMax(on date: Date) -> Double? {
+        guard let hrMax = entry("max_hr", asOf: date), hrMax.value > 0 else { return nil }
+        return VO2maxEstimate.hrMax(hrMax.value, measured: hrMax.date, on: date)
     }
 
     private func mass(on date: Date) -> Double? {
@@ -804,6 +815,26 @@ nonisolated struct PerformanceHistory: Sendable {
             return .init(date: o.date, profile: o.paceProfile, hrMax: hr.max, hrRest: hr.rest)
         }
         return LTPaceEstimate.track(runs: runs, sessions: sessionDates).map { .init($0, through: .now) }
+    }
+
+    /// The gate's sport — runs on heart rate, rides on power — every session against the
+    /// HRmax of its own date. One whose heart rate peaked above that maximum has a
+    /// misreading sensor: it stays a date the series walks, but carries no heart rate.
+    private func buildLTHR(_ gate: LTHREstimate.Gate) -> LTHREstimate.Track {
+        let family: SportFamily = gate == .heartRate ? .run : .bike
+        let efforts = evidence.compactMap { o -> LTHREstimate.Effort? in
+            guard o.family == family, let hrMax = hrMax(on: o.date) else { return nil }
+            let trusted = o.peakHR <= hrMax
+            switch gate {
+            case .heartRate:
+                return .init(date: o.date, steadyHR: trusted ? o.steadyHR20 : 0, hrMax: hrMax)
+            case .power:
+                let best = o.submaxProfile[LTHREstimate.windowSeconds]
+                return .init(date: o.date, steadyHR: trusted ? best?.hr ?? 0 : 0, watts: best?.watts,
+                             hrMax: hrMax)
+            }
+        }
+        return LTHREstimate.Track(efforts: efforts, gate: gate)
     }
 
     /// The metric snapshot as it stood on `date`, assembled for the TSS engine.
@@ -880,17 +911,12 @@ nonisolated struct PerformanceHistory: Sendable {
         // Running LTHR specifically. Cycling LTHR runs 5-10 bpm lower in the same
         // athlete, so one pooled value would read a ride as a run — and this is the
         // value Garmin publishes and the HR zones are drawn against.
-        if estimateLTHRFromHRMax, wanted("lactate_threshold_hr"), let hrMax = snap.maxHR, hrMax > 0 {
-            let efforts = evidence
-                .filter { $0.family == .run && $0.peakHR <= Double(hrMax) }
-                .map { LTHREstimate.Effort(date: $0.date, steadyHR: $0.steadyHR20) }
-            if let est = LTHREstimate.estimate(efforts: efforts, hrMax: Double(hrMax),
-                                               gate: .heartRate, asOf: anchor),
-               !manualStands("lactate_threshold_hr", asOf: date, over: est.evidenceDate) {
-                snap.lactateThrHR = Int(est.bpm.rounded())
-                snap.lactateThrHRIsEstimated = true
-                snap.lactateThrHRConfidence = est.confidence
-            }
+        if wanted("lactate_threshold_hr"), let hrMax = hrMax(on: anchor),
+           let est = runLTHR?.estimate(hrMax: hrMax, asOf: anchor),
+           !manualStands("lactate_threshold_hr", asOf: date, over: est.evidenceDate) {
+            snap.lactateThrHR = Int(est.bpm.rounded())
+            snap.lactateThrHRIsEstimated = true
+            snap.lactateThrHRConfidence = est.confidence
         }
         // Cycling LTHR, from the power-gated rides. The gate is on watts and not on heart
         // rate because on a power sport the intensity is *measured*: one ride at 57 % of
@@ -901,21 +927,12 @@ nonisolated struct PerformanceHistory: Sendable {
         // population fraction (0.85 × HRmax) buried both reference athletes' measured
         // cycling values, and `thresholdHR(for:)` falling through to the athlete's own
         // running LTHR is the better answer than a constant.
-        if estimateCyclingLTHRFromRides, wanted("lactate_threshold_hr_cycling"),
-           let hrMax = snap.maxHR, hrMax > 0 {
-            let efforts = evidence.compactMap { o -> LTHREstimate.Effort? in
-                guard o.family == .bike, o.peakHR <= Double(hrMax),
-                      let best = o.submaxProfile[LTHREstimate.windowSeconds] else { return nil }
-                return LTHREstimate.Effort(date: o.date, steadyHR: best.hr, watts: best.watts)
-            }
-            if let est = LTHREstimate.estimate(efforts: efforts, hrMax: Double(hrMax),
-                                               gate: .power, asOf: anchor),
-               est.confidence != .rough,
-               !manualStands("lactate_threshold_hr_cycling", asOf: date, over: est.evidenceDate) {
-                snap.cyclingLactateThrHR = Int(est.bpm.rounded())
-                snap.cyclingLactateThrHRIsEstimated = true
-                snap.cyclingLactateThrHRConfidence = est.confidence
-            }
+        if wanted("lactate_threshold_hr_cycling"), let hrMax = hrMax(on: anchor),
+           let est = bikeLTHR?.estimate(hrMax: hrMax, asOf: anchor), est.confidence != .rough,
+           !manualStands("lactate_threshold_hr_cycling", asOf: date, over: est.evidenceDate) {
+            snap.cyclingLactateThrHR = Int(est.bpm.rounded())
+            snap.cyclingLactateThrHRIsEstimated = true
+            snap.cyclingLactateThrHRConfidence = est.confidence
         }
         // One reconstruction, two thresholds: MAS is LT pace in one unit and running
         // VO2max in another, so it is resolved once here and read by both opt-ins.
@@ -1024,20 +1041,9 @@ nonisolated struct PerformanceHistory: Sendable {
             if let first = rides.first {
                 dates.formUnion(stride(from: first, to: Date(), by: 7 * 86_400))
             }
-        case "lactate_threshold_hr":
-            guard estimateLTHRFromHRMax else { return nil }
-            dates = readingDates(["max_hr", key])
-            for o in evidence where o.steadyHR20 > 0 {
-                dates.insert(o.date)
-                dates.insert(o.date.addingTimeInterval(Double(LTHREstimate.historyDays) * 86_400))
-            }
-        case "lactate_threshold_hr_cycling":
-            guard estimateCyclingLTHRFromRides else { return nil }
-            dates = readingDates(["max_hr", key])
-            for o in evidence where o.submaxProfile[LTHREstimate.windowSeconds] != nil {
-                dates.insert(o.date)
-                dates.insert(o.date.addingTimeInterval(Double(LTHREstimate.historyDays) * 86_400))
-            }
+        case "lactate_threshold_hr", "lactate_threshold_hr_cycling":
+            guard let track = key == "lactate_threshold_hr" ? runLTHR : bikeLTHR else { return nil }
+            dates = readingDates(["max_hr", key]).union(track.changeDates)
         case "lactate_threshold_speed", "vo2max_running":
             guard key == "vo2max_running" ? estimateRunningVO2maxFromRuns
                                           : estimateLTPaceFromRuns else { return nil }
