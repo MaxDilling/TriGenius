@@ -19,10 +19,10 @@ enum Theme {
         static let l: CGFloat = 16
         static let xl: CGFloat = 24
 
-        /// How far a card's title row reaches up into the card's inset. A line of
-        /// text carries ~5 pt of air above its glyphs, so tucked up by this the title
+        /// How far a card's title row reaches up into the card's inset. A headline
+        /// carries ~3 pt of air above its capitals, so tucked up by this the title
         /// reads as the same 16 pt as the sides — as on Apple Fitness's cards.
-        static let titleTuck: CGFloat = 6
+        static let titleTuck: CGFloat = 3
     }
 
     /// Corner-radius scale. Three steps only — small controls, cards, hero

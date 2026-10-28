@@ -66,7 +66,7 @@ Resolve every spacing / radius / status color to a token — no magic numbers.
 
 - **Spacing:** `Theme.Spacing` — `xs 4 · s 8 · m 12 · l 16 · xl 24`. Favor the tight end.
 - **Radius:** `Theme.Radius` — `s 8 · m 12 · l 16` (continuous corners, applied by the surface modifiers). Every card uses `l` for its corners (fixed in `cardSurface()`); `s` / `m` are for controls and tooltips. The one card that is active right now (the live workout's current exercise) passes `cardSurface(tint:)` instead of wearing a badge.
-- **Insets:** every card insets by `Theme.Spacing.l` (the `cardSurface()` default). A card's title row — `cardTitle`, `CardHeader`, the Tissue lead — tucks up by `Theme.Spacing.titleTuck`: text carries ~5 pt of air above its glyphs, so the title then reads as the same 16 pt as the sides, as on Apple Fitness's cards.
+- **Insets:** every card insets by `Theme.Spacing.l` (the `cardSurface()` default). A card's title row — `cardTitle`, `CardHeader`, the Tissue lead — tucks up by `Theme.Spacing.titleTuck`: a headline carries ~3 pt of air above its capitals, so the title then reads as the same 16 pt as the sides, as on Apple Fitness's cards.
 - **Status colors:** `Theme.Palette` — `warning · success · info · danger` instead of raw `.orange` / `.green` / `.red`.
 - **Surfaces:** `.cardSurface()`, `.contentCard()`, `.glassSurface(tint:)`, `.headerPill()` + `.headerSegment()`, `.coachAccent(_:)` from `Surfaces.swift`.
 - **System colors:** `Color.appBackground` / `appSecondaryBackground` / `appTertiaryBackground` / `appTertiaryLabel` (cross-platform, in `Color+App.swift`).
