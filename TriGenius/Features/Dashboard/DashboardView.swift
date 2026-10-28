@@ -7,8 +7,8 @@ import Combine
 // Settings as its one control and the plan line (current ATP period + countdown to
 // the next A event → Plan page) under it, then the `DashboardSection` blocks in the
 // athlete's configured order/visibility (`AppSettings.dashboardLayout`):
-//   • Up Next: today's completed + upcoming planned workouts, one row per
-//     workout → its detail screen.
+//   • Up Next: the next four workouts — today's completed, then upcoming
+//     planned — one row per workout → its detail screen.
 //   • Pinned: the athlete's pick of `StatCard`s (`AppSettings.pinnedCards`), each
 //     opening its own detail; the heading's "All Stats" → StatisticsView.
 //   • Tissue Load: the structural load card → its grid / group detail.
@@ -270,8 +270,8 @@ struct DashboardView: View {
 
     // MARK: Up Next
 
-    /// Every upcoming/today workout — completed and planned — flattened into a
-    /// single list so they can share one tile with hairline dividers between rows.
+    /// The next four workouts — today's completed, then upcoming planned — flattened
+    /// into a single list so they share one tile with hairline dividers between rows.
     private var upNextItems: [UpNextItem] {
         var items: [UpNextItem] = []
         for day in viewModel.agendaDays {
@@ -282,7 +282,7 @@ struct DashboardView: View {
                 items.append(UpNextItem(date: day.date, planned: planned))
             }
         }
-        return items
+        return Array(items.prefix(4))
     }
 
     private var upNext: some View {
