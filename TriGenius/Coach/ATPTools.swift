@@ -321,7 +321,7 @@ final class ATPToolHandler: CoachToolHandler {
                 if let proj = plan.plannedCTL(on: a.date) { d["projected_ctl"] = Int(proj) }
                 root["next_a_race"] = d
             }
-            let warn = plan.weeks.filter(\.rampExceeded).count
+            let warn = plan.rampWarnings(asOf: today).count
             if warn > 0 { root["ramp_warnings"] = warn }
             if detailed {
                 let upcoming = plan.weeks.filter { $0.weekStart >= (cal.date(byAdding: .weekOfYear, value: -1, to: today) ?? today) }.prefix(8)
@@ -396,7 +396,7 @@ final class ATPToolHandler: CoachToolHandler {
                 lines.append("  " + s)
             }
         }
-        let warn = plan.weeks.filter(\.rampExceeded).count
+        let warn = plan.rampWarnings(asOf: today).count
         if warn > 0 { lines.append("⚠️ \(warn) week(s) ramp faster than the max ramp rate (\(Int(params.maxRampRate)) CTL/wk).") }
         return lines.joined(separator: "\n")
     }
