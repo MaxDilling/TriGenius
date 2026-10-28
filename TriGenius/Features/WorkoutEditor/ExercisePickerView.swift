@@ -4,8 +4,8 @@ import SwiftUI
 //
 // Search/browse the library the athlete's `StrengthProfile` allows, grouped by
 // category; a "Custom" row lets the athlete type a name for anything not in the
-// library — allowed per the Tissue Load handoff's D8, unmapped to any tissue
-// group until the athlete (or a future curation pass) gives it one.
+// library, unmapped to any tissue group until the athlete (or a future
+// curation pass) gives it one.
 
 struct ExercisePickerView: View {
     let onSelectLibrary: (Exercise) -> Void

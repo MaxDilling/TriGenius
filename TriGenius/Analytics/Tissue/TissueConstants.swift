@@ -3,8 +3,8 @@ import Foundation
 // MARK: - Tissue model constants
 //
 // Every number the tissue model computes with, in one place. All provisional —
-// set from general sports-science knowledge, not fitted — until Phase 5
-// calibrates them against real weeks (`TODO_KRAFTTRAINING.md`).
+// set from general sports-science knowledge, not fitted — until they are
+// calibrated against real weeks.
 
 nonisolated enum TissueConstants {
 

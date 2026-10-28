@@ -1,11 +1,11 @@
 import Foundation
 
-// MARK: - Strength profile (handoff flow 7)
+// MARK: - Strength profile
 //
 // The facts the strength side is set up from: where the athlete trains, which
 // fixes the equipment, and the areas to work around. An area excludes every
 // exercise loading its tissue group, as a primary or a secondary mover —
-// exclusion only, no medical logic (D10). Experience is the `strength` sport
+// exclusion only, no medical logic. Experience is the `strength` sport
 // profile's level (`Experience`). Stored on that profile (`CoachMemory`); the
 // exercise picker, `get_exercises` and the coach prompt all apply it.
 

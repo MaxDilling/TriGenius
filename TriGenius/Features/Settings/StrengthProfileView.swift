@@ -1,6 +1,6 @@
 import SwiftUI
 
-// MARK: - Strength profile (handoff flow 7)
+// MARK: - Strength profile
 //
 // The three questions the strength side is set up from — where the athlete
 // trains, how much they have lifted, what to work around. Each answer is saved

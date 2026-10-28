@@ -1,8 +1,8 @@
 #if DEBUG
 import SwiftUI
 
-// The card in the states of flow 1, from `TissuePreviewFixture` — the real model
-// over synthetic weeks, pinned to the Monday the design frames were drawn for.
+// The card in its states, from `TissuePreviewFixture` — the real model over
+// synthetic weeks, pinned to a fixed Monday.
 
 private struct TissueCardPreview: View {
     let title: String

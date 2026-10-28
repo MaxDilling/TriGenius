@@ -8,7 +8,7 @@ import Foundation
 // a flat set list (`rows`), paired set by set with its plan (`comparison`). Both
 // are the same `SetRow`, so one table shows either.
 //
-// The review (Tissue Load handoff D6 — flag only the sets that need the
+// The review (flag only the sets that need the
 // athlete's eye) matches on Garmin's exercise key (`ExerciseLibrary`'s
 // `garminName`), which both sides carry verbatim — never on a name similarity.
 // An exercise the plan didn't contain is not a discrepancy: improvising is

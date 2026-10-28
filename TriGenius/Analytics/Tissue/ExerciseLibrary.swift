@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Exercise library
 //
-// ~60 curated strength exercises (Tissue Load handoff decision D8), each with
+// ~60 curated strength exercises, each with
 // the tissue groups it loads — from Garmin's catalog (`GarminMuscles`), or its
 // own list for the few Garmin lacks — and whether it loads a tendon. Bundled as
 // JSON rather than Assets/Knowledge/ prose: this is picker data the workout

@@ -2,8 +2,8 @@
 import Foundation
 
 // Preview data run through the real `TissueLoadModel`: seven weeks of a typical
-// triathlon week with a slowly growing long run, then the week ahead. Pinned to the
-// Monday the design frames were drawn for, so the weekdays match the frames.
+// triathlon week with a slowly growing long run, then the week ahead, pinned to a
+// fixed Monday.
 
 enum TissuePreviewFixture {
     static let calendar: Calendar = {
