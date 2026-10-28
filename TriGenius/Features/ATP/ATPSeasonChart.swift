@@ -265,7 +265,7 @@ struct ATPSeasonChart: View {
         }
     }
 
-    private var rampWarningCount: Int { plan.weeks.filter(\.rampExceeded).count }
+    private var rampWarnings: [ATPWeekPlan] { plan.rampWarnings(asOf: Date()) }
 
     /// Center date of a week's bar (matches `barRange`), for positioning marks/labels.
     private func weekMid(_ weekStart: Date) -> Date {
@@ -291,7 +291,7 @@ struct ATPSeasonChart: View {
                 let f = geo[frame]
                 let win = visibleWindow(in: geo.size.width, scrollX: scrollX)
                 ZStack(alignment: .topLeading) {
-                    ForEach(plan.weeks.filter(\.rampExceeded)) { w in
+                    ForEach(rampWarnings) { w in
                         let mid = weekMid(w.weekStart)
                         if mid >= win.start, mid <= win.end,
                            let x = proxy.position(forX: mid),
@@ -396,8 +396,9 @@ struct ATPSeasonChart: View {
             .font(.caption2)
             .foregroundStyle(.secondary)
 
-            if rampWarningCount > 0 {
-                Label("\(rampWarningCount) week\(rampWarningCount == 1 ? "" : "s") ramp faster than your max — fitness is climbing aggressively.",
+            let n = rampWarnings.count
+            if n > 0 {
+                Label("\(n) week\(n == 1 ? "" : "s") ramp faster than your max — fitness is climbing aggressively.",
                       systemImage: "exclamationmark.triangle.fill")
                     .font(.caption2).foregroundStyle(Theme.Palette.danger)
             }
