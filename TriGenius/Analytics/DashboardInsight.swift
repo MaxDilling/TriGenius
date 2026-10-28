@@ -2,8 +2,7 @@ import Foundation
 
 // MARK: - Dashboard Insight (AI-generated)
 //
-// FEATURES.md "AI-generated dashboard insight": the one-liner under the weekly
-// rings. Replaces the trivial heuristic with a short, LLM-generated insight that
+// The one-liner under the weekly rings. Replaces the trivial heuristic with a short, LLM-generated insight that
 // weaves together PMC state, weekly balance and the plan — one athlete-facing
 // sentence, in the athlete's language.
 //

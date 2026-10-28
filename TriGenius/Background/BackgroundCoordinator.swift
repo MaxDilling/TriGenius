@@ -12,8 +12,8 @@ import BackgroundTasks
 // SAME trigger evaluation feeds both the system-prompt section (in-chat) and
 // these notifications (background).
 //
-// FEATURES.md "Background execution + push notifications". BGTaskScheduler is
-// iOS-only; on macOS the methods are no-ops so call sites stay platform-agnostic.
+// BGTaskScheduler is iOS-only; on macOS the methods are no-ops so call sites stay
+// platform-agnostic.
 
 @MainActor
 final class BackgroundCoordinator {
@@ -107,7 +107,7 @@ final class BackgroundCoordinator {
         let snapshot = PMCEngine.current(forecastDays: 0).snapshot
         var signals = ProactiveCoach.signals(from: snapshot)
 
-        // Weekly-target-at-risk warning (FEATURES.md "TSS / TSB forecast"): compare
+        // Weekly-target-at-risk warning: compare
         // this week's per-discipline target against the projected close (completed
         // + still-planned). The targets need the athlete's plan/structure; a fresh
         // CoachMemory reads the persisted coach_memory.json on init.

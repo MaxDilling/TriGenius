@@ -2,8 +2,7 @@ import Foundation
 
 // MARK: - Calendar ViewModel
 //
-// FEATURES.md "Training calendar screen" + "Extended calendar — past workouts and
-// daily life context": a Week and a Month view of the athlete's days, each showing
+// A Week and a Month view of the athlete's days, each showing
 // planned workouts, completed activities and real-world commitments (EventKit), plus
 // a per-day time-of-day availability indicator so it's obvious where there is still
 // time to train. Reads the local `TrainingDataStore` + `CalendarService` and writes

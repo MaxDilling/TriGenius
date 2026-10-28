@@ -25,8 +25,7 @@ import Foundation
 nonisolated enum TSSCalculator {
 
     /// How a completed activity's TSS was derived — so the UI can tell the athlete
-    /// where the number came from (BUGS.md "show where the TSS calculation comes
-    /// from"). Mirrors the dispatch in `compute(details:snapshot:)`.
+    /// where the number came from. Mirrors the dispatch in `compute(details:snapshot:)`.
     enum Basis {
         case power, runPace, swimPace, swimPaceFromDuration, swimDuration, hrLoad, hrZones
 

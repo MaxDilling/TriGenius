@@ -3,8 +3,8 @@ import Combine
 
 // MARK: - Reminder Store
 //
-// Single source of truth for user/coach-configurable push reminders
-// ("Erweiterte Reminder", FEATURES.md). Persisted as its own JSON file in
+// Single source of truth for user/coach-configurable push reminders.
+// Persisted as its own JSON file in
 // Application Support — deliberately NOT part of coach_memory.json, because that
 // file is fully replaced on import (CoachMemory.importJSON) and the background
 // task needs a `.shared` accessor (CoachMemory is a SwiftUI @StateObject).

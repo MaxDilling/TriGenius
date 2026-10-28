@@ -26,8 +26,7 @@ struct DashboardView: View {
     let weeklyStructure: WeeklyStructure
     @ObservedObject var memory: CoachMemory
     let makeBackend: () -> LLMBackend
-    // Settings is reached from the dashboard header (BUGS.md: the calendar moved to
-    // the tab bar, settings took its place here), so the screen needs what
+    // Settings is reached from the dashboard header, so the screen needs what
     // `SettingsView` requires.
     let brain: CoachBrain
     @ObservedObject var settings: AppSettings
@@ -244,7 +243,7 @@ struct DashboardView: View {
 
     // MARK: AI insight
 
-    // The coach's read on the week (FEATURES.md "AI-generated dashboard insight"): a
+    // The coach's read on the week: a
     // plain sentence marked only by the coach hairline. A heuristic line is surfaced
     // instantly while the model line is generated. Tapping the card carries its read
     // into the chat as a pre-filled (unsent) prompt.

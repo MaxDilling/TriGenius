@@ -566,7 +566,7 @@ nonisolated final class GarminService: Sendable {
         // Garmin's calendar endpoint is per-month, so a window crossing a boundary (the
         // default look-ahead does) needs one call per month. A failed fetch must surface
         // as an error, never an empty result: `syncScheduledWorkouts` mirrors this list
-        // verbatim, so a silent empty would wipe every planned workout (see BUGS.md).
+        // verbatim, so a silent empty would wipe every planned workout.
         // Tasks return each month's items as a JSON string (Sendable) to stay clean
         // across the concurrency boundary.
         let calendarItems: [[String: Any]]

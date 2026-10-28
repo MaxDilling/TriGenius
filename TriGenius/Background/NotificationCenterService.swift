@@ -7,8 +7,6 @@ import UserNotifications
 // special entitlement — only the user's authorization. Posts the highest-
 // severity proactive signal as a notification, deduped to at most one per day so
 // the athlete isn't spammed by the same concern across repeated background runs.
-//
-// FEATURES.md "Background execution + push notifications".
 
 @MainActor
 final class NotificationCenterService {

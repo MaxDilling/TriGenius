@@ -2,8 +2,8 @@ import Foundation
 
 // MARK: - Reminder Tool Handler
 //
-// Lets the coach configure WHEN the app sends push reminders ("Erweiterte
-// Reminder", FEATURES.md). Always registered, like ProfileToolHandler /
+// Lets the coach configure WHEN the app sends push reminders. Always
+// registered, like ProfileToolHandler /
 // CalendarToolHandler — independent of the data source. Reads/writes the shared
 // ReminderStore and reconciles the OS-scheduled (static) reminders after every
 // change. The JSON-Schema tool dicts work for both backends automatically.

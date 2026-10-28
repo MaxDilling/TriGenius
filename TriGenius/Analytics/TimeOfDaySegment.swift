@@ -2,8 +2,7 @@ import SwiftUI
 
 // MARK: - Time-of-day availability
 //
-// FEATURES.md "Extended calendar — past workouts and daily life context": the
-// calendar should make it obvious *where there is still time to train*. A total
+// The calendar should make it obvious *where there is still time to train*. A total
 // free-minutes score is misleading — fragmented free time is useless. Instead we
 // split the day into a few coarse segments (morning / midday / evening) and, from
 // the athlete's EventKit busy windows, report whether each one is COMPLETELY free.

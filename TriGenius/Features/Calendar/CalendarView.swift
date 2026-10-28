@@ -8,8 +8,7 @@ enum CalendarLayout {
 
 // MARK: - Training Calendar
 //
-// FEATURES.md "Training calendar screen" + "Extended calendar — past workouts and
-// daily life context": Week and Month views of scheduled + completed workouts and the
+// Week and Month views of scheduled + completed workouts and the
 // athlete's real-world commitments (EventKit), mirroring Apple Calendar. The month is
 // a horizontally paged grid (system events as the three color-coded availability bars
 // under each day); the week is a continuously-scrollable hour-grid (`WeekTimeGridView`).

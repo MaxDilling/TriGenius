@@ -3,7 +3,7 @@ import Foundation
 // MARK: - TSS tuning constants (single source of truth)
 //
 // Every tunable used by the TSS engine lives here so the model can be adjusted in
-// one place (see FEATURES.md "Zentrale Konstanten"). All values were calibrated
+// one place. All values were calibrated
 // offline against real data in `ref/tss_lab/` (validated on two athletes); the
 // lab file names are noted next to each group.
 //

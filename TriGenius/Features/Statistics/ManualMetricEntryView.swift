@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Manual performance-value entry
 //
-// FEATURES.md "Manuelles Hizufügen von Leistungswerten": add / edit a hand-entered
+// Add / edit a hand-entered
 // performance marker (FTP, CSS, VO₂max, thresholds, weight) at a chosen date. Writes
 // through `TrainingDataStore.setManualMetric`, so the value joins the same time series
 // the sync path feeds (charts, snapshot, coach, TSS).

@@ -7,7 +7,7 @@ import EventKit
 // schedule, so it can plan workouts around busy days. Read-only: it never
 // creates or mutates calendar events.
 //
-// FEATURES.md "EventKit calendar + read_calendar_availability tool". Mirrors the
+// Mirrors the
 // data-source services in shape (a shared singleton returning plain value types),
 // but it is a *cross-cutting* source (always available, like ProfileToolHandler),
 // not one of the swappable `DataSource` options.

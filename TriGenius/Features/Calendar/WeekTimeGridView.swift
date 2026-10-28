@@ -2,7 +2,7 @@ import SwiftUI
 
 // MARK: - Week time grid (Apple-Calendar-style multi-day view)
 //
-// FEATURES.md "Extended calendar": a continuously-scrollable multi-day time grid —
+// A continuously-scrollable multi-day time grid —
 // hour rows × day columns, like Apple Calendar's week view. Workouts and all-day
 // commitments live in the all-day band above the grid; timed calendar events are
 // positioned inside the grid at their start/end. The hour grid is pinch-zoomable and
