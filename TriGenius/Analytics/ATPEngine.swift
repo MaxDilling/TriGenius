@@ -52,6 +52,13 @@ struct ATPPlan: Sendable {
               let planned = plannedCTL(on: date) else { return nil }
         return actual - planned
     }
+
+    /// Weeks ramping faster than the max that haven't ended by `today` — a past
+    /// week's ramp can't be acted on any more.
+    func rampWarnings(asOf today: Date) -> [ATPWeekPlan] {
+        let cal = Calendar.current
+        return weeks.filter { $0.rampExceeded && cal.date(byAdding: .day, value: 7, to: $0.weekStart)! > today }
+    }
 }
 
 enum ATPEngine {
