@@ -37,6 +37,21 @@ private func event(_ date: Date, _ prio: ATPEventPriority, ctl: Double? = nil) -
     #expect(plan.fitnessGap(on: day(3)) == -5)   // 38 − 43
 }
 
+@Test func rampWarnings_dropWeeksAlreadyOver() {
+    let s = monday()
+    let week = { (i: Int, exceeded: Bool) in
+        ATPWeekPlan(weekStart: weeks(s, i), period: .base1, periodWeekIndex: i, isRecovery: false, isTaper: false,
+                    plannedTSS: 500, rampRate: 8, rampExceeded: exceeded, pinned: false,
+                    weeksToNextEvent: nil, nextEventID: nil)
+    }
+    let plan = ATPPlan(weeks: [week(0, true), week(1, true), week(2, false), week(3, true)],
+                       planCurve: [], detrainingCurve: [], actualCurve: [],
+                       completedTSSByWeek: [:], events: [], maxRampRate: 7)
+    // Today is Sunday of week 1: week 0 is over, week 1 still current.
+    let today = cal.date(byAdding: .day, value: 13, to: s)!
+    #expect(plan.rampWarnings(asOf: today).map(\.weekStart) == [weeks(s, 1), weeks(s, 3)])
+}
+
 @Test func build_nilWithoutAnchorEvent() {
     let s = monday()
     #expect(ATPEngine.build(params: params(s, ctl: 40, method: .weeklyTSS, avg: 600),
