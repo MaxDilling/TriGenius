@@ -322,11 +322,8 @@ final class AppSettings: ObservableObject {
     static let availableOpenRouterModels: [OpenRouterModel] = [
         ("openrouter/auto", "medium"),
         ("anthropic/claude-haiku-5.5", "high"),
-        ("z-ai/glm-5.3", "low"),
         ("google/gemini-3.8-flash", "medium"),
-        ("openai/gpt-6-luna", "max"),
         ("z-ai/glm-5.3-flash", "medium"),
-        ("xiaomi/mimo-v2.6-pro", "medium")
     ]
 
     /// The dashboard AI summary's models, same pairing; the first entry is the default.
