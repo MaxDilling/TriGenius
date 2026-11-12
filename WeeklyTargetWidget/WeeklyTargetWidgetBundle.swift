@@ -5,5 +5,6 @@ import WidgetKit
 struct WeeklyTargetWidgetBundle: WidgetBundle {
     var body: some Widget {
         WeeklyTargetWidget()
+        LiveStrengthLiveActivity()
     }
 }

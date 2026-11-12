@@ -9,8 +9,9 @@ import Foundation
 // 1. Dose. Each session puts a dose on each group, muscle and tendon apart — an
 //    endurance session its TL × the sport's weight for that group, a strength
 //    session its hard sets (1 per set on a primary group, ½ on a secondary,
-//    × `tlPerHardSet`), tendon only where the exercise loads one. A session without
-//    exercises carries no dose: unknown load is not modelled.
+//    × `tlPerHardSet`), tendon only where the exercise loads one. A stretch is no
+//    hard set and doses nothing. A session without exercises carries no dose:
+//    unknown load is not modelled.
 // 2. Decay. A tissue's morning state is every earlier dose decayed exponentially —
 //    muscle with a 1-day time constant, tendon with 3 days.
 // 3. Levels. A morning state is read against the athlete's own average for that
@@ -88,7 +89,7 @@ nonisolated struct TissueSession: Sendable {
     static func strength(_ sets: [StrengthSets.SetRow]) -> [TissueGroup: TissueDose] {
         let hardSet = TissueConstants.tlPerHardSet
         var out: [TissueGroup: TissueDose] = [:]
-        for groups in sets.compactMap(Self.groups) {
+        for groups in sets.compactMap(Self.groups) where groups.exercise?.category != .stretch {
             for group in groups.primary {
                 let tendon = groups.exercise?.loadsTendon == true && group.tendonLabel != nil ? hardSet : 0
                 out[group, default: .init()] += .init(muscle: hardSet, tendon: tendon)

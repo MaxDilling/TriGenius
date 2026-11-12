@@ -2,8 +2,8 @@ import SwiftUI
 
 // MARK: - Live strength workout
 //
-// The full-screen session: a floating glass bar (collapse, clock, pause) above
-// two pages — the current set or its rest, and the queue — and the summary once
+// The full-screen session: a floating bar (collapse, clock, pause) and the
+// progress with where it stands above two pages — the current set or its rest, and the queue — and the summary once
 // the session has ended. Presented from `RootTabView`, so collapsing it leaves
 // the mini bar (`LiveStrengthMiniBar`) above the tab bar on iOS.
 
@@ -18,6 +18,11 @@ struct LiveStrengthView: View {
             } else {
                 VStack(spacing: Theme.Spacing.m) {
                     topBar(session)
+                    VStack(spacing: Theme.Spacing.s) {
+                        LiveProgressBar(session: session)
+                        position(session)
+                    }
+                    .padding(.horizontal)
                     pages(session)
                     pageDots
                 }
@@ -28,34 +33,41 @@ struct LiveStrengthView: View {
     }
 
     private func topBar(_ session: StrengthSession) -> some View {
-        GlassEffectContainer(spacing: Theme.Spacing.s) {
-            HStack {
-                Button { live.isPresented = false } label: { Image(systemName: "chevron.down") }
-                    .accessibilityLabel("Minimize workout")
-                    .liveRoundButton()
-                Spacer()
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    HStack(spacing: Theme.Spacing.xs) {
-                        Text(LiveFormat.clock(session.elapsed(at: context.date))).fontWeight(.semibold)
-                        if session.plannedMinutes > 0 {
-                            Text("/ ~\(LiveFormat.clock(session.plannedMinutes * 60))").foregroundStyle(.secondary)
-                        }
-                    }
-                    .monospacedDigit()
-                    .headerSegment()
-                }
-                .headerPill()
-                Spacer()
-                Button {
-                    live.update { s, now in s.pausedAt == nil ? s.pause(at: now) : s.resume(at: now) }
-                } label: {
-                    Image(systemName: session.pausedAt == nil ? "pause.fill" : "play.fill")
-                }
-                .accessibilityLabel(session.pausedAt == nil ? "Pause workout" : "Resume workout")
+        HStack {
+            Button { live.isPresented = false } label: { Image(systemName: "chevron.down") }
+                .accessibilityLabel("Minimize workout")
                 .liveRoundButton()
+            Spacer()
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                HStack(spacing: Theme.Spacing.xs) {
+                    Text(LiveFormat.clock(session.elapsed(at: context.date)))
+                    if session.plannedMinutes > 0 {
+                        Text("/ ~\(LiveFormat.clock(session.plannedMinutes * 60))").foregroundStyle(.secondary)
+                    }
+                }
+                .font(.headline)
+                .monospacedDigit()
             }
+            Spacer()
+            Button {
+                live.update { s, now in s.pausedAt == nil ? s.pause(at: now) : s.resume(at: now) }
+            } label: {
+                Image(systemName: session.pausedAt == nil ? "pause.fill" : "play.fill")
+            }
+            .accessibilityLabel(session.pausedAt == nil ? "Pause workout" : "Resume workout")
+            .liveRoundButton()
         }
         .padding(.horizontal)
+    }
+
+    /// "Exercise 3 of 4 · Set 2 of 3" — the set under way or coming next.
+    private func position(_ session: StrengthSession) -> some View {
+        HStack {
+            Text("Exercise \((session.currentIndex ?? session.units.count - 1) + 1) of \(session.units.count)")
+            Spacer()
+            if let position = session.currentSetPosition { Text("Set \(position.number) of \(position.of)") }
+        }
+        .font(.subheadline).foregroundStyle(.secondary)
     }
 
     private func pages(_ session: StrengthSession) -> some View {
@@ -86,20 +98,30 @@ struct LiveStrengthView: View {
 
 // MARK: - Shared pieces
 
-/// Sets done (success) and the current one (accent) over every set of the session.
+/// Every set of the session, one segment per unit with a gap between: sets done
+/// (success) and the current one (accent) once its rest is over.
 struct LiveProgressBar: View {
     let session: StrengthSession
 
+    private static let gap: CGFloat = 3
+
     var body: some View {
         GeometryReader { geo in
-            let total = max(1, CGFloat(session.totalSets))
-            let unit = geo.size.width / total
-            HStack(spacing: 2) {
-                Capsule().fill(Theme.Palette.success).frame(width: unit * CGFloat(session.doneSets))
-                if session.current != nil { Capsule().fill(Color.accentColor).frame(width: unit) }
-                Spacer(minLength: 0)
+            let gaps = Self.gap * CGFloat(max(0, session.units.count - 1))
+            let perSet = (geo.size.width - gaps) / max(1, CGFloat(session.totalSets))
+            let current = session.isResting(at: .now) ? nil : session.currentIndex.map { session.units[$0].id }
+            HStack(spacing: Self.gap) {
+                ForEach(session.units) { unit in
+                    HStack(spacing: 0) {
+                        Rectangle().fill(Theme.Palette.success).frame(width: perSet * CGFloat(unit.done))
+                        if unit.id == current { Rectangle().fill(Color.accentColor).frame(width: perSet) }
+                        Spacer(minLength: 0)
+                    }
+                    .frame(width: perSet * CGFloat(unit.sets.count))
+                    .background(Color.appTertiaryBackground)
+                    .clipShape(Capsule())
+                }
             }
-            .background(Color.appTertiaryBackground, in: Capsule())
         }
         .frame(height: 6)
         .accessibilityElement()
@@ -165,6 +187,8 @@ struct LiveStrengthMiniBar: View {
                     Text(LiveFormat.clock(session.elapsed(at: context.date))).font(.subheadline).monospacedDigit()
                 }
                 .padding(.horizontal, Theme.Spacing.l)
+                .frame(maxHeight: .infinity)
+                .contentShape(.rect)
             }
         }
         .buttonStyle(.plain)
@@ -173,6 +197,7 @@ struct LiveStrengthMiniBar: View {
     private func status(at now: Date) -> String {
         if session.endedAt != nil { return "Workout complete · save it" }
         if session.pausedAt != nil { return "Paused" }
+        if session.isComplete { return "All sets done" }
         switch session.phase(at: now) {
         case .resting(_, let until?): return "Rest \(LiveFormat.clock(until.timeIntervalSince(now)))"
         case .resting: return "Rest · until ready"

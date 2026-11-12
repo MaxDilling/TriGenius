@@ -3,12 +3,13 @@ import SwiftUI
 // MARK: - Swap an exercise for today
 //
 // Replaces every set still to do of one exercise in one unit with another
-// library exercise the athlete's `StrengthProfile` allows — for this session
-// only. Candidates share the set's kind (reps or a hold), so the prescription
-// carries over unchanged; the weight starts from what the athlete lifted or
-// planned for the new exercise; reps (or a hold's time) and weight can be
-// adjusted before swapping. Ranked by the tissue groups they share with the
-// replaced one: the same primary groups, then any overlap.
+// library exercise the athlete's `StrengthProfile` allows — or a custom name
+// when the search finds nothing fitting — for this session only. Candidates share
+// the set's kind (reps or a hold, a stretch or not), so the prescription carries
+// over unchanged; the weight starts from what the athlete lifted or planned for
+// the new exercise; reps (or a hold's time) and weight can be adjusted before
+// swapping. Sectioned by the tissue groups they share with the replaced one: the
+// same primary groups, then any overlap, then the rest.
 
 struct LiveSwapTarget: Identifiable {
     let id = UUID()
@@ -24,6 +25,7 @@ struct LiveSwapSheet: View {
     @State private var sameMuscles: Bool
     @State private var equipment: Exercise.Equipment?
     @State private var selection: Exercise?
+    @State private var customName: String?
     @State private var weightKg: Double?
     /// Nil keeps each set's own.
     @State private var reps: Int?
@@ -33,6 +35,8 @@ struct LiveSwapSheet: View {
     private let isHold: Bool
     /// The sets the swap replaces.
     private let remaining: [StrengthSets.SetRow]
+
+    private static let sectionTitles = [2: "Same muscles", 1: "Similar", 0: "Other"]
 
     init(target: LiveSwapTarget) {
         self.target = target
@@ -50,52 +54,47 @@ struct LiveSwapSheet: View {
         return Set(exercise.primaryGroups).isDisjoint(with: replaced.primaryGroups) ? 0 : 1
     }
 
-    private var candidates: [(exercise: Exercise, rank: Int)] {
+    /// Candidates by rank, best first, each section sorted by name.
+    private var sections: [(rank: Int, exercises: [Exercise])] {
         let profile = StrengthProfile.stored
-        let ranked: [(exercise: Exercise, rank: Int)] = ExerciseLibrary.all
-            .filter { profile.allows($0) && matches($0) }
-            .map { ($0, rank($0)) }
+        let ranked = Dictionary(grouping: ExerciseLibrary.all.filter { profile.allows($0) && matches($0) }, by: rank)
         return ranked
-            .filter { !sameMuscles || $0.rank > 0 }
-            .sorted { $0.rank != $1.rank ? $0.rank > $1.rank : $0.exercise.name < $1.exercise.name }
+            .filter { !sameMuscles || $0.key > 0 }
+            .map { (rank: $0.key, exercises: $0.value.sorted { $0.name < $1.name }) }
+            .sorted { $0.rank > $1.rank }
     }
 
     private func matches(_ exercise: Exercise) -> Bool {
-        guard exercise.id != replaced?.id, exercise.isTimeBased == isHold else { return false }
+        guard exercise.id != replaced?.id, exercise.isTimeBased == isHold,
+              (exercise.category == .stretch) == (replaced?.category == .stretch) else { return false }
         if let equipment, exercise.equipment != equipment { return false }
         return query.isEmpty || exercise.name.localizedCaseInsensitiveContains(query)
     }
 
+    private var trimmedQuery: String { query.trimmingCharacters(in: .whitespaces) }
+
     var body: some View {
+        let sections = sections
         NavigationStack {
             List {
-                Section {
-                    ForEach(candidates, id: \.exercise.id) { candidate in
-                        row(candidate.exercise, rank: candidate.rank)
+                Section { header }
+                    .listRowSeparator(.hidden)
+                    .listSectionSeparator(.hidden)
+                ForEach(sections, id: \.rank) { section in
+                    Section(Self.sectionTitles[section.rank] ?? "") {
+                        ForEach(section.exercises) { row($0) }
                     }
-                    if candidates.isEmpty {
-                        Text("No exercise matches.").foregroundStyle(.secondary)
-                    }
-                } header: {
-                    header
+                    .listSectionSeparator(.hidden)
                 }
-                Section("Carries over") {
-                    Text(carriesOver).font(.headline).monospacedDigit()
-                    if isHold {
-                        let shown = seconds ?? remaining.first?.seconds ?? 0
-                        Stepper("Time: \(ExerciseSetsCard.time(shown))",
-                                value: Binding(get: { shown }, set: { seconds = $0 }), in: 5...600, step: 5)
-                    } else {
-                        let shown = reps ?? remaining.first?.reps ?? 0
-                        Stepper("Reps: \(shown)", value: Binding(get: { shown }, set: { reps = $0 }), in: 1...100)
-                    }
-                    if selection != nil {
-                        Stepper("Load: \(LiveFormat.load(weightKg))",
-                                value: Binding(get: { weightKg ?? 0 }, set: { weightKg = $0 > 0 ? $0 : nil }),
-                                in: 0...500, step: 2.5)
-                    }
+                if !trimmedQuery.isEmpty,
+                   !sections.contains(where: { $0.exercises.contains { $0.name.caseInsensitiveCompare(trimmedQuery) == .orderedSame } }) {
+                    Section("Not in the library") { customRow(trimmedQuery) }
+                        .listSectionSeparator(.hidden)
+                } else if sections.isEmpty {
+                    Text("No exercise matches.").foregroundStyle(.secondary)
                 }
             }
+            .listStyle(.plain)
             .onChange(of: selection?.id) {
                 weightKg = selection.flatMap { TrainingDataStore.shared.startingWeightKg(for: $0) }
             }
@@ -107,7 +106,7 @@ struct LiveSwapSheet: View {
                     Button(role: .close) { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Swap", role: .confirm) { swap() }.disabled(selection == nil)
+                    Button("Swap", role: .confirm) { swap() }.disabled(selection == nil && customName == nil)
                 }
             }
         }
@@ -116,24 +115,35 @@ struct LiveSwapSheet: View {
         #endif
     }
 
+    @ViewBuilder
     private var header: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                Text("Replacing").font(.subheadline).foregroundStyle(.secondary)
-                Text(target.set.title).font(.title2.bold()).foregroundStyle(.primary)
-                if let groups = replaced.map(groupsLine) {
-                    Text(groups).font(.subheadline).foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            Text(target.set.title).font(.title2.bold())
+            if let groups = replaced.map(groupsLine) {
+                Text(groups).font(.subheadline).foregroundStyle(.secondary)
             }
+        }
+        Text(carriesOver).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+        if isHold {
+            let shown = seconds ?? remaining.first?.seconds ?? 0
+            Stepper("Time: \(ExerciseSetsCard.time(shown))",
+                    value: Binding(get: { shown }, set: { seconds = $0 }), in: 5...600, step: 5)
+        } else {
+            let shown = reps ?? remaining.first?.reps ?? 0
+            Stepper("Reps: \(shown)", value: Binding(get: { shown }, set: { reps = $0 }), in: 1...100)
+        }
+        Stepper("Load: \(LiveFormat.load(weightKg))",
+                value: Binding(get: { weightKg ?? 0 }, set: { weightKg = $0 > 0 ? $0 : nil }),
+                in: 0...500, step: 2.5)
+            .disabled(selection == nil && customName == nil)
+        ScrollView(.horizontal) {
             HStack(spacing: Theme.Spacing.s) {
                 chip("Same muscles", isOn: $sameMuscles).disabled(replaced == nil)
                 chip("No equipment", isOn: equipmentFilter(.bodyweight))
                 chip("Machines", isOn: equipmentFilter(.machine))
             }
-            Text("Recommended")
         }
-        .textCase(nil)
-        .padding(.bottom, Theme.Spacing.xs)
+        .scrollIndicators(.hidden)
     }
 
     /// One equipment filter at a time: turning one on replaces the other.
@@ -154,6 +164,7 @@ struct LiveSwapSheet: View {
         Button { isOn.wrappedValue.toggle() } label: {
             Text(title)
                 .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
                 .padding(.horizontal, Theme.Spacing.m)
                 .padding(.vertical, Theme.Spacing.s)
                 .foregroundStyle(isOn.wrappedValue ? Color.white : Color.primary)
@@ -163,43 +174,50 @@ struct LiveSwapSheet: View {
         .accessibilityAddTraits(isOn.wrappedValue ? .isSelected : [])
     }
 
-    private func row(_ exercise: Exercise, rank: Int) -> some View {
-        Button { selection = exercise } label: {
+    private func row(_ exercise: Exercise) -> some View {
+        choiceRow(exercise.name,
+                  detail: (exercise.primaryGroups.map(\.label) + [exercise.equipment.label.lowercased()]).joined(separator: " · "),
+                  selected: selection?.id == exercise.id) {
+            selection = exercise
+            customName = nil
+        }
+    }
+
+    private func customRow(_ name: String) -> some View {
+        choiceRow("Use “\(name)”", detail: "Custom exercise · no muscle groups", selected: customName == name) {
+            selection = nil
+            customName = name
+            weightKg = nil
+        }
+    }
+
+    private func choiceRow(_ title: String, detail: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
             HStack(spacing: Theme.Spacing.m) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(exercise.name).font(.headline)
-                    Text((exercise.primaryGroups.map(\.label) + [exercise.equipment.label.lowercased()]).joined(separator: " · "))
-                        .font(.subheadline).foregroundStyle(.secondary)
+                    Text(title).font(.headline)
+                    Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
                 }
-                Spacer()
-                if rank > 0 {
-                    let color = rank == 2 ? Theme.Palette.success : Theme.Palette.info
-                    Text(rank == 2 ? "Same muscles" : "Similar")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(color)
-                        .padding(.horizontal, Theme.Spacing.s)
-                        .padding(.vertical, Theme.Spacing.xs)
-                        .background(color.opacity(0.18), in: Capsule())
-                }
+                Spacer(minLength: 0)
                 Image(systemName: "checkmark")
                     .foregroundStyle(Color.accentColor)
-                    .opacity(selection?.id == exercise.id ? 1 : 0)
+                    .opacity(selected ? 1 : 0)
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
 
-    /// "3 sets · rest 0:45" — reps and load have their own rows.
+    /// "Carries over: 3 sets · rest 0:45" — reps and load have their own rows.
     private var carriesOver: String {
-        (["\(remaining.count) set\(remaining.count == 1 ? "" : "s")"] + [LiveFormat.rest(remaining.first?.rest)].compactMap { $0 })
+        "Carries over: " + (["\(remaining.count) set\(remaining.count == 1 ? "" : "s")"] + [LiveFormat.rest(remaining.first?.rest)].compactMap { $0 })
             .joined(separator: " · ")
     }
 
     private func swap() {
-        guard let selection else { return }
+        guard let name = selection?.name ?? customName else { return }
         LiveStrengthController.shared.update { s, _ in
-            s.swap(unit: target.unit, replacing: target.set, with: selection.id, name: selection.name,
+            s.swap(unit: target.unit, replacing: target.set, with: selection?.id, name: name,
                    reps: reps, seconds: seconds, weightKg: weightKg)
         }
         dismiss()

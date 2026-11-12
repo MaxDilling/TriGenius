@@ -84,10 +84,10 @@ private func done(_ s: inout StrengthSession, at time: TimeInterval, reps: Int? 
     #expect(s.phase(at: at(500)) == .resting(since: at(40), until: at(100)))
 }
 
-@Test func theLastSetEndsTheSession() {
+@Test func afterTheLastSetTheSessionWaitsUntimedForItsEnd() {
     var s = session([exercise("back_squat", reps: [5])])
     done(&s, at: 40)
-    #expect(s.endedAt == at(40))
+    #expect(s.endedAt == nil && s.phase == .resting(since: at(40), until: nil))
 }
 
 @Test func anEditedSetIsLoggedAsEditedAndTheNextOneStartsFromThePrescription() {
@@ -169,4 +169,32 @@ private func done(_ s: inout StrengthSession, at time: TimeInterval, reps: Int? 
     s.swap(unit: 0, replacing: s.current!, with: "calf_raise", name: "Calf raise", weightKg: nil)
     s.swap(unit: 0, replacing: s.current!, with: "seated_calf_raise", name: "Seated calf raise", weightKg: nil)
     #expect(s.units[0].replaced == ["Seated calf raise": original])
+}
+
+@Test func anExerciseAddedNextComesBeforeTheCurrentOneWhichKeepsItsProgress() {
+    var s = session([exercise("back_squat", reps: [5, 5])])
+    done(&s, at: 40)
+    s.add(sets: StrengthSession.units(planned: [exercise("push_up", reps: [10])])[0].sets, next: true)
+    #expect(s.units.map { "\($0.id):\($0.done)" } == ["1:0", "0:1"])
+}
+
+@Test func removingDropsAnUpcomingUnitButNeverTheCurrentOne() {
+    var s = session([exercise("back_squat", reps: [5]), exercise("push_up", reps: [10]), exercise("plank_row", reps: [8])])
+    s.remove(unit: 0)
+    s.remove(unit: 2)
+    #expect(s.units.map(\.id) == [0, 1])
+}
+
+@Test func oneMoreSetAfterAnExercisesLastSetReopensIt() {
+    var s = session([exercise("back_squat", reps: [5, 5]), exercise("push_up", reps: [10])])
+    done(&s, at: 40)
+    done(&s, at: 200)
+    s.oneMoreSet()
+    #expect(s.current?.exerciseId == "back_squat" && s.currentSetPosition.map { [$0.number, $0.of] } == [3, 3])
+}
+
+@Test func aSwapToACustomNameDropsTheLibraryId() {
+    var s = session([exercise("back_squat", reps: [5])])
+    s.swap(unit: 0, replacing: s.current!, with: nil, name: "Box squat", weightKg: 60)
+    #expect(s.current?.exerciseId == nil && s.current?.title == "Box squat")
 }

@@ -1067,9 +1067,10 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
             if !exercise.secondaryGroups.isEmpty {
                 text += " + " + exercise.secondaryGroups.map(\.rawValue).joined(separator: ", ")
             }
+            if exercise.category == .stretch { return text + " · stretch" }
             return exercise.isTimeBased ? text + " · timed" : text
         }
-        var lines = ["exercise_id — loads + also loads · timed (a hold: its sets take duration_seconds, not reps)"]
+        var lines = ["exercise_id — loads + also loads · timed (a hold: its sets take duration_seconds, not reps) · stretch (a timed hold that stretches those groups and loads nothing)"]
         if let summary = profile.summary { lines.append("Only what the athlete's strength profile allows (\(summary)).") }
         if gear != nil {
             lines += matches.map(line)

@@ -34,7 +34,7 @@ is ever written into the metric series.
 
 **`StrengthSets`** — the one set model (`SetRow`) behind the strength table, for a plan and a recorded session alike. `blocks(planned:)` keeps the plan as written — a circuit is one block with its rounds and round rest, a rest step its own item. `rows(performed:)`/`entries(_:)` convert to and from the stored `strength.exercises` (the athlete's edits round-trip through them). `comparison(planned:performed:)` pairs each recorded set with the prescribed set it matches, on Garmin's own exercise key (never on name similarity; each exercise's sets consume its prescribed sets in order, so interleaved circuit rounds line up), adds every prescribed set nothing was recorded for after the last line of its exercise, and flags only a paired set whose prescribed rep count came back missing or different. Improvising is not a discrepancy. Pinned by `TriGeniusTests/Analytics/StrengthSetsTests.swift`.
 
-**`StrengthSession`** — the state of a live strength workout (`Features/LiveStrength/`, `docs/app.md`), built on `StrengthSets`: `units(planned:)` turns the plan's blocks into units in execution order (a circuit unrolled round by round) and hangs every rest — set rest, `rest_after`, rest step, round rest — on the set before it. The log keeps what was done (reps, weight, a hold's seconds, the rest actually taken, the optional `effort`), never the prescription. Phases are `Date`-anchored and `phase(at:)`/`settle(at:)` read a timed rest that ran out as the next set's start, so the state is exact after backgrounding or a relaunch. Pinned by `TriGeniusTests/Analytics/StrengthSessionTests.swift`.
+**`StrengthSession`** — the state of a live strength workout (`Features/LiveStrength/`, `docs/app.md`), built on `StrengthSets`: `units(planned:)` turns the plan's blocks into units in execution order (a circuit unrolled round by round) and hangs every rest — set rest, `rest_after`, rest step, round rest — on the set before it. The log keeps what was done (reps, weight, a hold's seconds, the rest actually taken, the optional `effort`), never the prescription. Phases are `Date`-anchored and `phase(at:)`/`settle(at:)` read a timed rest that ran out as the next set's start, so the state is exact after backgrounding or a relaunch. The last set does not end the session: it waits, untimed, until the athlete ends it, adds a set or adds an exercise. Pinned by `TriGeniusTests/Analytics/StrengthSessionTests.swift`.
 
 ### `Analytics/Tissue/` — the second load axis
 
@@ -110,7 +110,8 @@ sport weights for Shins and the arm groups are general-knowledge placeholders.
    (`sportContributions`). A strength session doses in **hard sets**: 1 per set on a primary
    group, ½ on a secondary, times `tlPerHardSet` to share a scale with TL, plus tendon dose
    on a primary group with a modelled tendon when the library marks the exercise
-   `loadsTendon`. Its HR-derived TL never enters this axis. A plan doses from its planned
+   `loadsTendon`. A stretch (library category `stretch`, Garmin's own stretches) is no hard
+   set and doses nothing. Its HR-derived TL never enters this axis. A plan doses from its planned
    TL or prescribed sets. A set's groups resolve in one place (`TissueSession.groups`);
    `TissueSession.targets` reads the same groups as primary/secondary for the muscle map
    (`Shared/Charts/MuscleMap`) at the top of the strength card, plan and session alike.
@@ -142,8 +143,8 @@ its groups through it, so a recorded set of an exercise outside the library gets
 too; the library still carries `loads_tendon`, and its own groups for the 6 exercises
 Garmin lacks.
 
-**`ExerciseLibrary`** (`Analytics/Tissue/ExerciseLibrary.swift`) — ~60 curated strength
-exercises loaded once from bundled `Assets/Exercises/exercise-library.json`, each mapped
+**`ExerciseLibrary`** (`Analytics/Tissue/ExerciseLibrary.swift`) — ~100 curated exercises
+(strength moves, plus every Garmin stretch that names its muscles as category `stretch`) loaded once from bundled `Assets/Exercises/exercise-library.json`, each mapped
 onto the `TissueGroup`s it primarily/secondarily loads and whether it stresses a tendon.
 Picker data for the workout editor (`Features/WorkoutEditor/`),
 not coaching prose — that's why it lives as JSON rather than in `Assets/Knowledge/`. A

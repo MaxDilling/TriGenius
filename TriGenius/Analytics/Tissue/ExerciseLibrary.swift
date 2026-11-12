@@ -2,8 +2,8 @@ import Foundation
 
 // MARK: - Exercise library
 //
-// ~60 curated strength exercises, each with
-// the tissue groups it loads — from Garmin's catalog (`GarminMuscles`), or its
+// ~100 curated exercises, strength moves and stretches, each with
+// the tissue groups it works — from Garmin's catalog (`GarminMuscles`), or its
 // own list for the few Garmin lacks — and whether it loads a tendon. Bundled as
 // JSON rather than Assets/Knowledge/ prose: this is picker data the workout
 // editor reads directly, not something the model reasons over. A step's
@@ -12,7 +12,7 @@ import Foundation
 
 nonisolated struct Exercise: Codable, Identifiable, Hashable, Sendable {
     nonisolated enum Category: String, Codable, CaseIterable, Hashable, Sendable {
-        case compound, isolation, core, carry, plyometric, isometric
+        case compound, isolation, core, carry, plyometric, isometric, stretch
 
         var label: String {
             switch self {
@@ -22,6 +22,7 @@ nonisolated struct Exercise: Codable, Identifiable, Hashable, Sendable {
             case .carry: return "Carry"
             case .plyometric: return "Plyometric"
             case .isometric: return "Isometric"
+            case .stretch: return "Stretch"
             }
         }
     }

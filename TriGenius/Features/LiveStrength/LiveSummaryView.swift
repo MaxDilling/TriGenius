@@ -30,18 +30,17 @@ struct LiveSummaryView: View {
                 }
                 .padding()
             }
-            VStack(spacing: Theme.Spacing.s) {
-                Button { live.save() } label: {
-                    Text("Save workout").font(.headline).frame(maxWidth: .infinity)
+            HStack(spacing: Theme.Spacing.m) {
+                Button(role: .destructive) { confirmDiscard = true } label: {
+                    Text("Discard").foregroundStyle(Theme.Palette.danger)
                 }
-                .buttonStyle(.glassProminent)
-                .controlSize(.extraLarge)
-                .disabled(session.log.isEmpty)
-                Button("Discard", role: .destructive) { confirmDiscard = true }
-                    .buttonStyle(.bordered)
-                    .buttonBorderShape(.capsule)
+                .buttonStyle(.glass)
+                Button("Save workout") { live.save() }
+                    .buttonStyle(.glassProminent)
+                    .disabled(session.log.isEmpty)
             }
-            .padding(.horizontal)
+            .buttonBorderShape(.capsule)
+            .controlSize(.large)
         }
         .padding(.bottom, Theme.Spacing.s)
         .background(Color.appBackground)

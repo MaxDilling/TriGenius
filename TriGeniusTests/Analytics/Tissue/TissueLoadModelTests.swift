@@ -58,6 +58,12 @@ private func calves(_ output: TissueLoadModel.Output) -> TissueForecast? {
     #expect(Set(TissueSession.strength([lunge]).keys) == [.quads, .glutes, .hamstrings])
 }
 
+@Test func aStretchPlannedOrRecordedDosesNothing() {
+    let planned = StrengthSets.SetRow(exerciseId: "stretch_hamstring", seconds: 30)
+    let recorded = StrengthSets.SetRow(exerciseName: "STRETCH_HAMSTRING", exerciseCategory: "WARM_UP", seconds: 30)
+    #expect(TissueSession.strength([planned, recorded]).isEmpty)
+}
+
 @Test func everyGarminMuscleFoldsOntoAGroup() {
     // Push-up (Garmin: chest; abs, shoulders, triceps secondary) — chest → Shoulders, abs → Low back.
     let dose = TissueSession.strength([StrengthSets.SetRow(exerciseId: "push_up", reps: 10)])

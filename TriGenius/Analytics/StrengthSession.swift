@@ -6,8 +6,8 @@ import Foundation
 // blocks become units in execution order — an exercise's sets, or a circuit
 // unrolled round by round — and every set carries the rest that follows it (the
 // plan's set rest, its `rest_after` or rest step, a circuit's round rest). The
-// athlete may reorder, pull forward, push back, swap or add units; that changes
-// only this session's record, never the plan.
+// athlete may reorder, pull forward, push back, swap, add or remove units, or add
+// a set; that changes only this session's record, never the plan.
 //
 // Every phase is anchored on a `Date`, never on a tick count, so the state is
 // exact after the app was backgrounded or relaunched from the saved file: a
@@ -147,6 +147,11 @@ nonisolated struct StrengthSession: Codable, Hashable, Sendable {
         return end.timeIntervalSince(startedAt) - pausedSeconds - (pausedAt.map { end.timeIntervalSince($0) } ?? 0)
     }
 
+    func isResting(at now: Date) -> Bool {
+        if case .resting = phase(at: now) { return true }
+        return false
+    }
+
     /// The phase as of `now` — frozen while paused — with a timed rest that has
     /// run out read as the next set's start.
     func phase(at now: Date) -> Phase {
@@ -164,8 +169,9 @@ nonisolated struct StrengthSession: Codable, Hashable, Sendable {
     }
 
     /// Log the current set as done — `set` carries what was actually done — and
-    /// move on to its rest, or straight to the next set when none follows. The
-    /// last set ends the session.
+    /// move on to its rest, or straight to the next set when none follows. After
+    /// the last set the session waits, untimed, for one more set, another
+    /// exercise or its end.
     mutating func complete(_ set: SetRow, at now: Date) {
         settle(at: now)
         guard let index = currentIndex else { return }
@@ -175,7 +181,7 @@ nonisolated struct StrengthSession: Codable, Hashable, Sendable {
         let rest = units[index].current?.rest
         units[index].done += 1
         edited = nil
-        guard !isComplete else { phase = .working(since: now); endedAt = now; return }
+        guard !isComplete else { phase = .resting(since: now, until: nil); return }
         switch rest {
         case .timed(let seconds): phase = .resting(since: now, until: now.addingTimeInterval(seconds))
         case .lapButton: phase = .resting(since: now, until: nil)
@@ -277,10 +283,11 @@ nonisolated struct StrengthSession: Codable, Hashable, Sendable {
         units = units.filter(\.isFinished) + [units[current]] + upcoming
     }
 
-    /// Put `exercise` in place of every set still to do of `old` in the unit.
-    /// The prescription carries over; `reps` / `seconds` replace each set's own
-    /// where given, the weight is the one given.
-    mutating func swap(unit id: Int, replacing old: SetRow, with exerciseId: String, name: String,
+    /// Put the exercise — a library one, or a custom name without `exerciseId` —
+    /// in place of every set still to do of `old` in the unit. The prescription
+    /// carries over; `reps` / `seconds` replace each set's own where given, the
+    /// weight is the one given.
+    mutating func swap(unit id: Int, replacing old: SetRow, with exerciseId: String?, name: String,
                        reps: Int? = nil, seconds: Double? = nil, weightKg: Double?) {
         guard let index = units.firstIndex(where: { $0.id == id }) else { return }
         let replacedTitle = old.title
@@ -297,9 +304,27 @@ nonisolated struct StrengthSession: Codable, Hashable, Sendable {
         edited = nil
     }
 
-    /// Add an exercise's sets after everything still to do.
-    mutating func append(sets: [SetRow]) {
+    /// Add an exercise's sets after everything still to do — or, `next`, before
+    /// the current unit, which keeps its progress.
+    mutating func add(sets: [SetRow], next: Bool = false) {
         guard !sets.isEmpty else { return }
-        units.append(Unit(id: (units.map(\.id).max() ?? -1) + 1, sets: sets))
+        let unit = Unit(id: (units.map(\.id).max() ?? -1) + 1, sets: sets)
+        guard next, let current = currentIndex else { units.append(unit); return }
+        units.insert(unit, at: current)
+        edited = nil
+    }
+
+    /// Drop an upcoming unit.
+    mutating func remove(unit id: Int) {
+        guard upcoming.contains(where: { $0.id == id }) else { return }
+        units.removeAll { $0.id == id }
+    }
+
+    /// Repeat the set just logged as the next one of its unit, prescription and
+    /// rest included — reopening the unit when that set was its last.
+    mutating func oneMoreSet() {
+        guard let id = log.last?.unit, let index = units.firstIndex(where: { $0.id == id }), units[index].done > 0 else { return }
+        units[index].sets.insert(units[index].sets[units[index].done - 1], at: units[index].done)
+        edited = nil
     }
 }

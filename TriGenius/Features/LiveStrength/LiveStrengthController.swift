@@ -4,10 +4,11 @@ import SwiftUI
 //
 // Owns the one running `StrengthSession`: every change goes through `update`,
 // which writes the session to `live_strength.json` (device-local — a killed app
-// resumes where it was), re-arms the next deadline and keeps the display awake
-// while a session runs. The deadlines are the moments the athlete should feel:
-// five seconds before a rest ends, its end, and a hold's end — which also logs
-// the hold at its target. Nothing reaches the store until `save`.
+// resumes where it was), re-arms the next deadline, keeps the display awake
+// while a session runs and mirrors it into the Live Activity on iOS. The
+// deadlines are the moments the athlete should feel: five seconds before a rest
+// ends, its end, and a hold's end — which also logs the hold at its target.
+// Nothing reaches the store until `save`.
 
 @MainActor
 @Observable
@@ -83,6 +84,7 @@ final class LiveStrengthController {
         }
         #if os(iOS)
         UIApplication.shared.isIdleTimerDisabled = session != nil
+        LiveStrengthActivity.sync(session)
         #endif
         arm()
     }
@@ -92,7 +94,9 @@ final class LiveStrengthController {
         guard let s = session, s.pausedAt == nil, s.endedAt == nil else { return }
         let now = Date.now
         let fire: Date
-        switch s.phase(at: now) {
+        // The stored phase, not `phase(at:)`: a rest that ran out while the app was
+        // suspended still needs its deadline to fire, or it is never settled.
+        switch s.phase {
         case .resting(_, let until?):
             let warning = until.addingTimeInterval(-5)
             fire = warning > now ? warning : until
@@ -111,12 +115,12 @@ final class LiveStrengthController {
 
     private func reach(_ date: Date) {
         cue += 1
-        update { s, _ in
+        update { s, now in
             if case .holding = s.phase, var set = s.draft {
                 set.seconds = s.current?.seconds
                 s.complete(set, at: date)
             } else {
-                s.settle(at: date)
+                s.settle(at: now)
             }
         }
     }

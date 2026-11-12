@@ -156,7 +156,7 @@ struct StepDraft: Identifiable {
     var exerciseSetSeconds = 30
     /// Nil = bodyweight.
     var exerciseWeightKg: Double?
-    var exerciseRestSeconds = 90
+    var exerciseRestSeconds = 60
     var exerciseRestUntilLap = false
     var restAfter: RestAfter = .lapButton
     var restAfterSeconds = 120

@@ -4,8 +4,10 @@ import SwiftUI
 //
 // The first page of a live session: the current set — prescription, adjustable
 // reps/time and load, what was lifted last time — or, after a logged set, its
-// rest with what comes next and the optional "how hard" rating. The exercise
-// demo and form cues are placeholders until the library carries media.
+// rest: the set just logged with the optional "how hard" rating, the timer, and
+// what comes next — after an exercise's last set, also one more set or another
+// exercise first, and after the workout's last set its end. The exercise demo
+// and form cues are placeholders until the library carries media.
 
 struct LiveSetPage: View {
     let session: StrengthSession
@@ -13,8 +15,8 @@ struct LiveSetPage: View {
     private let live = LiveStrengthController.shared
     @ScaledMetric(relativeTo: .largeTitle) private var valueSize = 40
     @ScaledMetric(relativeTo: .largeTitle) private var timerSize = 72
-    @State private var swapping: LiveSwapTarget?
     @State private var editingLast = false
+    @State private var addingExercise = false
 
     private static let weightStep = 2.5
     private static let holdStep: Double = 5
@@ -27,10 +29,10 @@ struct LiveSetPage: View {
                 work(unit: session.units[index], set: set)
             }
         }
-        .sheet(item: $swapping) { LiveSwapSheet(target: $0) }
         .sheet(isPresented: $editingLast) {
             if let last = session.log.last?.set { LiveEditSetSheet(set: last) }
         }
+        .sheet(isPresented: $addingExercise) { LiveAddExerciseSheet(next: true) }
     }
 
     // MARK: Set
@@ -39,22 +41,7 @@ struct LiveSetPage: View {
         VStack(spacing: Theme.Spacing.m) {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                    LiveProgressBar(session: session)
-                    HStack {
-                        Text("Exercise \((session.currentIndex ?? 0) + 1) of \(session.units.count)")
-                        Spacer()
-                        if let position = session.currentSetPosition { Text("Set \(position.number) of \(position.of)") }
-                    }
-                    .font(.subheadline).foregroundStyle(.secondary)
                     Text(set.title).font(.largeTitle.bold())
-                    HStack(spacing: Theme.Spacing.s) {
-                        setChips(unit: unit, set: set)
-                        Spacer(minLength: 0)
-                        Button("Swap", systemImage: "arrow.left.arrow.right") {
-                            swapping = LiveSwapTarget(unit: unit.id, set: set)
-                        }
-                        .buttonStyle(.bordered).buttonBorderShape(.capsule)
-                    }
                     demoCard
                     prescription(set)
                 }
@@ -63,26 +50,6 @@ struct LiveSetPage: View {
             Text(nextLine(unit: unit, set: set)).font(.subheadline).foregroundStyle(.secondary)
             primaryButton(set)
         }
-    }
-
-    private func setChips(unit: StrengthSession.Unit, set: StrengthSets.SetRow) -> some View {
-        let indices = unit.sets.indices.filter { unit.sets[$0].sameExercise(as: set) }
-        return ScrollView(.horizontal) {
-            HStack(spacing: Theme.Spacing.xs) {
-                ForEach(Array(indices.enumerated()), id: \.offset) { number, index in
-                    let done = index < unit.done
-                    let color: Color = done ? Theme.Palette.success : index == unit.done ? .accentColor : .secondary
-                    Label("Set \(number + 1)", systemImage: "checkmark")
-                        .labelStyle(ChipLabelStyle(showsIcon: done))
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(color)
-                        .padding(.horizontal, Theme.Spacing.m)
-                        .padding(.vertical, Theme.Spacing.xs + 2)
-                        .background(color.opacity(0.18), in: Capsule())
-                }
-            }
-        }
-        .scrollIndicators(.hidden)
     }
 
     private var demoCard: some View {
@@ -162,6 +129,7 @@ struct LiveSetPage: View {
             Image(systemName: symbol).font(.title3.weight(.semibold)).frame(width: 36, height: 36)
         }
         .buttonStyle(.bordered)
+        .tint(.primary)
         .buttonBorderShape(.circle)
         .accessibilityLabel(label)
     }
@@ -222,32 +190,82 @@ struct LiveSetPage: View {
     // MARK: Rest
 
     private func rest(since: Date, until: Date?) -> some View {
-        ScrollView {
-            VStack(spacing: Theme.Spacing.l) {
-                LiveProgressBar(session: session)
-                if let last = session.log.last { loggedCard(last) }
+        let last = session.log.last
+        let nextUnit = session.currentIndex.map { session.units[$0].id }
+        let exerciseDone = last.map { $0.unit != nextUnit } ?? false
+        return VStack(spacing: Theme.Spacing.m) {
+            if let last { loggedCard(last).padding(.horizontal) }
+            Spacer(minLength: 0)
+            if session.isComplete {
+                allDone
+            } else {
                 restRing(since: since, until: until)
-                restButtons(timed: until != nil)
-                upNextCard
+                if until != nil { adjustButtons }
             }
-            .padding(.horizontal)
+            Spacer(minLength: 0)
+            upNext
+            if exerciseDone {
+                HStack(spacing: Theme.Spacing.s) {
+                    Button("Set", systemImage: "plus") { live.update { s, _ in s.oneMoreSet() } }
+                        .accessibilityLabel("One more set")
+                    Button("Exercise", systemImage: "plus") { addingExercise = true }
+                        .accessibilityLabel("Add exercise")
+                }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.capsule)
+                .disabled(session.pausedAt != nil)
+                .padding(.bottom, Theme.Spacing.s)
+            }
+            Group {
+                if session.isComplete {
+                    bigButton("End workout", systemImage: "flag.checkered") { live.update { s, now in s.end(at: now) } }
+                } else {
+                    bigButton(exerciseDone ? "Start next exercise" : "Start next set", systemImage: "forward.end") {
+                        live.update { s, now in s.skipRest(at: now) }
+                    }
+                }
+            }
+            .disabled(session.pausedAt != nil)
         }
     }
 
+    /// The set just logged, editable, with the optional "how hard" rating.
     private func loggedCard(_ last: StrengthSession.Logged) -> some View {
-        HStack(spacing: Theme.Spacing.m) {
-            Image(systemName: "checkmark")
-                .font(.headline)
-                .foregroundStyle(Theme.Palette.success)
-                .frame(width: 40, height: 40)
-                .background(Theme.Palette.success.opacity(0.18), in: Circle())
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Set \(loggedNumber(last)) logged").font(.headline)
-                Text(LiveFormat.set(last.set)).font(.subheadline).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: Theme.Spacing.m) {
+            HStack(spacing: Theme.Spacing.m) {
+                Image(systemName: "checkmark")
+                    .font(.headline)
+                    .foregroundStyle(Theme.Palette.success)
+                    .frame(width: 40, height: 40)
+                    .background(Theme.Palette.success.opacity(0.18), in: Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Set \(loggedNumber(last)) logged").font(.headline)
+                    Text(LiveFormat.set(last.set)).font(.subheadline).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Edit") { editingLast = true }
+                    .buttonStyle(.bordered).tint(.primary).buttonBorderShape(.capsule)
             }
-            Spacer()
-            Button("Edit") { editingLast = true }
-                .buttonStyle(.bordered).buttonBorderShape(.capsule)
+            Divider()
+            HStack(spacing: Theme.Spacing.s) {
+                Text("How hard was it?").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 0)
+                ForEach(StrengthSets.Effort.allCases, id: \.self) { effort in
+                    let selected = last.set.effort == effort
+                    Button {
+                        live.update { s, _ in s.rateLast(selected ? nil : effort) }
+                    } label: {
+                        Text(effort.rawValue.capitalized)
+                            .font(.subheadline.weight(.semibold))
+                            .padding(.horizontal, Theme.Spacing.m)
+                            .padding(.vertical, Theme.Spacing.s)
+                            .foregroundStyle(selected ? Color.white : Color.primary)
+                            .background(selected ? Color.accentColor : Color.appTertiaryBackground, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
         }
         .cardSurface()
     }
@@ -276,81 +294,61 @@ struct LiveSetPage: View {
                     Text(LiveFormat.clock(shown))
                         .font(.system(size: timerSize, weight: .bold, design: .rounded))
                         .monospacedDigit()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.5)
                         .contentTransition(.numericText(countsDown: until != nil))
                     Text(total.map { "of \(LiveFormat.clock($0))" } ?? "until you're ready")
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
+                .padding(Theme.Spacing.xl)
             }
         }
-        .frame(maxWidth: 280)
         .aspectRatio(1, contentMode: .fit)
-        .padding(.vertical, Theme.Spacing.s)
+        .frame(maxWidth: 280, maxHeight: 280)
     }
 
-    private func restButtons(timed: Bool) -> some View {
-        HStack(spacing: Theme.Spacing.s) {
-            if timed {
-                Button("−15 s") { live.update { s, now in s.adjustRest(by: -15, at: now) } }
-                Button("+15 s") { live.update { s, now in s.adjustRest(by: 15, at: now) } }
-                Button("Skip rest", systemImage: "forward.end") { live.update { s, now in s.skipRest(at: now) } }
-            } else {
-                Button("Start next set", systemImage: "forward.end") { live.update { s, now in s.skipRest(at: now) } }
-            }
+    private var adjustButtons: some View {
+        HStack {
+            adjustButton("−15", label: "Shorten rest by 15 seconds", by: -15)
+            Spacer()
+            adjustButton("+15", label: "Lengthen rest by 15 seconds", by: 15)
         }
-        .buttonStyle(.bordered)
-        .buttonBorderShape(.capsule)
-        .controlSize(.large)
+        .frame(maxWidth: 300)
         .disabled(session.pausedAt != nil)
     }
 
-    @ViewBuilder
-    private var upNextCard: some View {
-        if let next = session.draft, let position = session.currentSetPosition, let last = session.log.last {
-            VStack(alignment: .leading, spacing: Theme.Spacing.m) {
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text("Up next").font(.caption).foregroundStyle(.secondary)
-                        Text("\(next.title) · set \(position.number) of \(position.of)").font(.headline)
-                    }
-                    Spacer()
-                    Text(LiveFormat.set(next)).font(.title3.bold()).monospacedDigit()
-                }
-                Divider()
-                HStack(spacing: Theme.Spacing.s) {
-                    Text("How hard was set \(loggedNumber(last))?")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                    ForEach(StrengthSets.Effort.allCases, id: \.self) { effort in
-                        let selected = last.set.effort == effort
-                        Button {
-                            live.update { s, _ in s.rateLast(selected ? nil : effort) }
-                        } label: {
-                            Text(effort.rawValue.capitalized)
-                                .font(.subheadline.weight(.semibold))
-                                .padding(.horizontal, Theme.Spacing.m)
-                                .padding(.vertical, Theme.Spacing.s)
-                                .foregroundStyle(selected ? Color.white : Color.primary)
-                                .background(selected ? Color.accentColor : Color.appTertiaryBackground, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityAddTraits(selected ? .isSelected : [])
-                    }
-                }
-            }
-            .cardSurface()
+    private func adjustButton(_ title: String, label: String, by seconds: TimeInterval) -> some View {
+        Button { live.update { s, now in s.adjustRest(by: seconds, at: now) } } label: {
+            Text(title).font(.headline.monospacedDigit()).frame(width: 48, height: 48)
         }
+        .buttonStyle(.glass)
+        .buttonBorderShape(.circle)
+        .accessibilityLabel(label)
     }
-}
 
-/// A set chip's label: the checkmark only once the set is done.
-private struct ChipLabelStyle: LabelStyle {
-    let showsIcon: Bool
+    /// The ring, full, once every set is done.
+    private var allDone: some View {
+        ZStack {
+            Circle().stroke(Theme.Palette.success, lineWidth: 14)
+            VStack(spacing: Theme.Spacing.s) {
+                Image(systemName: "checkmark").font(.system(size: timerSize / 2, weight: .bold))
+                    .foregroundStyle(Theme.Palette.success)
+                Text("All sets done").font(.title3.weight(.semibold))
+            }
+        }
+        .aspectRatio(1, contentMode: .fit)
+        .frame(maxWidth: 280, maxHeight: 280)
+    }
 
-    func makeBody(configuration: Configuration) -> some View {
-        HStack(spacing: Theme.Spacing.xs) {
-            configuration.title
-            if showsIcon { configuration.icon }
+    /// "Up next · Set 3 of 3" over "Bench press · 10 · BW".
+    @ViewBuilder
+    private var upNext: some View {
+        if let next = session.draft, let position = session.currentSetPosition {
+            VStack(spacing: 2) {
+                Text("Up next · Set \(position.number) of \(position.of)").font(.subheadline).foregroundStyle(.secondary)
+                Text("\(next.title) · \(LiveFormat.set(next))").font(.headline).monospacedDigit().lineLimit(1)
+            }
+            .padding(.horizontal)
         }
     }
 }
