@@ -80,8 +80,7 @@ struct PlannedWorkoutDetailView: View {
             if family == .strength, !workout.isCompleted, !exerciseBlocks.isEmpty {
                 ToolbarItem(placement: .primaryAction) { startButton }
             }
-            // A race follows its event — it is edited and deleted on the Plan page.
-            if workout.source != TrainingDataStore.raceSource {
+            if !workout.isReadOnly {
                 ToolbarItem(placement: .primaryAction) {
                     Button() { editor = .edit(workout) } label: {
                         Label("Edit", systemImage: "pencil")

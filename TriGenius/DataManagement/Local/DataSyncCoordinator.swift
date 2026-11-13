@@ -379,7 +379,8 @@ final class DataSyncCoordinator {
             notes: data["description"] as? String ?? "",
             stepsJSON: stepsJSON,
             poolLengthMeters: Coerce.double(data["pool_length"]).flatMap { $0 > 0 ? $0 : nil },
-            associatedActivityId: item["associated_activity_id"].map { "\($0)" }
+            associatedActivityId: item["associated_activity_id"].map { "\($0)" },
+            isAdaptiveSuggestion: item["adaptive_suggestion"] as? Bool ?? false
         )
     }
 
@@ -542,6 +543,7 @@ final class DataSyncCoordinator {
             row["expected_minutes"] = Int(rec.plannedDurationMinutes.rounded())
         } else {
             row["workout_data"] = WorkoutPayloadBuilder.workoutData(from: rec)
+            if rec.isAdaptiveSuggestion { row["adaptive_suggestion"] = true }
         }
         return row
     }
@@ -575,11 +577,17 @@ final class DataSyncCoordinator {
     // The single write path for planned workouts, shared by the coach's scheduling
     // tools and the calendar's workout editor: every write lands in the local store
     // first (source of truth), then pushes to the active write target. A failed push
-    // keeps the local plan; `reconcileWriteTarget` re-pushes it. A race slot is not a
-    // plan here — it follows its ATP event (`TrainingDataStore.syncRaceSlots`).
+    // keeps the local plan; `reconcileWriteTarget` re-pushes it. A read-only row
+    // (`WorkoutRecord.isReadOnly`) is not a plan here.
 
     private func editablePlan(id: String) -> WorkoutRecord? {
-        store.scheduledWorkout(id: id).flatMap { $0.source == TrainingDataStore.raceSource ? nil : $0 }
+        store.scheduledWorkout(id: id).flatMap { $0.isReadOnly ? nil : $0 }
+    }
+
+    /// Where a plan's edits go: a plan mirrored from a provider back to that provider
+    /// (every sync re-mirrors it from there), a local plan to the active write target.
+    private func pushTarget(for plan: WorkoutRecord) -> WriteTarget {
+        WriteTarget.allCases.first { $0.refKey == plan.source } ?? AppSettings.storedWriteTarget()
     }
 
     /// Create a locally-owned plan from a raw `workout_data` dict (run through
@@ -609,8 +617,8 @@ final class DataSyncCoordinator {
     /// present. Returns nil when no plan with `id` exists. Rejected (implausible)
     /// edits leave the stored plan untouched.
     func updatePlan(id: String, workoutData raw: [String: Any]) async -> PlanWriteResult? {
-        let writeTarget = AppSettings.storedWriteTarget()
         guard let existing = editablePlan(id: id) else { return nil }
+        let writeTarget = pushTarget(for: existing)
         let editsSteps = raw["steps"] != nil
         // Normalize the stored plan overlaid with the edits — never the partial
         // dict alone, or the normalizer invents defaults ("Other", pool length,
@@ -656,8 +664,8 @@ final class DataSyncCoordinator {
     /// Move a plan to a new day locally, then on the active write target (content
     /// unchanged). Returns nil when no plan with `id` exists.
     func movePlan(id: String, to date: Date) async -> PlanWriteOutcome? {
-        let writeTarget = AppSettings.storedWriteTarget()
         guard let rec = editablePlan(id: id) else { return nil }
+        let writeTarget = pushTarget(for: rec)
         let fromDate = DateFormatter.ymd.string(from: rec.date)
         let toDate = DateFormatter.ymd.string(from: date)
         store.moveScheduledWorkout(id: id, to: date)

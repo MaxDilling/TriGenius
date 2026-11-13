@@ -471,7 +471,7 @@ private struct DayHeaderCell: View, Equatable {
                        subtitle: Self.plannedMetadata(for: workout), kind: .planned)
                 .contentShape(Rectangle())
                 .onTapGesture { onOpen(.planned(workout)) }
-                .draggable(workout.id)
+                .planDraggable(workout)
         case .event(let window):
             // System events stay single-line (no metadata).
             AllDayPill(sport: nil, title: window.title, subtitle: nil, kind: .event)

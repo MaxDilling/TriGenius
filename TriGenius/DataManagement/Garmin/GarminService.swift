@@ -555,8 +555,8 @@ nonisolated final class GarminService: Sendable {
         let start = GarminTransform.formatDate(startDate)
         let end = GarminTransform.formatDate(endDate)
 
-        // `scheduled` holds editable planned workouts (round-trippable into
-        // modify_workout); `completed` holds finished activities. Kept separate so
+        // `scheduled` holds planned workouts (round-trippable into modify_workout,
+        // except Garmin Coach's `adaptive_suggestion`s); `completed` holds finished activities. Kept separate so
         // the model never has to filter a mixed list.
         var scheduled: [[String: Any]] = []
         var completed: [[String: Any]] = []
@@ -624,7 +624,6 @@ nonisolated final class GarminService: Sendable {
                 let uuid = item["workoutUuid"] as? String ?? ""
                 if uuid.isEmpty || seen.contains(uuid) { continue }
                 seen.insert(uuid)
-                // Garmin-coach workouts are planned but not editable via our API.
                 pending.append((uuid, nil, "[GC] \(item["title"] as? String ?? "Training Plan Workout")",
                                 item["sportTypeKey"] as? String ?? "other", itemDate, true))
             default:
@@ -687,7 +686,7 @@ nonisolated final class GarminService: Sendable {
             // workout_data mirrors the add_workouts/modify_workout shape, so an item can
             // be passed straight back to modify_workout.
             var entry: [String: Any] = [
-                "workout_id": p.id, "date": p.date, "editable": !p.coach,
+                "workout_id": p.id, "date": p.date, "adaptive_suggestion": p.coach,
                 "workout_data": [
                     "name": p.title, "sport": p.sport, "duration_minutes": durationMinutes,
                     "description": "", "steps": steps, "pool_length": poolLengthM

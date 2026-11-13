@@ -49,6 +49,12 @@ final class WorkoutRecord {
     var id: String = ""
     /// Origin of the record ("garmin", "healthkit", "local").
     var source: String = ""
+    /// A provider's adaptive suggestion (Garmin Coach): the provider re-plans it daily
+    /// around the athlete's own workouts, so it is never a fixed commitment.
+    var isAdaptiveSuggestion: Bool = false
+    /// Plan CRUD refuses the row: a race follows its ATP event, an adaptive
+    /// suggestion is the provider's to change.
+    var isReadOnly: Bool { source == TrainingDataStore.raceSource || isAdaptiveSuggestion }
     /// Start-of-day date the workout belongs to (local), used for daily buckets.
     /// The *effective* date every reader consumes: the planned day while the row is
     /// an open plan, the actual start day once completed — a plan done a day early
@@ -370,6 +376,7 @@ struct IngestedScheduledWorkout: Sendable {
     var associatedActivityId: String? = nil
     /// Per-target external ids, JSON-encoded. Preserved across resyncs.
     var externalRefsJSON: String = "{}"
+    var isAdaptiveSuggestion = false
 }
 
 /// One day's aggregated TSS — the unit the PMC engine works on.
@@ -2022,6 +2029,7 @@ final class TrainingDataStore {
                 record.stepsJSON = w.stepsJSON
                 record.poolLengthMeters = w.poolLengthMeters
                 record.externalRefsJSON = w.externalRefsJSON
+                record.isAdaptiveSuggestion = w.isAdaptiveSuggestion
                 if let aid = w.associatedActivityId {
                     record.setExternalRef(target: Self.completedRefKey, externalId: "\(w.source):\(aid)")
                     foldStandaloneCompleted(into: record, source: w.source, rawActivityId: aid)
@@ -2036,6 +2044,7 @@ final class TrainingDataStore {
                     stepsJSON: w.stepsJSON, notes: w.notes, poolLengthMeters: w.poolLengthMeters
                 )
                 rec.plannedDate = day
+                rec.isAdaptiveSuggestion = w.isAdaptiveSuggestion
                 context.insert(rec)
                 if let aid = w.associatedActivityId {
                     rec.setExternalRef(target: Self.completedRefKey, externalId: "\(w.source):\(aid)")
@@ -2935,7 +2944,7 @@ extension TrainingDataStore {
     // (`WorkoutRecord.raceLoad`), plan CRUD refuses it, and it is never pushed to a
     // write target.
 
-    static let raceSource = "race"
+    nonisolated static let raceSource = "race"
 
     /// Bring every race slot in line with its event: create missing ones, carry
     /// name/date/start time over, and drop the slots of deleted events — splitting a

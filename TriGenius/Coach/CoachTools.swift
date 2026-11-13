@@ -926,7 +926,7 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
             ),
             ToolDefinition(
                 name: "get_workouts",
-                description: "List the athlete's workouts, lean and TSS-focused. `status` selects what comes back: \"completed\" (finished activities, each with its `tss` and how it was derived `tss_basis`), \"planned\" (open, editable sessions — each carries a ready-to-reuse `workout_data`), or \"all\" (both). Every row has a `workout_id` — the id modify_workout / move_workout / delete_workout / log_workout_feedback need. A planned row with a `race_event_id` is a race from the season plan, with its `expected_tss` and `expected_minutes`: it cannot be modified, moved or deleted here — change it with set_atp_event. Optional `sport` filter and `start_date`/`end_date` range (defaults: completed → last 14 days, planned → next 28). `detailed: true` adds the per-lap/interval breakdown for completed workouts (capped to 5 rows). (For the athlete's real-world busy/free time, use read_calendar_availability instead.)",
+                description: "List the athlete's workouts, lean and TSS-focused. `status` selects what comes back: \"completed\" (finished activities, each with its `tss` and how it was derived `tss_basis`), \"planned\" (open, editable sessions — each carries a ready-to-reuse `workout_data`), or \"all\" (both). Every row has a `workout_id` — the id modify_workout / move_workout / delete_workout / log_workout_feedback need. A planned row with a `race_event_id` is a race from the season plan, with its `expected_tss` and `expected_minutes`: it cannot be modified, moved or deleted here — change it with set_atp_event. A planned row with `adaptive_suggestion: true` is a Garmin Coach suggestion: Garmin re-plans it daily around the athlete's own workouts, so it is never a conflict — schedule what the athlete needs on any day; it cannot be modified, moved or deleted. Optional `sport` filter and `start_date`/`end_date` range (defaults: completed → last 14 days, planned → next 28). `detailed: true` adds the per-lap/interval breakdown for completed workouts (capped to 5 rows). (For the athlete's real-world busy/free time, use read_calendar_availability instead.)",
                 parameters: [
                     "type": "object",
                     "properties": [
@@ -1121,6 +1121,14 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
             .joined(separator: "\n")
     }
 
+    /// Why plan CRUD refused `id`, when it names a read-only row; nil otherwise.
+    private func readOnlyRefusal(_ id: String) -> String? {
+        guard let rec = TrainingDataStore.shared.scheduledWorkout(id: id), rec.isReadOnly else { return nil }
+        return rec.isAdaptiveSuggestion
+            ? "✗ '\(rec.name)' is a Garmin Coach suggestion and read-only. Garmin re-plans it around the athlete's own workouts — schedule what the athlete needs with add_workouts."
+            : "✗ '\(rec.name)' is a race from the season plan — change it with set_atp_event."
+    }
+
     // MARK: - modify_workout
 
     private func modify(_ arguments: [String: Any]) async -> String {
@@ -1130,7 +1138,7 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
         }
         let before = DataSyncCoordinator.shared.plannedSnapshot(id: workoutId)
         guard let result = await DataSyncCoordinator.shared.updatePlan(id: workoutId, workoutData: rawWorkout) else {
-            return "✗ No planned workout found for id \(workoutId). List it with get_workouts first."
+            return readOnlyRefusal(workoutId) ?? "✗ No planned workout found for id \(workoutId). List it with get_workouts first."
         }
         let outcome: PlanWriteOutcome
         switch result {
@@ -1165,7 +1173,7 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
         }
         let before = DataSyncCoordinator.shared.plannedSnapshot(id: workoutId)
         guard let outcome = await DataSyncCoordinator.shared.movePlan(id: workoutId, to: date) else {
-            return "✗ No planned workout found for id \(workoutId)."
+            return readOnlyRefusal(workoutId) ?? "✗ No planned workout found for id \(workoutId)."
         }
         if let before {
             onCard(.workoutDiff(id: outcome.planId, name: outcome.name, caption: "Moved",
@@ -1187,7 +1195,7 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
         // It doubles as the existence check: never confirm a delete that found
         // nothing (a typo'd id, or a completed activity's id).
         guard let before = DataSyncCoordinator.shared.plannedSnapshot(id: workoutId) else {
-            return "✗ No planned workout found for id \(workoutId). List planned workouts with get_workouts first — completed activities cannot be deleted."
+            return readOnlyRefusal(workoutId) ?? "✗ No planned workout found for id \(workoutId). List planned workouts with get_workouts first — completed activities cannot be deleted."
         }
         // Delete from every provider the plan reached (not just the active write
         // target), then drop it locally.

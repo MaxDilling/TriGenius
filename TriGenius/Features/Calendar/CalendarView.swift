@@ -293,7 +293,7 @@ private struct DayCell: View {
                 eventRow(sport: workout.sport, title: workout.name, filled: false)
                     .contentShape(Rectangle())
                     .onTapGesture { onOpen(.planned(workout)) }
-                    .draggable(workout.id)
+                    .planDraggable(workout)
             }
             let overflow = completed.count + planned.count - 3
             if overflow > 0 {
@@ -334,7 +334,7 @@ private struct DayCell: View {
                 sportChip(sport: workout.sport, completed: false)
                     .contentShape(Rectangle())
                     .onTapGesture { onOpen(.planned(workout)) }
-                    .draggable(workout.id)
+                    .planDraggable(workout)
             }
             let overflow = planned.count + completed.count - 2
             if overflow > 0 {
@@ -411,5 +411,13 @@ struct SegmentBar: View {
             }
         }
         .frame(maxWidth: .infinity)
+    }
+}
+
+extension View {
+    /// Drag-to-reschedule for a planned workout plan CRUD may move; a read-only one stays put.
+    @ViewBuilder
+    func planDraggable(_ workout: WorkoutRecord) -> some View {
+        if workout.isReadOnly { self } else { draggable(workout.id) }
     }
 }
