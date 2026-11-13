@@ -13,30 +13,41 @@ import Foundation
 // obliques) counts as Low back — the group that replaces "Core / low back" — and the
 // chest as Shoulders, the joint a press loads. Garmin names no shin muscle.
 
+nonisolated enum GarminMuscle: String, CaseIterable, Sendable {
+    case calves = "CALVES", hamstrings = "HAMSTRINGS", quads = "QUADS", glutes = "GLUTES",
+         abductors = "ABDUCTORS", hips = "HIPS", adductors = "ADDUCTORS", lowerBack = "LOWER_BACK",
+         abs = "ABS", obliques = "OBLIQUES", lats = "LATS", traps = "TRAPS", shoulders = "SHOULDERS",
+         chest = "CHEST", biceps = "BICEPS", triceps = "TRICEPS", forearm = "FOREARM"
+
+    var group: TissueGroup {
+        switch self {
+        case .calves: return .calves
+        case .hamstrings: return .hamstrings
+        case .quads: return .quads
+        case .glutes, .abductors: return .glutes
+        case .hips: return .hipFlexors
+        case .adductors: return .adductors
+        case .lowerBack, .abs, .obliques: return .lowBack
+        case .lats, .traps: return .upperBack
+        case .shoulders, .chest: return .shoulders
+        case .biceps: return .biceps
+        case .triceps: return .triceps
+        case .forearm: return .forearms
+        }
+    }
+}
+
 nonisolated enum GarminMuscles {
 
-    static func groups(category: String, name: String) -> (primary: [TissueGroup], secondary: [TissueGroup])? {
+    static func muscles(category: String, name: String) -> (primary: [GarminMuscle], secondary: [GarminMuscle])? {
         guard let muscles = catalog[category]?[name], muscles.count == 2 else { return nil }
-        let primary = unique(muscles[0].compactMap(group))
-        return (primary, unique(muscles[1].compactMap(group)).filter { !primary.contains($0) })
+        return (muscles[0].compactMap(GarminMuscle.init), muscles[1].compactMap(GarminMuscle.init))
     }
 
-    private static func group(_ muscle: String) -> TissueGroup? {
-        switch muscle {
-        case "CALVES": return .calves
-        case "HAMSTRINGS": return .hamstrings
-        case "QUADS": return .quads
-        case "GLUTES", "ABDUCTORS": return .glutes
-        case "HIPS": return .hipFlexors
-        case "ADDUCTORS": return .adductors
-        case "LOWER_BACK", "ABS", "OBLIQUES": return .lowBack
-        case "LATS", "TRAPS": return .upperBack
-        case "SHOULDERS", "CHEST": return .shoulders
-        case "BICEPS": return .biceps
-        case "TRICEPS": return .triceps
-        case "FOREARM": return .forearms
-        default: return nil
-        }
+    static func groups(category: String, name: String) -> (primary: [TissueGroup], secondary: [TissueGroup])? {
+        guard let muscles = muscles(category: category, name: name) else { return nil }
+        let primary = unique(muscles.primary.map(\.group))
+        return (primary, unique(muscles.secondary.map(\.group)).filter { !primary.contains($0) })
     }
 
     private static func unique(_ groups: [TissueGroup]) -> [TissueGroup] {
@@ -50,4 +61,29 @@ nonisolated enum GarminMuscles {
         else { return [:] }
         return decoded
     }()
+}
+
+/// The muscles an exercise's animation colours, by Garmin's names — finer than the
+/// tissue groups, so a press shows the chest and a raise the shoulders. An exercise
+/// Garmin's catalog lacks gets every muscle folding onto its own groups.
+nonisolated struct ExerciseMuscles: Sendable {
+    var primary: Set<GarminMuscle>
+    var secondary: Set<GarminMuscle>
+
+    init(_ exercise: Exercise) {
+        if let category = exercise.garminCategory, let name = exercise.garminName,
+           let muscles = GarminMuscles.muscles(category: category, name: name) {
+            primary = Set(muscles.primary)
+            secondary = Set(muscles.secondary)
+        } else {
+            let folding = { (groups: [TissueGroup]) in Set(GarminMuscle.allCases.filter { groups.contains($0.group) }) }
+            primary = folding(exercise.primaryGroups)
+            secondary = folding(exercise.secondaryGroups)
+        }
+    }
+
+    /// The strongest role among `muscles`: 2 primary, 1 secondary, 0 neither.
+    func level(_ muscles: [GarminMuscle]) -> Int {
+        muscles.map { primary.contains($0) ? 2 : secondary.contains($0) ? 1 : 0 }.max() ?? 0
+    }
 }

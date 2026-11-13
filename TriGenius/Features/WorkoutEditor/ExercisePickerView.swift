@@ -3,9 +3,10 @@ import SwiftUI
 // MARK: - Exercise picker
 //
 // Search/browse the library the athlete's `StrengthProfile` allows, grouped by
-// category; a "Custom" row lets the athlete type a name for anything not in the
-// library, unmapped to any tissue group until the athlete (or a future
-// curation pass) gives it one.
+// category, each row led by the exercise's animation where it has a pose; a
+// "Custom" row lets the athlete type a name for anything not in the library,
+// unmapped to any tissue group until the athlete (or a future curation pass)
+// gives it one.
 
 struct ExercisePickerView: View {
     let onSelectLibrary: (Exercise) -> Void
@@ -57,6 +58,8 @@ struct ExercisePickerView: View {
                             close()
                         } label: {
                             HStack {
+                                ExerciseAnimation(exercise: exercise)
+                                    .frame(width: 56, height: 42)
                                 Text(exercise.name)
                                 Spacer()
                                 Text(exercise.equipment.label)

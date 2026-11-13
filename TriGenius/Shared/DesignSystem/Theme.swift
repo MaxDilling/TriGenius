@@ -115,6 +115,21 @@ enum Theme {
             /// white title clears 4.5:1. Dots and the timed block keep the sport grey.
             static let strengthChip = Color(hex: "6E6E73")
         }
+
+        /// The exercise animation's figure and props (`ExerciseAnimation`): greys only,
+        /// so the Tissue Load reds on the worked muscles are the one colour on it.
+        enum Figure {
+            static let outline = Color.appAdaptive(light: 0x1D1D1F, dark: 0x000000)
+            static let skin = Color.appAdaptive(light: 0xB6B6BB, dark: 0xAEAEB2)
+            static let shirt = Color.appAdaptive(light: 0xE5E5EA, dark: 0x636366)
+            static let shorts = Color.appAdaptive(light: 0x3A3A3C, dark: 0x2C2C2E)
+            static let shoe = Color.appAdaptive(light: 0x2C2C2E, dark: 0x48484A)
+            static let hair = Color.appAdaptive(light: 0x48484A, dark: 0x3A3A3C)
+            static let metal = Color.appAdaptive(light: 0xC7C7CC, dark: 0x8E8E93)
+            static let plate = Color.appAdaptive(light: 0x636366, dark: 0x545458)
+            static let pad = Color(hex: "48484A")
+            static let floor = Color.appAdaptive(light: 0xE3E3E8, dark: 0x343437)
+        }
     }
 }
 

@@ -6,8 +6,8 @@ import SwiftUI
 // reps/time and load, what was lifted last time — or, after a logged set, its
 // rest: the set just logged with the optional "how hard" rating, the timer, and
 // what comes next — after an exercise's last set, also one more set or another
-// exercise first, and after the workout's last set its end. The exercise demo
-// and form cues are placeholders until the library carries media.
+// exercise first, and after the workout's last set its end. An exercise with a
+// pose shows its animation above the prescription; one without shows nothing.
 
 struct LiveSetPage: View {
     let session: StrengthSession
@@ -42,7 +42,11 @@ struct LiveSetPage: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: Theme.Spacing.m) {
                     Text(set.title).font(.largeTitle.bold())
-                    demoCard
+                    if let animation = set.exerciseId.flatMap(ExerciseLibrary.find(id:)).flatMap(ExerciseAnimation.init(exercise:)) {
+                        animation
+                            .frame(height: 220)
+                            .contentCard(padding: Theme.Spacing.s)
+                    }
                     prescription(set)
                 }
                 .padding(.horizontal)
@@ -50,23 +54,6 @@ struct LiveSetPage: View {
             Text(nextLine(unit: unit, set: set)).font(.subheadline).foregroundStyle(.secondary)
             primaryButton(set)
         }
-    }
-
-    private var demoCard: some View {
-        VStack(spacing: 0) {
-            VStack(spacing: Theme.Spacing.s) {
-                Image(systemName: "play.circle").font(.largeTitle)
-                Text("Exercise demo")
-            }
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, minHeight: 140)
-            Divider()
-            Text("Form cues will appear here.")
-                .font(.subheadline).foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(Theme.Spacing.m)
-        }
-        .background(Color.appSecondaryBackground, in: .rect(cornerRadius: Theme.Radius.l, style: .continuous))
     }
 
     private func prescription(_ set: StrengthSets.SetRow) -> some View {
