@@ -593,7 +593,7 @@ nonisolated final class GarminService: Sendable {
         // First pass (sequential): dedup + split by type. Planned workouts needing a
         // detail fetch are collected as Sendable scalars; activities/GC-plans are built
         // inline (no extra network). Output is date-sorted below, so loop order is free.
-        var pending: [(id: String, scheduleId: String?, title: String, sport: String, date: String)] = []
+        var pending: [(id: String, scheduleId: String?, title: String, sport: String, date: String, coach: Bool)] = []
         for item in calendarItems {
             let itemDate = item["date"] as? String ?? ""
             guard !itemDate.isEmpty, itemDate >= start, itemDate <= end else { continue }
@@ -605,7 +605,7 @@ nonisolated final class GarminService: Sendable {
                 seen.insert(id)
                 pending.append((id, item["id"].map { "\($0)" },
                                 item["title"] as? String ?? "Scheduled Workout",
-                                item["sportTypeKey"] as? String ?? "other", itemDate))
+                                item["sportTypeKey"] as? String ?? "other", itemDate, false))
             case "activity":
                 let id = item["id"].map { "\($0)" } ?? ""
                 if id.isEmpty || seen.contains(id) { continue }
@@ -625,14 +625,8 @@ nonisolated final class GarminService: Sendable {
                 if uuid.isEmpty || seen.contains(uuid) { continue }
                 seen.insert(uuid)
                 // Garmin-coach workouts are planned but not editable via our API.
-                scheduled.append([
-                    "workout_id": uuid, "date": itemDate, "editable": false,
-                    "workout_data": [
-                        "name": "[GC] \(item["title"] as? String ?? "Training Plan Workout")",
-                        "sport": item["sportTypeKey"] as? String ?? "other",
-                        "duration_minutes": NSNull(), "description": "", "steps": []
-                    ]
-                ])
+                pending.append((uuid, nil, "[GC] \(item["title"] as? String ?? "Training Plan Workout")",
+                                item["sportTypeKey"] as? String ?? "other", itemDate, true))
             default:
                 continue
             }
@@ -649,7 +643,9 @@ nonisolated final class GarminService: Sendable {
                 group.addTask {
                     var details: [String: Any]?
                     var assoc: String?
-                    if let scheduleId = p.scheduleId {
+                    if p.coach {
+                        details = try? await self.client.getAdaptiveWorkout(uuid: p.id)
+                    } else if let scheduleId = p.scheduleId {
                         let sf = Perf.begin("garmin.schedFetch", scheduleId)
                         let schedule = try? await self.client.getScheduledWorkout(scheduleId: scheduleId)
                         Perf.end(sf)
@@ -658,7 +654,7 @@ nonisolated final class GarminService: Sendable {
                             if let a = schedule["associatedActivityId"], !(a is NSNull) { assoc = "\(a)" }
                         }
                     }
-                    if details == nil {
+                    if details == nil, !p.coach {
                         let wf = Perf.begin("garmin.wktFetch", p.id)
                         details = try? await self.client.getWorkoutDetails(workoutId: p.id)
                         Perf.end(wf)
@@ -691,7 +687,7 @@ nonisolated final class GarminService: Sendable {
             // workout_data mirrors the add_workouts/modify_workout shape, so an item can
             // be passed straight back to modify_workout.
             var entry: [String: Any] = [
-                "workout_id": p.id, "date": p.date, "editable": true,
+                "workout_id": p.id, "date": p.date, "editable": !p.coach,
                 "workout_data": [
                     "name": p.title, "sport": p.sport, "duration_minutes": durationMinutes,
                     "description": "", "steps": steps, "pool_length": poolLengthM
@@ -754,6 +750,26 @@ nonisolated final class GarminService: Sendable {
         // "3×12 min" structure survives for the UI. `PlannedTSS` expands them and
         // `GarminWorkoutBuilder` rebuilds them, so this stays symmetric.
         func leaf(_ step: [String: Any]) -> [String: Any] {
+            let garminName = step["exerciseName"] as? String
+            let category = step["category"] as? String
+            if garminName != nil || category != nil {
+                var set: [String: Any] = [:]
+                let value = Coerce.double(step["endConditionValue"]) ?? 0
+                if (step["endCondition"] as? [String: Any])?["conditionTypeKey"] as? String == "reps" {
+                    set["reps"] = value
+                } else {
+                    set["duration_seconds"] = value
+                }
+                if let kg = Coerce.double(step["weightValue"]), kg > 0 { set["weight_kg"] = kg }
+                var exercise: [String: Any] = ["type": "exercise", "sets": [set]]
+                if let garminName, let known = ExerciseLibrary.find(garminName: garminName) {
+                    exercise["exercise_id"] = known.id
+                } else {
+                    exercise["exercise_name"] = garminName ?? step["description"] as? String ?? "Exercise"
+                    if garminName != nil, let category { exercise["exercise_category"] = category }
+                }
+                return exercise
+            }
             var compact: [String: Any] = [
                 "type": (step["stepType"] as? [String: Any])?["stepTypeKey"] as? String ?? "interval"
             ]

@@ -138,6 +138,7 @@ nonisolated enum StrengthSets {
             return .exercise(sets.enumerated().map { index, set in
                 Line(set: SetRow(exerciseId: step["exercise_id"] as? String,
                                  exerciseName: step["exercise_name"] as? String,
+                                 exerciseCategory: step["exercise_category"] as? String,
                                  reps: Coerce.int(set["reps"]),
                                  seconds: Coerce.double(set["duration_seconds"]),
                                  weightKg: Coerce.double(set["weight_kg"]),

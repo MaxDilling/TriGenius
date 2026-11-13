@@ -160,6 +160,12 @@ nonisolated final class GarminClient: Sendable {
         try await connectapi("/workout-service/workout/\(workoutId)") as? [String: Any]
     }
 
+    /// A Garmin Coach (adaptive) workout by the calendar item's `workoutUuid`;
+    /// the payload has the regular workout shape but no `workoutId`.
+    func getAdaptiveWorkout(uuid: String) async throws -> [String: Any]? {
+        try await connectapi("/workout-service/fbt-adaptive/\(uuid)") as? [String: Any]
+    }
+
     /// Fetch a scheduled occurrence by its schedule id. A superset of
     /// `getWorkoutDetails`: embeds the full `workout` object plus the
     /// `associatedActivityId` Garmin sets once the session is completed.
