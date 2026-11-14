@@ -15,16 +15,29 @@ import simd
 
 nonisolated struct ExercisePose: Decodable, Sendable {
     nonisolated enum Camera: String, Decodable, Sendable {
-        /// A mild oblique: the near side (z > 0) shifts right and down.
+        /// Three-quarter: turned 30° toward the figure's back and tilted 16° down, so the
+        /// near side (z > 0) lands right and low.
         case side
         case front
 
+        private static let yaw = 30 * Double.pi / 180, pitch = 16 * Double.pi / 180
+
         func project(_ p: SIMD3<Double>) -> SIMD2<Double> {
             switch self {
-            case .side: return [p.x + 0.28 * p.z, p.y - 0.16 * p.z]
+            case .side: return [p.x * cos(Self.yaw) + p.z * sin(Self.yaw), p.y * cos(Self.pitch) - Self.toward(p) * sin(Self.pitch)]
             case .front: return [p.z, p.y]
             }
         }
+
+        /// How far `p` lies toward the viewer: of two overlapping things, the nearer covers the other.
+        func depth(_ p: SIMD3<Double>) -> Double {
+            switch self {
+            case .side: Self.toward(p) * cos(Self.pitch) + p.y * sin(Self.pitch)
+            case .front: p.x
+            }
+        }
+
+        private static func toward(_ p: SIMD3<Double>) -> Double { p.z * cos(yaw) - p.x * sin(yaw) }
     }
 
     nonisolated enum Barbell: String, Decodable, Sendable {
@@ -90,7 +103,7 @@ nonisolated struct ExercisePose: Decodable, Sendable {
     /// Seconds: out to the last keyframe, hold, back to the first, hold.
     var tempo: SIMD4<Double>
     var keyframes: [Keyframe]
-    private(set) var framing = Framing(bounds: .zero, floor: 0...0)
+    private(set) var framing = Framing(bounds: .zero, floor: .zero)
 
     private enum CodingKeys: String, CodingKey { case camera, props, grip, stance, hints, tempo, keyframes }
 
@@ -153,10 +166,9 @@ nonisolated struct ExercisePose: Decodable, Sendable {
         static let forearm = 0.33
         static let thigh = 0.44
         static let shin = 0.44
-        static let shoulderHalfWidth = 0.19
-        static let hipHalfWidth = 0.09
-        static let plateRadius = 0.225
-        static let plateZ = 0.52
+        static let shoulderHalfWidth = 0.18
+        static let hipHalfWidth = 0.1
+        static let barHalfLength = 1.0
         static let dumbbellPlateZ = 0.09
     }
 
@@ -259,17 +271,21 @@ nonisolated struct ExercisePose: Decodable, Sendable {
     /// the camera never moves during the loop.
     nonisolated struct Framing: Sendable {
         var bounds: CGRect
-        /// The floor shadow's x span.
-        var floor: ClosedRange<Double>
+        /// The box around everything that touches the floor: the shadow's ellipse.
+        var floor: CGRect
 
-        init(bounds: CGRect, floor: ClosedRange<Double>) {
+        init(bounds: CGRect, floor: CGRect) {
             self.bounds = bounds
             self.floor = floor
         }
 
         init(of pose: ExercisePose) {
-            var x0 = Double.infinity, x1 = -Double.infinity, y0 = -0.05, y1 = -Double.infinity
-            var f0 = Double.infinity, f1 = -Double.infinity
+            var x0 = Double.infinity, x1 = -Double.infinity, y0 = Double.infinity, y1 = -Double.infinity
+            var floor = CGRect.null
+            func ground(_ x: Double, _ z: Double) {
+                let q = pose.camera.project([x, 0, z])
+                floor = floor.union(CGRect(x: q.x, y: q.y, width: 0, height: 0))
+            }
             func include(_ p: SIMD3<Double>, _ r: Double) {
                 let q = pose.camera.project(p)
                 x0 = min(x0, q.x - r); x1 = max(x1, q.x + r); y0 = min(y0, q.y - r); y1 = max(y1, q.y + r)
@@ -280,25 +296,23 @@ nonisolated struct ExercisePose: Decodable, Sendable {
                     for joint in [side.shoulder, side.elbow, side.hip, side.knee] { include(joint, 0.08) }
                     include(side.hand, pose.props.dumbbells == true ? 0.16 : 0.08)
                     include(side.ankle, 0.19)
-                    let a = pose.camera.project(side.ankle).x
-                    f0 = min(f0, a - 0.12); f1 = max(f1, a + 0.18)
+                    ground(side.ankle.x - 0.12, side.ankle.z); ground(side.ankle.x + 0.18, side.ankle.z)
                 }
                 include(s.head, 0.13); include(s.pelvis, 0.17); include(s.shoulders, 0.17)
                 if let bar = s.bar {
-                    for z in [-Body.plateZ, Body.plateZ] { include([bar.x, bar.y, z], Body.plateRadius + 0.015) }
+                    for z in [-Body.barHalfLength, Body.barHalfLength] { include([bar.x, bar.y, z], 0.05) }
                 }
             }
             if let bench = pose.props.bench {
                 for x in [bench.x.x, bench.x.y] {
                     for z in [-0.2, 0.2] {
                         include([x, bench.top, z], 0.02)
-                        let q = pose.camera.project([x, bench.top, z]).x
-                        f0 = min(f0, q); f1 = max(f1, q)
+                        ground(x, z)
                     }
                 }
             }
-            bounds = CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
-            floor = (f0 - 0.06)...(f1 + 0.06)
+            self.floor = floor.insetBy(dx: -0.08, dy: -0.04)
+            bounds = CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0).union(self.floor)
         }
     }
 }

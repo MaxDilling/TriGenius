@@ -45,5 +45,105 @@
       { "pelvis": [-0.13, 0.92], "torso": 50, "head": 60, "hand": [0.08, 0.69], "foot": [0, 0.08, 0] },
       { "pelvis": [-0.22, 0.88], "torso": 25, "head": 38, "hand": [0.1, 0.49], "foot": [0, 0.08, 0] }
     ]
+  },
+  "front_squat": {
+    "camera": "side", "props": { "barbell": "hands" }, "grip": 0.2, "stance": 0.15,
+    "hints": { "elbow": [1, -0.3, 0.2], "knee": [1, 0, 0.35] },
+    "tempo": [2.0, 0.2, 1.2, 0.6],
+    "keyframes": [
+      { "pelvis": [-0.1, 0.955], "torso": 82, "head": 90, "hand": [0.059,  1.508], "foot": [0, 0.08, 0] },
+      { "pelvis": [-0.18, 0.72], "torso": 74, "head": 84, "hand": [0.054,  1.246], "foot": [0, 0.08, 0] },
+      { "pelvis": [-0.26, 0.5], "torso": 65, "head": 76, "hand": [0.053,  0.983], "foot": [0, 0.08, 0] }
+    ]
+  },
+  "goblet_squat": {
+    "camera": "side", "props": { "dumbbells": true }, "grip": 0.07, "stance": 0.2,
+    "hints": { "elbow": [-0.2, -1, 0.6], "knee": [1, 0, 0.5] },
+    "tempo": [2.0, 0.2, 1.2, 0.6],
+    "keyframes": [
+      { "pelvis": [-0.05, 0.955], "torso": 86, "head": 90, "hand": [0.149, 1.362], "foot": [0, 0.08, 0] },
+      { "pelvis": [-0.15, 0.72], "torso": 80, "head": 86, "hand": [0.09, 1.104], "foot": [0, 0.08, 0] },
+      { "pelvis": [-0.22, 0.5], "torso": 72, "head": 80, "hand": [0.071, 0.847], "foot": [0, 0.08, 0] }
+    ]
+  },
+  "conventional_deadlift": {
+    "camera": "side", "props": { "barbell": "hands" }, "grip": 0.24, "stance": 0.1,
+    "hints": { "elbow": [-1, 0, 0], "knee": [1, 0, 0] },
+    "tempo": [1.8, 0.4, 1.8, 0.6],
+    "keyframes": [
+      { "pelvis": [-0.38, 0.62], "torso": 26, "head": 44, "hand": [0.07, 0.225], "foot": [0, 0.08, 0] },
+      { "pelvis": [-0.22, 0.76], "torso": 45, "head": 60, "hand": [0.14, 0.5], "foot": [0, 0.08, 0] },
+      { "pelvis": [0, 0.955], "torso": 90, "head": 92, "hand": [0.08, 0.85], "foot": [0, 0.08, 0] }
+    ]
+  },
+  "sumo_deadlift": {
+    "camera": "side", "props": { "barbell": "hands" }, "grip": 0.15, "stance": 0.38,
+    "hints": { "elbow": [-1, 0, 0], "knee": [1, 0, 0.6] },
+    "tempo": [1.8, 0.4, 1.8, 0.6],
+    "keyframes": [
+      { "pelvis": [-0.29, 0.5], "torso": 42, "head": 56, "hand": [0.08, 0.225], "foot": [0, 0.08, 0] },
+      { "pelvis": [-0.15, 0.68], "torso": 62, "head": 74, "hand": [0.12, 0.5], "foot": [0, 0.08, 0] },
+      { "pelvis": [0, 0.9], "torso": 90, "head": 92, "hand": [0.07, 0.8], "foot": [0, 0.08, 0] }
+    ]
+  },
+  "good_morning": {
+    "camera": "side", "props": { "barbell": "back" }, "grip": 0.44, "stance": 0.12,
+    "hints": { "elbow": [-0.6, -1, 0.3], "knee": [1, 0, 0.2] },
+    "tempo": [2.2, 0.3, 1.4, 0.5],
+    "keyframes": [
+      { "pelvis": [0, 0.955], "torso": 86, "head": 92, "hand": "bar", "foot": [0, 0.08, 0] },
+      { "pelvis": [-0.2, 0.9], "torso": 58, "head": 64, "hand": "bar", "foot": [0, 0.08, 0] },
+      { "pelvis": [-0.37, 0.83], "torso": 28, "head": 33, "hand": "bar", "foot": [0, 0.08, 0] }
+    ]
+  },
+  "barbell_row": {
+    "camera": "side", "props": { "barbell": "hands" }, "grip": 0.24, "stance": 0.12,
+    "hints": { "elbow": [-1, 0.5, 0.3], "knee": [1, 0, 0] },
+    "tempo": [1.2, 0.4, 1.6, 0.4],
+    "keyframes": [
+      { "pelvis": [-0.38, 0.8], "torso": 35, "head": 50, "hand": [0.05, 0.5], "foot": [0, 0.08, 0] },
+      { "pelvis": [-0.38, 0.8], "torso": 35, "head": 50, "hand": [-0.08, 0.82], "foot": [0, 0.08, 0] }
+    ]
+  }
+  ,
+  "overhead_press": {
+    "camera": "side", "props": { "barbell": "hands" }, "grip": 0.22, "stance": 0.12,
+    "hints": { "elbow": [1, -1, 0.2], "knee": [1, 0, 0] },
+    "tempo": [1.6, 0.3, 1.8, 0.5],
+    "keyframes": [
+      { "pelvis": [0, 0.955], "torso": 90, "head": 90, "hand": [0.12, 1.42], "foot": [0, 0.08, 0] },
+      { "pelvis": [0, 0.955], "torso": 92, "head": 100, "hand": [0.15, 1.68], "foot": [0, 0.08, 0] },
+      { "pelvis": [0, 0.955], "torso": 92, "head": 92, "hand": [0.0, 1.98], "foot": [0, 0.08, 0] }
+    ]
+  },
+  "push_press": {
+    "camera": "side", "props": { "barbell": "hands" }, "grip": 0.22, "stance": 0.12,
+    "hints": { "elbow": [1, -1, 0.2], "knee": [1, 0, 0.2] },
+    "tempo": [1.2, 0.4, 1.8, 0.5],
+    "keyframes": [
+      { "pelvis": [0, 0.955], "torso": 90, "head": 90, "hand": [0.12, 1.42], "foot": [0, 0.08, 0] },
+      { "pelvis": [0, 0.84], "torso": 90, "head": 90, "hand": [0.12, 1.30], "foot": [0, 0.08, 0] },
+      { "pelvis": [0, 0.955], "torso": 92, "head": 100, "hand": [0.15, 1.68], "foot": [0, 0.08, 0] },
+      { "pelvis": [0, 0.955], "torso": 92, "head": 92, "hand": [0.0, 1.98], "foot": [0, 0.08, 0] }
+    ]
+  },
+  "dumbbell_shoulder_press": {
+    "camera": "front", "props": { "dumbbells": true }, "grip": 0.3, "stance": 0.12,
+    "hints": { "elbow": [0, -1, 1], "knee": [1, 0, 0] },
+    "tempo": [1.6, 0.3, 1.8, 0.5],
+    "keyframes": [
+      { "pelvis": [0, 0.955], "torso": 90, "head": 90, "hand": [0.05, 1.45, 0.3], "foot": [0, 0.08, 0] },
+      { "pelvis": [0, 0.955], "torso": 90, "head": 90, "hand": [0.05, 1.72, 0.3], "foot": [0, 0.08, 0] },
+      { "pelvis": [0, 0.955], "torso": 90, "head": 90, "hand": [0.05, 1.98, 0.2], "foot": [0, 0.08, 0] }
+    ]
+  },
+  "dumbbell_bench_press": {
+    "camera": "side", "props": { "dumbbells": true, "bench": { "x": [-0.8, 0.42], "top": 0.45 } }, "grip": 0.28, "stance": 0.28,
+    "hints": { "elbow": [0.6, -0.3, 1], "knee": [1, 1, 0] },
+    "tempo": [2.0, 0.3, 1.0, 0.5],
+    "keyframes": [
+      { "pelvis": [0.25, 0.575], "torso": 180, "head": 180, "hand": [-0.24, 1.13], "foot": [0.62, 0.08, 0] },
+      { "pelvis": [0.25, 0.575], "torso": 180, "head": 180, "hand": [-0.05, 0.78], "foot": [0.62, 0.08, 0] }
+    ]
   }
 }

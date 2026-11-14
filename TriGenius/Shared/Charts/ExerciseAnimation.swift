@@ -1,15 +1,17 @@
+import simd
 import SwiftUI
 
 // MARK: - Exercise animation
 //
 // One exercise's rep, looped at its tempo. `ExercisePose` places the skeleton; this
-// only draws it, Garmin style: a grey figure in shirt and shorts with a dark outline,
-// far-side limbs a shade darker, props as plain shapes, and the worked muscles in the
-// Tissue Load reds (primary heavy, secondary moderate).
+// only draws it, Garmin style: a grey androgynous figure in shirt and shorts, far-side
+// limbs a shade darker, props as plain shapes, and the worked muscles in the Tissue Load
+// reds (primary heavy, secondary moderate).
 //
-// Muscles are clipped ellipses and rounded half-limb strokes — never rectangles: a
-// straight edge across the body reads as clothing. The near barbell plate is see-through
-// so it never hides the lifter.
+// The body is one silhouette, not jointed parts: everything in a depth layer shares one
+// outline (`outline`), and clothing is painted over the finished body. Muscles are
+// ellipses cut to their body part — never rectangles: a straight edge across the body
+// reads as clothing. The barbell has no plates: at this camera a plate hides the lifter.
 
 struct ExerciseAnimation: View {
     let pose: ExercisePose
@@ -47,19 +49,69 @@ private struct FigurePainter {
     /// Outline width in metres.
     let ow: Double
 
-    private enum Width {
-        static let upperArm = 0.1, forearm = 0.085, thigh = 0.15, shin = 0.11, neck = 0.085, hand = 0.045
+    /// Where a body part's own (front, along) lands on the canvas.
+    private typealias Map = (Point) -> Point
+    /// A muscle as an ellipse in its body part's axes.
+    private typealias Belly = (muscles: [GarminMuscle], center: Point, radius: Point)
+
+    /// A straight body part: `front` across it, `up` along it.
+    private struct Frame {
+        var origin, front, up: Point
+        func callAsFunction(_ q: Point) -> Point { origin + front * q.x + up * q.y }
     }
 
-    /// (front, up) in metres from the pelvis, along the torso.
-    private static let torsoSide: [Point] = [[-0.13, -0.07], [0.1, -0.08], [0.115, 0.12], [0.11, 0.26], [0.14, 0.4], [0.1, 0.5],
-                                             [0, 0.565], [-0.1, 0.525], [-0.125, 0.38], [-0.1, 0.2], [-0.145, 0.05]]
-    private static let torsoFront: [Point] = [[0.17, -0.08], [0.185, 0.06], [0.15, 0.22], [0.17, 0.36], [0.22, 0.47], [0.2, 0.54],
-                                              [0.07, 0.585], [-0.07, 0.585], [-0.2, 0.54], [-0.22, 0.47], [-0.17, 0.36],
-                                              [-0.15, 0.22], [-0.185, 0.06], [-0.17, -0.08], [0, -0.06]]
-    /// (forward, up) from the ankle, foot flat.
-    private static let shoe: [Point] = [[-0.045, 0.03], [-0.065, -0.04], [-0.045, -0.075], [0.15, -0.075],
-                                        [0.178, -0.052], [0.12, -0.018], [0.045, 0.03]]
+    private struct Limb {
+        var root, end: Frame
+        var upper, lower, joint: Path
+        /// The hand or the shoe.
+        var tip: Path
+        var paths: [Path] { [upper, lower, joint, tip] }
+    }
+
+    /// Outline widths as multiples of `ow`: the figure's silhouette, and a part crossing it.
+    private static let heavy = 1.5, thin = 0.7
+
+    /// (front, up) in metres from the pelvis, along the spine.
+    private static let torsoSide: [Point] = [[-0.12, -0.08], [0.09, -0.09], [0.105, 0.1], [0.1, 0.25], [0.125, 0.4], [0.095, 0.5],
+                                             [0, 0.56], [-0.095, 0.52], [-0.115, 0.38], [-0.09, 0.2], [-0.14, 0.05]]
+    private static let torsoFront: [Point] = [[0.185, -0.1], [0.2, 0.03], [0.155, 0.2], [0.16, 0.34], [0.185, 0.45], [0.19, 0.53],
+                                              [0.1, 0.56], [0.045, 0.545], [-0.045, 0.545], [-0.1, 0.56], [-0.19, 0.53],
+                                              [-0.185, 0.45], [-0.16, 0.34], [-0.155, 0.2], [-0.2, 0.03], [-0.185, -0.1], [0, -0.13]]
+    /// Limb outlines: (front in metres, along as a fraction of the segment), root to end.
+    private static let thigh: [Point] = [[0, -0.19], [0.085, -0.15], [0.092, 0.3], [0.066, 0.75], [0.054, 1], [0.052, 1.05],
+                                         [-0.052, 1.05], [-0.054, 1], [-0.064, 0.7], [-0.088, 0.3], [-0.085, -0.15]]
+    private static let shin: [Point] = [[0.052, -0.05], [0.052, 0.05], [0.05, 0.3], [0.04, 0.75], [0.036, 1], [0, 1.08],
+                                        [-0.036, 1], [-0.045, 0.7], [-0.07, 0.3], [-0.056, 0.05], [-0.054, -0.05]]
+    private static let upperArm: [Point] = [[0, -0.17], [0.055, -0.12], [0.052, 0.4], [0.04, 1], [0.04, 1.06],
+                                            [-0.04, 1.06], [-0.04, 1], [-0.05, 0.45], [-0.055, -0.12]]
+    private static let forearm: [Point] = [[0.04, -0.06], [0.04, 0.05], [0.045, 0.3], [0.03, 1], [-0.03, 1], [-0.042, 0.3],
+                                           [-0.04, 0.05], [-0.04, -0.06]]
+    /// (palm side, along the forearm) in metres from the grip.
+    private static let fist: [Point] = [[0.032, -0.055], [0.05, 0], [0.036, 0.048], [0, 0.058], [-0.034, 0.046], [-0.042, 0],
+                                        [-0.032, -0.055]]
+    /// (forward, up) in metres from the wrist of a hand flat on the floor.
+    private static let palm: [Point] = [[-0.04, 0.03], [0.06, 0.025], [0.15, 0], [0.15, -0.035], [-0.045, -0.035]]
+    /// (forward, up) from the ankle, foot flat; in the front view (outward, up).
+    private static let shoeSide: [Point] = [[-0.048, 0.035], [-0.07, -0.03], [-0.06, -0.078], [0.16, -0.078], [0.2, -0.062],
+                                            [0.17, -0.03], [0.09, -0.004], [0.048, 0.035]]
+    private static let shoeFront: [Point] = [[-0.045, 0.02], [0.045, 0.02], [0.085, -0.04], [0.07, -0.078], [-0.04, -0.078],
+                                             [-0.055, -0.04]]
+
+    /// Muscle bellies, in their body part's axes; the part's own outline cuts them.
+    private static let trunkSide: [Belly] = [
+        ([.glutes, .abductors], [-0.09, 0.02], [0.09, 0.11]), ([.hips], [0.08, 0], [0.06, 0.08]),
+        ([.abs, .obliques], [0.08, 0.19], [0.07, 0.11]), ([.lowerBack], [-0.08, 0.19], [0.06, 0.1]),
+        ([.chest], [0.09, 0.4], [0.09, 0.12]), ([.lats, .traps], [-0.09, 0.38], [0.08, 0.15])]
+    private static let trunkFront: [Belly] = [
+        ([.hips, .adductors, .abductors], [0, 0], [0.15, 0.08]), ([.abs, .obliques], [0, 0.19], [0.08, 0.1]),
+        ([.chest], [-0.08, 0.42], [0.075, 0.07]), ([.chest], [0.08, 0.42], [0.075, 0.07]), ([.traps], [0, 0.56], [0.14, 0.05])]
+    private static let thighSide: [Belly] = [([.quads], [0.06, 0.6], [0.05, 0.34]), ([.hamstrings], [-0.06, 0.6], [0.05, 0.34])]
+    private static let thighFront: [Belly] = [([.quads], [0.015, 0.65], [0.07, 0.32]), ([.adductors], [-0.07, 0.6], [0.04, 0.25])]
+    private static let shinBellies: [Belly] = [([.calves], [-0.05, 0.32], [0.045, 0.27])]
+    private static let deltoid: Belly = ([.shoulders], [0, -0.02], [0.08, 0.3])
+    private static let upperArmSide: [Belly] = [deltoid, ([.biceps], [0.05, 0.62], [0.04, 0.3]), ([.triceps], [-0.05, 0.62], [0.04, 0.3])]
+    private static let upperArmFront: [Belly] = [deltoid, ([.biceps, .triceps], [0, 0.65], [0.08, 0.32])]
+    private static let forearmBellies: [Belly] = [([.forearm], [0, 0.4], [0.08, 0.5])]
 
     static func draw(pose: ExercisePose, skeleton: ExercisePose.Skeleton, muscles: ExerciseMuscles,
                      in context: GraphicsContext, size: CGSize) {
@@ -75,36 +127,64 @@ private struct FigurePainter {
 
     private var side: Bool { pose.camera == .side }
 
+    /// Whether the hand hangs between the legs, inside the thigh at its own height: a
+    /// sumo grip low between the knees, not the same grip at the hips.
+    private func handInsideThigh(_ s: ExercisePose.Skeleton.Side) -> Bool {
+        let t = min(max((s.hip.y - s.hand.y) / max(s.hip.y - s.knee.y, 1e-9), 0), 1)
+        return s.hand.z < s.hip.z + (s.knee.z - s.hip.z) * t - 0.05
+    }
+
+    /// The point on the spine and neck closest to `q`: what decides whether `q` is in
+    /// front of the body (a bar overhead is judged against the head, not the waist).
+    private func nearestOnBody(_ q: SIMD3<Double>) -> SIMD3<Double> {
+        let line = [sk.pelvis, sk.shoulders, sk.head]
+        return zip(line, line.dropFirst()).map { a, b in
+            a + (b - a) * min(max(simd_dot(q - a, b - a) / simd_length_squared(b - a), 0), 1)
+        }.min { simd_distance($0, q) < simd_distance($1, q) }!
+    }
+
     private func paint() {
-        let floor = pose.framing.floor
-        gc.fill(Path(ellipseIn: CGRect(x: floor.lowerBound, y: -0.04, width: floor.upperBound - floor.lowerBound, height: 0.08)),
-                with: .color(F.floor))
-        if let bench = pose.props.bench { drawBench(bench) }
+        gc.fill(Path(ellipseIn: pose.framing.floor), with: .color(F.floor))
+        let body = spine()
+        let trunk = smooth((side ? Self.torsoSide : Self.torsoFront).map(body))
+        let neck = Path { $0.move(to: cg(p(sk.shoulders + sk.up * 0.03))); $0.addLine(to: cg(p(sk.head))) }
+            .strokedPath(StrokeStyle(lineWidth: 0.075, lineCap: .round))
+        let head = circle(p(sk.head), Body.headRadius), core = [neck, head, trunk]
+        let nearLeg = leg(sk.near), farLeg = leg(sk.far), nearArm = arm(sk.near), farArm = arm(sk.far)
+        let figure = farLeg.paths + core + nearLeg.paths + nearArm.paths
         if side {
-            if let bar = sk.bar {
-                farPlate(bar)
-                barSegment(bar, -0.5, -0.17, 0.028)
-                barSegment(bar, -0.5, -0.46, 0.075)
+            let barInFront = sk.bar.map { pose.camera.depth($0) > pose.camera.depth(nearestOnBody($0)) }
+            let armInsideKnee = handInsideThigh(sk.near)
+            if let bar = sk.bar, barInFront == false { drawBar(bar) }
+            dress(arm: farArm, sk.far, far: true, Self.heavy, on: nil)
+            if let bench = pose.props.bench { drawPad(bench) }
+            outline(figure, Self.heavy)
+            outline(farLeg.paths)
+            dress(leg: farLeg, sk.far, far: true)
+            if let bench = pose.props.bench { drawFrame(bench) }
+            outline(core + nearLeg.paths)
+            headAndNeck(neck, head)
+            torso(body, trunk)
+            if armInsideKnee {
+                dress(arm: nearArm, sk.near, far: false, on: trunk)
+                outline(nearLeg.paths)
             }
-            arm(sk.far, far: true)
-            leg(sk.far, far: true)
-            neckAndHead()
-            torso()
-            leg(sk.near, far: false)
-            if let bar = sk.bar {
-                barSegment(bar, -0.17, 0.42, 0.028)
-                barSegment(bar, 0.42, Body.plateZ, 0.05)
-                barSegment(bar, 0.42, 0.46, 0.075)
+            dress(leg: nearLeg, sk.near, far: false)
+            if let bar = sk.bar, barInFront == true {
+                drawBar(bar)
+                solid([farArm.tip], shade(F.skin))
             }
-            arm(sk.near, far: false)
-            if let bar = sk.bar { nearPlate(bar) }
+            if !armInsideKnee { dress(arm: nearArm, sk.near, far: false, on: trunk) }
         } else {
-            leg(sk.far, far: false)
-            leg(sk.near, far: false)
-            neckAndHead()
-            torso()
-            arm(sk.far, far: false)
-            arm(sk.near, far: false)
+            if let bench = pose.props.bench { drawFrame(bench); drawPad(bench) }
+            outline(farArm.paths + figure, Self.heavy)
+            outline(farLeg.paths + nearLeg.paths + core)
+            dress(leg: farLeg, sk.far, far: false)
+            dress(leg: nearLeg, sk.near, far: false)
+            headAndNeck(neck, head)
+            torso(body, trunk)
+            dress(arm: farArm, sk.far, far: false, on: trunk)
+            dress(arm: nearArm, sk.near, far: false, on: trunk)
         }
     }
 
@@ -116,11 +196,6 @@ private struct FigurePainter {
         case 1: Theme.Palette.Tissue.load(.moderate)
         default: nil
         }
-    }
-
-    private func color(_ list: [GarminMuscle], else base: Color, far: Bool) -> Color {
-        let c = highlight(list) ?? base
-        return far ? shade(c) : c
     }
 
     private func shade(_ c: Color) -> Color { c.mix(with: F.outline, by: 0.3) }
@@ -142,9 +217,23 @@ private struct FigurePainter {
 
     private func disc(_ c: Point, _ r: Double, _ fill: Color) { gc.fill(circle(c, r), with: .color(fill)) }
 
-    private func outlined(_ path: Path, _ fill: Color) {
-        gc.fill(path, with: .color(fill))
-        gc.stroke(path, with: .color(F.outline), style: StrokeStyle(lineWidth: 1.3 * ow, lineJoin: .round))
+    /// One outline around `paths` together: filled afterwards, no line shows where they
+    /// overlap. Nor where they leave `body` inside `root` — a limb grows out of the trunk.
+    private func outline(_ paths: [Path], _ weight: Double = thin, leaving body: Path? = nil, at root: Path = Path()) {
+        gc.drawLayer { layer in
+            for path in paths {
+                layer.stroke(path, with: .color(F.outline), style: StrokeStyle(lineWidth: 2 * weight * ow, lineJoin: .round))
+            }
+            guard let body else { return }
+            layer.clip(to: body)
+            layer.blendMode = .destinationOut
+            layer.fill(root, with: .color(.black))
+        }
+    }
+
+    private func solid(_ paths: [Path], _ fill: Color) {
+        outline(paths, 1)
+        for path in paths { gc.fill(path, with: .color(fill)) }
     }
 
     private func polygon(_ points: [Point]) -> Path {
@@ -167,146 +256,157 @@ private struct FigurePainter {
 
     private func turnedLeft(_ v: Point) -> Point { [-v.y, v.x] }
 
-    /// One muscle as a rounded stroke along half a limb segment, on the `normal` side.
-    private func half(_ a: Point, _ b: Point, width: Double, normal: Point, _ muscle: GarminMuscle, far: Bool,
-                      from t0: Double, to t1: Double) {
-        guard let c = highlight([muscle]) else { return }
-        let d = b - a, offset = normal * (width / 4)
-        line(a + offset + d * t0, a + offset + d * t1, width / 2, far ? shade(c) : c)
+    /// `shape` in `cloth` up to `hem` along `map` and in `rest` beyond.
+    private func clothe(_ shape: Path, _ map: Map, _ cloth: Color, to hem: Double, then rest: Color) {
+        var inner = gc
+        inner.clip(to: shape)
+        inner.fill(polygon([[-0.4, hem], [0.4, hem], [0.4, -2], [-0.4, -2]].map(map)), with: .color(cloth))
+        inner.fill(polygon([[-0.4, hem], [0.4, hem], [0.4, 2], [-0.4, 2]].map(map)), with: .color(rest))
+    }
+
+    /// The worked muscles among `bellies` on `shape`, then the hem line across it.
+    private func tint(_ shape: Path, _ map: Map, _ bellies: [Belly], far: Bool = false, hem: Double? = nil) {
+        var inner = gc
+        inner.clip(to: shape)
+        for belly in bellies {
+            guard let c = highlight(belly.muscles) else { continue }
+            let oval = (0..<16).map { i -> Point in
+                let a = Double(i) * .pi / 8
+                return map(belly.center + belly.radius * [cos(a), sin(a)])
+            }
+            inner.fill(smooth(oval), with: .color(far ? shade(c) : c))
+        }
+        if let hem { line(map([-0.4, hem]), map([0.4, hem]), Self.thin * ow, F.outline, cap: .butt, on: inner) }
     }
 
     // MARK: Body
 
-    private func leg(_ s: ExercisePose.Skeleton.Side, far: Bool) {
-        let a = p(s.hip), b = p(s.knee), c = p(s.ankle), skin = far ? shade(F.skin) : F.skin
-        let thighNormal = turnedLeft(normalized(b - a)), shinNormal = turnedLeft(normalized(c - b))
-        line(a, b, Width.thigh + 2 * ow, F.outline)
-        line(b, c, Width.shin + 2 * ow, F.outline)
-        line(b, c, Width.shin, skin)
-        line(a, b, Width.thigh, side ? skin : color([.quads], else: F.skin, far: far))
-        if side {
-            half(a, b, width: Width.thigh, normal: thighNormal, .quads, far: far, from: 0.36, to: 0.88)
-            half(a, b, width: Width.thigh, normal: -thighNormal, .hamstrings, far: far, from: 0.36, to: 0.88)
-            half(b, c, width: Width.shin, normal: -shinNormal, .calves, far: far, from: 0.12, to: 0.6)
-        } else {
-            half(a, b, width: Width.thigh, normal: thighNormal * -s.sign, .adductors, far: far, from: 0.36, to: 0.85)
-        }
-        let shorts = far ? shade(F.shorts) : F.shorts, hem = a + (b - a) * 0.34
-        line(a, hem, Width.thigh, shorts, cap: .butt)
-        disc(a, Width.thigh / 2, shorts)
-        line(hem + thighNormal * (Width.thigh / 2), hem - thighNormal * (Width.thigh / 2), ow, F.outline, cap: .butt)
-        shoe(s, far: far)
-    }
-
-    private func shoe(_ s: ExercisePose.Skeleton.Side, far: Bool) {
-        let fill = far ? shade(F.shoe) : F.shoe
-        if side {
-            let r = s.footAngle * .pi / 180, (cosA, sinA) = (cos(r), sin(r)), a = s.ankle
-            outlined(smooth(Self.shoe.map { q in p([a.x + q.x * cosA - q.y * sinA, a.y + q.x * sinA + q.y * cosA, a.z]) }), fill)
-        } else {
-            let c = p(s.ankle)
-            outlined(Path(roundedRect: CGRect(x: c.x - 0.055, y: c.y - 0.085, width: 0.11, height: 0.1), cornerRadius: 0.03), fill)
+    /// The trunk's axes along the spine, pelvis to shoulders. Standing, the lower back
+    /// is hollow; the arch flattens as the hips fold, gone at a right angle.
+    private func spine() -> Map {
+        let a = p(sk.pelvis), c = p(sk.shoulders), length = simd_length(c - a), up = (c - a) / length
+        let fold = 1 + simd_dot(sk.up, simd_normalize(sk.near.knee - sk.near.hip))
+        let b = (a + c) / 2 + SIMD2(up.y, -up.x) * (side ? 0.04 * max(0, 1 - fold) : 0)
+        return { q in
+            let t = q.y / Body.torso, u = min(max(t, 0), 1)
+            let along = simd_normalize((b - a) * (1 - u) + (c - b) * u)
+            let on = a * ((1 - u) * (1 - u)) + b * (2 * u * (1 - u)) + c * (u * u)
+            return on + along * ((t - u) * length) + SIMD2(along.y, -along.x) * q.x
         }
     }
 
-    private func arm(_ s: ExercisePose.Skeleton.Side, far: Bool) {
-        let a = p(s.shoulder), b = p(s.elbow), c = p(s.hand), skin = far ? shade(F.skin) : F.skin
-        let deltoid = highlight([.shoulders]).map { far ? shade($0) : $0 }
+    /// A two-segment limb a → b → c, its outlines' front on the `flip` side.
+    private func limb(_ a: Point, _ b: Point, _ c: Point, flip: Double, _ upper: [Point], _ lower: [Point], joint: Double,
+                      tip: (Frame) -> Path) -> Limb {
+        let root = Frame(origin: a, front: turnedLeft(normalized(b - a)) * flip, up: b - a)
+        let end = Frame(origin: b, front: turnedLeft(normalized(c - b)) * flip, up: c - b)
+        return Limb(root: root, end: end, upper: smooth(upper.map(root.callAsFunction)), lower: smooth(lower.map(end.callAsFunction)),
+                    joint: circle(b, joint), tip: tip(end))
+    }
+
+    /// The shoe's own (forward, up) axes from the ankle; in the front view the toes turn out.
+    private func foot(_ s: ExercisePose.Skeleton.Side) -> Map {
+        let r = s.footAngle * .pi / 180, (cosA, sinA) = (cos(r), sin(r)), a = s.ankle
+        return side ? { q in self.p([a.x + q.x * cosA - q.y * sinA, a.y + q.x * sinA + q.y * cosA, a.z]) }
+                    : { q in self.p(a) + [q.x * s.sign, q.y] }
+    }
+
+    private func leg(_ s: ExercisePose.Skeleton.Side) -> Limb {
+        limb(p(s.hip), p(s.knee), p(s.ankle), flip: side ? 1 : s.sign, Self.thigh, Self.shin, joint: 0.053) { _ in
+            smooth((side ? Self.shoeSide : Self.shoeFront).map(foot(s)))
+        }
+    }
+
+    private func dress(leg: Limb, _ s: ExercisePose.Skeleton.Side, far: Bool) {
+        let skin = far ? shade(F.skin) : F.skin
+        gc.fill(leg.joint, with: .color(skin))
+        clothe(leg.upper, leg.root.callAsFunction, far ? shade(F.shorts) : F.shorts, to: 0.45, then: skin)
+        tint(leg.upper, leg.root.callAsFunction, side ? Self.thighSide : Self.thighFront, far: far, hem: 0.45)
+        gc.fill(leg.lower, with: .color(skin))
+        tint(leg.lower, leg.end.callAsFunction, Self.shinBellies, far: far)
+        gc.fill(leg.tip, with: .color(far ? shade(F.shoe) : F.shoe))
+        var sole = gc
+        sole.clip(to: leg.tip)
+        sole.fill(polygon([[-0.2, -0.058], [0.3, -0.058], [0.3, -0.2], [-0.2, -0.2]].map(foot(s))), with: .color(far ? shade(F.metal) : F.metal))
+    }
+
+    /// A hand closes to a fist around whatever it holds; on the floor it lies flat.
+    private func arm(_ s: ExercisePose.Skeleton.Side) -> Limb {
+        let a = p(s.shoulder), b = p(s.elbow), c = p(s.hand)
+        let bend = simd_dot(c - b, turnedLeft(normalized(b - a))) < 0 ? -1.0 : 1.0
+        let flat = pose.props.barbell == nil && pose.props.dumbbells != true && s.hand.y < 0.1
+        return limb(a, b, c, flip: bend, Self.upperArm, Self.forearm, joint: 0.04) { forearm in
+            flat ? smooth(Self.palm.map { q in p(s.hand + SIMD3(q.x, q.y, 0)) })
+                 : smooth(Self.fist.map(Frame(origin: c, front: forearm.front, up: normalized(c - b)).callAsFunction))
+        }
+    }
+
+    /// An arm, growing out of `trunk` when it lies in front of it.
+    private func dress(arm: Limb, _ s: ExercisePose.Skeleton.Side, far: Bool, _ weight: Double = thin, on trunk: Path?) {
+        let skin = far ? shade(F.skin) : F.skin
         if pose.props.dumbbells == true { dumbbell(s, far: far, front: false) }
-        line(a, b, Width.upperArm + 2 * ow, F.outline)
-        line(b, c, Width.forearm + 2 * ow, F.outline)
-        disc(c, Width.hand + ow, F.outline)
-        if deltoid != nil { disc(a, 0.06 + ow, F.outline) }
-        line(a, b, Width.upperArm, side ? skin : color([.biceps, .triceps], else: F.skin, far: far))
-        line(b, c, Width.forearm, color([.forearm], else: F.skin, far: far))
-        if side {
-            var bicepsSide = turnedLeft(normalized(b - a))
-            if ((c - b) * bicepsSide).sum() < 0 { bicepsSide = -bicepsSide }
-            half(a, b, width: Width.upperArm, normal: bicepsSide, .biceps, far: far, from: 0.15, to: 0.85)
-            half(a, b, width: Width.upperArm, normal: -bicepsSide, .triceps, far: far, from: 0.15, to: 0.85)
-        }
-        disc(c, Width.hand, skin)
-        if let deltoid { disc(a, 0.06, deltoid) }
+        outline(arm.paths, weight, leaving: trunk, at: circle(p(s.shoulder), 0.1))
+        gc.fill(arm.joint, with: .color(skin))
+        clothe(arm.upper, arm.root.callAsFunction, far ? shade(F.shirt) : F.shirt, to: 0.32, then: skin)
+        tint(arm.upper, arm.root.callAsFunction, side ? Self.upperArmSide : Self.upperArmFront, far: far, hem: 0.32)
+        gc.fill(arm.lower, with: .color(skin))
+        tint(arm.lower, arm.end.callAsFunction, Self.forearmBellies, far: far)
+        gc.fill(arm.tip, with: .color(skin))
         if pose.props.dumbbells == true { dumbbell(s, far: far, front: true) }
     }
 
-    private func torso() {
-        let pelvis = p(sk.pelvis), axis = p(sk.shoulders) - pelvis
-        let stretch = (axis * axis).sum().squareRoot() / Body.torso, up = normalized(axis), front: Point = [up.y, -up.x]
-        let local = { (q: Point) in pelvis + front * q.x + up * (q.y * stretch) }
-        let outline = smooth((side ? Self.torsoSide : Self.torsoFront).map(local))
-        gc.fill(outline, with: .color(F.shirt))
-        var inner = gc
-        inner.clip(to: outline)
-        inner.fill(polygon([[-0.4, -0.3], [0.4, -0.3], [0.4, 0.115], [-0.4, 0.115]].map(local)), with: .color(F.shorts))
-        line(local([-0.4, 0.115]), local([0.4, 0.115]), ow, F.outline, cap: .butt, on: inner)
-        let toBody = CGAffineTransform(a: front.x, b: front.y, c: up.x * stretch, d: up.y * stretch, tx: pelvis.x, ty: pelvis.y)
-        func belly(_ list: [GarminMuscle], _ center: Point, _ radius: Point) {
-            guard let c = highlight(list) else { return }
-            let oval = CGRect(x: center.x - radius.x, y: center.y - radius.y, width: 2 * radius.x, height: 2 * radius.y)
-            inner.fill(Path(ellipseIn: oval).applying(toBody), with: .color(c))
-        }
-        if side {
-            belly([.glutes, .abductors], [-0.09, 0.02], [0.09, 0.11])
-            belly([.hips], [0.08, 0], [0.06, 0.08])
-            belly([.abs, .obliques], [0.09, 0.19], [0.07, 0.11])
-            belly([.lowerBack], [-0.08, 0.19], [0.06, 0.1])
-            belly([.chest], [0.1, 0.4], [0.09, 0.12])
-            belly([.lats, .traps], [-0.09, 0.38], [0.08, 0.15])
-        } else {
-            belly([.hips, .adductors, .abductors], [0, 0], [0.15, 0.08])
-            belly([.abs, .obliques], [0, 0.19], [0.08, 0.1])
-            belly([.chest], [-0.085, 0.42], [0.08, 0.07])
-            belly([.chest], [0.085, 0.42], [0.08, 0.07])
-            belly([.traps], [0, 0.56], [0.16, 0.05])
-        }
-        gc.stroke(outline, with: .color(F.outline), lineWidth: 1.3 * ow)
+    private func torso(_ body: Map, _ trunk: Path) {
+        clothe(trunk, body, F.shorts, to: 0.115, then: F.shirt)
+        tint(trunk, body, side ? Self.trunkSide : Self.trunkFront, hem: 0.115)
     }
 
-    private func neckAndHead() {
-        let neck = p(sk.shoulders + sk.up * 0.03), center = p(sk.head)
-        line(neck, center, Width.neck + 2 * ow, F.outline)
-        line(neck, center, Width.neck, F.skin)
-        let up = normalized(center - p(sk.shoulders)), front: Point = [up.y, -up.x]
-        let head = circle(center, Body.headRadius)
+    private func headAndNeck(_ neck: Path, _ head: Path) {
+        gc.fill(neck, with: .color(F.skin))
         gc.fill(head, with: .color(F.hair))
+        let center = p(sk.head), up = normalized(center - p(sk.shoulders)), front: Point = [up.y, -up.x]
         var inner = gc
         inner.clip(to: head)
-        let face = side ? center + front * 0.035 - up * 0.03 : center - up * 0.035
-        inner.fill(circle(face, 0.108), with: .color(F.skin))
-        if side { inner.fill(circle(center - front * 0.012 - up * 0.01, 0.022), with: .color(shade(F.skin))) }
-        gc.stroke(head, with: .color(F.outline), lineWidth: 1.3 * ow)
+        inner.fill(circle(side ? center + front * 0.06 - up * 0.05 : center - up * 0.035, 0.11), with: .color(F.skin))
     }
 
     // MARK: Props
 
-    private func barSegment(_ bar: SIMD3<Double>, _ z0: Double, _ z1: Double, _ width: Double) {
-        let a = p([bar.x, bar.y, z0]), b = p([bar.x, bar.y, z1])
-        line(a, b, width + 2 * ow, F.outline, cap: .butt)
-        line(a, b, width, F.metal, cap: .butt)
+    /// The circle of `radius` around the bar's axis at `z`, as the camera sees it; with
+    /// `front`, only the half facing the viewer.
+    private func ring(_ bar: SIMD3<Double>, _ z: Double, _ radius: Double, front: Bool = false) -> Path {
+        let c = SIMD3(bar.x, bar.y, z), t0 = atan2(pose.camera.depth([0, 1, 0]), pose.camera.depth([1, 0, 0]))
+        return Path { path in
+            path.addLines((0...24).map { i in
+                let t = front ? t0 + Double.pi * (Double(i) / 24 - 0.5) : Double.pi * Double(i) / 12
+                return cg(p(c + SIMD3(cos(t), sin(t), 0) * radius))
+            })
+            if !front { path.closeSubpath() }
+        }
     }
 
-    private func hub(_ c: Point) {
-        disc(c, 0.035 + ow, F.outline)
-        disc(c, 0.035, F.metal)
+    /// The bar from `z0` to `z1` as a cylinder: both end circles and the band between.
+    private func tube(_ bar: SIMD3<Double>, _ z0: Double, _ z1: Double, _ radius: Double) -> [Path] {
+        let a = p([bar.x, bar.y, z0]), b = p([bar.x, bar.y, z1]), n = turnedLeft(normalized(b - a))
+        let half = radius * simd_length(SIMD2(simd_dot(p([1, 0, 0]) - p(.zero), n), simd_dot(p([0, 1, 0]) - p(.zero), n)))
+        return [ring(bar, z0, radius), ring(bar, z1, radius), polygon([a + n * half, b + n * half, b - n * half, a - n * half])]
     }
 
-    private func farPlate(_ bar: SIMD3<Double>) {
-        let c = p([bar.x, bar.y, -Body.plateZ])
-        disc(c, Body.plateRadius + ow, F.outline)
-        disc(c, Body.plateRadius, F.plate)
-        gc.stroke(circle(c, 0.15), with: .color(shade(F.plate)), lineWidth: ow)
-        hub(c)
-    }
-
-    private func nearPlate(_ bar: SIMD3<Double>) {
-        let c = p([bar.x, bar.y, Body.plateZ])
-        var faint = gc
-        faint.opacity = 0.3
-        faint.fill(circle(c, Body.plateRadius), with: .color(F.plate))
-        gc.stroke(circle(c, 0.21), with: .color(F.plate), lineWidth: 0.03)
-        for r in [Body.plateRadius, 0.195] { gc.stroke(circle(c, r), with: .color(F.outline), lineWidth: ow) }
-        hub(c)
+    /// Shaft and sleeves as one piece of metal, the near sleeve's end face showing, and a
+    /// ring at each collar that the bar hides where the ring passes behind it.
+    private func drawBar(_ bar: SIMD3<Double>) {
+        let ends = [-1.0, 1.0], collar = 0.61, sleeve = 0.025
+        func rings(front: Bool) {
+            for end in ends {
+                let r = ring(bar, end * collar, 0.042, front: front)
+                gc.stroke(r, with: .color(F.outline), style: StrokeStyle(lineWidth: 0.014 + 2 * ow, lineCap: .butt))
+                gc.stroke(r, with: .color(F.metal), style: StrokeStyle(lineWidth: 0.014, lineCap: .butt))
+            }
+        }
+        rings(front: false)
+        solid(tube(bar, -collar, collar, 0.014) + ends.flatMap { tube(bar, $0 * collar, $0 * Body.barHalfLength, sleeve) }, F.metal)
+        let face = pose.camera.depth([0, 0, 1]) > 0 ? 1.0 : -1.0
+        gc.stroke(ring(bar, face * Body.barHalfLength, sleeve), with: .color(F.outline), lineWidth: Self.thin * ow)
+        rings(front: true)
     }
 
     private func dumbbell(_ s: ExercisePose.Skeleton.Side, far: Bool, front: Bool) {
@@ -326,31 +426,39 @@ private struct FigurePainter {
         } else if front {
             handle()
             for c in [at(-z), at(z)] {
-                outlined(Path(roundedRect: CGRect(x: c.x - 0.026, y: c.y - 0.07, width: 0.052, height: 0.14), cornerRadius: 0.015), plate)
+                solid([Path(roundedRect: CGRect(x: c.x - 0.026, y: c.y - 0.07, width: 0.052, height: 0.14), cornerRadius: 0.015)], plate)
             }
         }
     }
 
-    private func drawBench(_ bench: ExercisePose.Bench) {
-        let x0 = bench.x.x, x1 = bench.x.y, top = bench.top, halfWidth = 0.14, thickness = 0.09
-        let legs = [x0 + 0.1, x1 - 0.1]
+    /// The legs, drawn after the far leg (its foot stands behind them) but kept under the pad.
+    private func drawFrame(_ bench: ExercisePose.Bench) {
+        var frame = gc
+        for face in pad(bench) { frame.clip(to: face, options: .inverse) }
+        let legs = [bench.x.x + 0.1, bench.x.y - 0.1]
         for x in legs {
             let a = p([x, 0.02, -0.2]), b = p([x, 0.02, 0.2])
-            line(a, b, 0.04 + 2 * ow, F.outline, cap: .butt)
-            line(a, b, 0.04, F.metal, cap: .butt)
+            line(a, b, 0.04 + 2 * ow, F.outline, cap: .butt, on: frame)
+            line(a, b, 0.04, F.metal, cap: .butt, on: frame)
         }
         for z in [-0.1, 0.1] {
             for x in legs {
-                let a = p([x, 0.02, z]), b = p([x, top - thickness, z])
-                line(a, b, 0.05 + 2 * ow, F.outline, cap: .butt)
-                line(a, b, 0.05, z < 0 ? shade(F.metal) : F.metal, cap: .butt)
+                let a = p([x, 0.02, z]), b = p([x, bench.top - 0.09, z])
+                line(a, b, 0.05 + 2 * ow, F.outline, cap: .butt, on: frame)
+                line(a, b, 0.05, z < 0 ? shade(F.metal) : F.metal, cap: .butt, on: frame)
             }
         }
-        let padSide = shade(F.pad)
-        outlined(polygon([p([x0, top, -halfWidth]), p([x1, top, -halfWidth]), p([x1, top, halfWidth]), p([x0, top, halfWidth])]), F.pad)
-        outlined(polygon([p([x0, top, -halfWidth]), p([x0, top, halfWidth]), p([x0, top - thickness, halfWidth]),
-                          p([x0, top - thickness, -halfWidth])]), shade(padSide))
-        outlined(polygon([p([x0, top, halfWidth]), p([x1, top, halfWidth]), p([x1, top - thickness, halfWidth]),
-                          p([x0, top - thickness, halfWidth])]), padSide)
+    }
+
+    /// The pad's top, head end and near side.
+    private func pad(_ bench: ExercisePose.Bench) -> [Path] {
+        let x0 = bench.x.x, x1 = bench.x.y, top = bench.top, bottom = top - 0.09, w = 0.14
+        return [polygon([p([x0, top, -w]), p([x1, top, -w]), p([x1, top, w]), p([x0, top, w])]),
+                polygon([p([x0, top, -w]), p([x0, top, w]), p([x0, bottom, w]), p([x0, bottom, -w])]),
+                polygon([p([x0, top, w]), p([x1, top, w]), p([x1, bottom, w]), p([x0, bottom, w])])]
+    }
+
+    private func drawPad(_ bench: ExercisePose.Bench) {
+        for (face, fill) in zip(pad(bench), [F.pad, shade(shade(F.pad)), shade(F.pad)]) { solid([face], fill) }
     }
 }
