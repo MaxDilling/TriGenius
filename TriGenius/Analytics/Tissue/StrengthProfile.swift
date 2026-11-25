@@ -6,8 +6,9 @@ import Foundation
 // fixes the equipment, and the areas to work around. An area excludes every
 // exercise loading its tissue group, as a primary or a secondary mover —
 // exclusion only, no medical logic. Experience is the `strength` sport
-// profile's level (`Experience`). Stored on that profile (`CoachMemory`); the
-// exercise picker, `get_exercises` and the coach prompt all apply it.
+// profile's level (`Experience`). Stored on that profile (`CoachMemory`);
+// `get_exercises` and the coach prompt filter by it, while the athlete's own
+// pickers only order by it — a search there always reaches the whole library.
 
 nonisolated struct StrengthProfile: Hashable, Sendable {
 
@@ -75,6 +76,11 @@ nonisolated struct StrengthProfile: Hashable, Sendable {
         let loaded = Set(exercise.primaryGroups + exercise.secondaryGroups)
         return (place?.equipment.contains(exercise.equipment) ?? true)
             && !excludedAreas.contains { loaded.contains($0.group) }
+    }
+
+    /// `exercises` by name, the ones `allows` passes first.
+    func ranked(_ exercises: [Exercise]) -> [Exercise] {
+        exercises.sorted { (allows($0) ? 0 : 1, $0.name) < (allows($1) ? 0 : 1, $1.name) }
     }
 
     /// "trains at: home with weights; works around: knee, shoulder" — nil when

@@ -1063,14 +1063,14 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
         let scope = profile.summary.map { " and the athlete's strength profile (\($0))" } ?? ""
         guard !matches.isEmpty else { return "No exercises match these filters\(scope)." }
         func line(_ exercise: Exercise) -> String {
+            if exercise.category == .stretch { return "\(exercise.id) — stretch" }
             var text = "\(exercise.id) — " + exercise.primaryGroups.map(\.rawValue).joined(separator: ", ")
             if !exercise.secondaryGroups.isEmpty {
                 text += " + " + exercise.secondaryGroups.map(\.rawValue).joined(separator: ", ")
             }
-            if exercise.category == .stretch { return text + " · stretch" }
             return exercise.isTimeBased ? text + " · timed" : text
         }
-        var lines = ["exercise_id — loads + also loads · timed (a hold: its sets take duration_seconds, not reps) · stretch (a timed hold that stretches those groups and loads nothing)"]
+        var lines = ["exercise_id — loads + also loads · timed (a hold: its sets take duration_seconds, not reps) · stretch (a timed hold that loads nothing)"]
         if let summary = profile.summary { lines.append("Only what the athlete's strength profile allows (\(summary)).") }
         if gear != nil {
             lines += matches.map(line)

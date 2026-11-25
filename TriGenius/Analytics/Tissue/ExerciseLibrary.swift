@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - Exercise library
 //
-// ~100 curated exercises, strength moves and stretches, each with
+// ~70 curated exercises, strength moves and one general stretch, each with
 // the tissue groups it works — from Garmin's catalog (`GarminMuscles`), or its
 // own list for the few Garmin lacks — and whether it loads a tendon. Bundled as
 // JSON rather than Assets/Knowledge/ prose: this is picker data the workout

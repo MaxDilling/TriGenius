@@ -2,9 +2,9 @@ import SwiftUI
 
 // MARK: - Exercise picker
 //
-// Search/browse the library the athlete's `StrengthProfile` allows, grouped by
-// category, each row led by the exercise's animation where it has a pose; a
-// "Custom" row lets the athlete type a name for anything not in the library,
+// Search/browse the whole library grouped by category, what the athlete's
+// `StrengthProfile` allows first, each row led by the exercise's animation where
+// it has a pose; a "Custom" row lets the athlete type a name for anything not in the library,
 // unmapped to any tissue group until the athlete (or a future curation pass)
 // gives it one.
 
@@ -19,13 +19,10 @@ struct ExercisePickerView: View {
     @State private var customName = ""
     private let profile = StrengthProfile.stored
 
-    private var filtered: [Exercise] {
-        ExerciseLibrary.all.filter { profile.allows($0) && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query)) }
-    }
-
     private var grouped: [(category: Exercise.Category, exercises: [Exercise])] {
-        Dictionary(grouping: filtered, by: \.category)
-            .map { (category: $0.key, exercises: $0.value.sorted { $0.name < $1.name }) }
+        let matches = ExerciseLibrary.all.filter { query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) }
+        return Dictionary(grouping: matches, by: \.category)
+            .map { (category: $0.key, exercises: profile.ranked($0.value)) }
             .sorted { $0.category.label < $1.category.label }
     }
 
@@ -47,7 +44,7 @@ struct ExercisePickerView: View {
                 Text("Custom")
             } footer: {
                 if let summary = profile.summary {
-                    Text("Library filtered to your strength profile (\(summary)). Change it in Settings → Strength profile.")
+                    Text("Exercises your strength profile allows come first (\(summary)). Change it in Settings → Strength profile.")
                 }
             }
             ForEach(grouped, id: \.category) { group in
@@ -60,12 +57,14 @@ struct ExercisePickerView: View {
                             HStack {
                                 ExerciseAnimation(exercise: exercise)
                                     .frame(width: 56, height: 42)
+                                    .padding(.leading, -Theme.Spacing.s)
                                 Text(exercise.name)
                                 Spacer()
                                 Text(exercise.equipment.label)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
+                            .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
                         }
                         .foregroundStyle(.primary)
                     }

@@ -111,8 +111,8 @@ sport weights for Shins and the arm groups are general-knowledge placeholders.
    (`sportContributions`). A strength session doses in **hard sets**: 1 per set on a primary
    group, ½ on a secondary, times `tlPerHardSet` to share a scale with TL, plus tendon dose
    on a primary group with a modelled tendon when the library marks the exercise
-   `loadsTendon`. A stretch (library category `stretch`, Garmin's own stretches) is no hard
-   set and doses nothing. Its HR-derived TL never enters this axis. A plan doses from its planned
+   `loadsTendon`. A stretch (`TissueSession.isStretch`: the library's one general stretch,
+   or a recorded set Garmin names as a stretch) is no hard set and doses nothing. Its HR-derived TL never enters this axis. A plan doses from its planned
    TL or prescribed sets. A set's groups resolve in one place (`TissueSession.groups`);
    `TissueSession.targets` reads the same groups as primary/secondary for the muscle map
    (`Shared/Charts/MuscleMap`) at the top of the strength card, plan and session alike.
@@ -141,11 +141,11 @@ group — abs/obliques → Low back (the group that replaces "Core / low back"),
 Shoulders, abductors → Glutes, lats/traps → Upper back, biceps/triceps/forearm to their
 own groups. Garmin names no shin muscle, so Shins takes no strength load. The library resolves
 its groups through it, so a recorded set of an exercise outside the library gets groups
-too; the library still carries `loads_tendon`, and its own groups for the 6 exercises
+too; the library still carries `loads_tendon`, and its own groups for the 7 exercises
 Garmin lacks.
 
-**`ExerciseLibrary`** (`Analytics/Tissue/ExerciseLibrary.swift`) — ~100 curated exercises
-(strength moves, plus every Garmin stretch that names its muscles as category `stretch`) loaded once from bundled `Assets/Exercises/exercise-library.json`, each mapped
+**`ExerciseLibrary`** (`Analytics/Tissue/ExerciseLibrary.swift`) — ~70 curated exercises
+(strength moves, plus one general stretch — no groups, no Garmin key — as category `stretch`) loaded once from bundled `Assets/Exercises/exercise-library.json`, each mapped
 onto the `TissueGroup`s it primarily/secondarily loads and whether it stresses a tendon.
 Picker data for the workout editor (`Features/WorkoutEditor/`),
 not coaching prose — that's why it lives as JSON rather than in `Assets/Knowledge/`. A
@@ -156,8 +156,9 @@ tissue-group evidence.
 setup: a training `Place` that fixes the allowed `Exercise.Equipment`, and
 the `Area`s to work around, each excluding every exercise that loads its `TissueGroup` as a
 primary *or* secondary mover (exclusion only). `allows(_:)` is the one filter the
-exercise picker, the editor's default exercise and `get_exercises` all apply, so an excluded
-exercise never reaches the athlete's library or the model. Experience is the `strength`
+editor's default exercise and `get_exercises` apply, so an excluded exercise never reaches
+the model. The athlete's pickers (exercise picker, live swap) only order by it
+(`ranked(_:)`, allowed first): a search there always reaches the whole library. Experience is the `strength`
 sport profile's level. Stored on that profile's `SportProgressRecord` (`trainingPlace`,
 `excludedAreas`; `CoachMemory`, `docs/coach.md`). Pinned by `StrengthProfileTests`.
 

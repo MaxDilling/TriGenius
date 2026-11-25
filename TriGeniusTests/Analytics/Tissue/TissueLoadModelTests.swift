@@ -59,9 +59,10 @@ private func calves(_ output: TissueLoadModel.Output) -> TissueForecast? {
 }
 
 @Test func aStretchPlannedOrRecordedDosesNothing() {
-    let planned = StrengthSets.SetRow(exerciseId: "stretch_hamstring", seconds: 30)
+    let planned = StrengthSets.SetRow(exerciseId: "stretch", seconds: 30)
     let recorded = StrengthSets.SetRow(exerciseName: "STRETCH_HAMSTRING", exerciseCategory: "WARM_UP", seconds: 30)
-    #expect(TissueSession.strength([planned, recorded]).isEmpty)
+    let suffixed = StrengthSets.SetRow(exerciseName: "BICEPS_STRETCH", exerciseCategory: "WARM_UP", seconds: 30)
+    #expect(TissueSession.strength([planned, recorded, suffixed]).isEmpty)
 }
 
 @Test func everyGarminMuscleFoldsOntoAGroup() {

@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - Swap an exercise for today
 //
 // Replaces every set still to do of one exercise in one unit with another
-// library exercise the athlete's `StrengthProfile` allows — or a custom name
+// library exercise — what the athlete's `StrengthProfile` allows first — or a custom name
 // when the search finds nothing fitting — for this session only. Candidates share
 // the set's kind (reps or a hold, a stretch or not), so the prescription carries
 // over unchanged; the weight starts from what the athlete lifted or planned for
@@ -54,13 +54,12 @@ struct LiveSwapSheet: View {
         return Set(exercise.primaryGroups).isDisjoint(with: replaced.primaryGroups) ? 0 : 1
     }
 
-    /// Candidates by rank, best first, each section sorted by name.
+    /// Candidates by rank, best first, each section in the profile's order.
     private var sections: [(rank: Int, exercises: [Exercise])] {
         let profile = StrengthProfile.stored
-        let ranked = Dictionary(grouping: ExerciseLibrary.all.filter { profile.allows($0) && matches($0) }, by: rank)
-        return ranked
+        return Dictionary(grouping: ExerciseLibrary.all.filter(matches), by: rank)
             .filter { !sameMuscles || $0.key > 0 }
-            .map { (rank: $0.key, exercises: $0.value.sorted { $0.name < $1.name }) }
+            .map { (rank: $0.key, exercises: profile.ranked($0.value)) }
             .sorted { $0.rank > $1.rank }
     }
 

@@ -76,6 +76,13 @@ nonisolated struct TissueSession: Sendable {
         return groups.map { (exercise, $0.primary, $0.secondary) }
     }
 
+    /// A stretch is no hard set: the library's one, or any Garmin names as a stretch
+    /// ("STRETCH_CALF", "BICEPS_STRETCH").
+    static func isStretch(_ set: StrengthSets.SetRow) -> Bool {
+        set.exerciseId.flatMap(ExerciseLibrary.find(id:))?.category == .stretch
+            || (set.exerciseCategory != nil && set.exerciseName?.contains("STRETCH") == true)
+    }
+
     /// Every group the sets work, primary wherever any set works it as a primary mover.
     static func targets(_ sets: [StrengthSets.SetRow]) -> [TissueGroup: Target] {
         var out: [TissueGroup: Target] = [:]
@@ -89,7 +96,7 @@ nonisolated struct TissueSession: Sendable {
     static func strength(_ sets: [StrengthSets.SetRow]) -> [TissueGroup: TissueDose] {
         let hardSet = TissueConstants.tlPerHardSet
         var out: [TissueGroup: TissueDose] = [:]
-        for groups in sets.compactMap(Self.groups) where groups.exercise?.category != .stretch {
+        for groups in sets.filter({ !isStretch($0) }).compactMap(Self.groups) {
             for group in groups.primary {
                 let tendon = groups.exercise?.loadsTendon == true && group.tendonLabel != nil ? hardSet : 0
                 out[group, default: .init()] += .init(muscle: hardSet, tendon: tendon)
