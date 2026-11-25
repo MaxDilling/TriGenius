@@ -614,7 +614,7 @@ extension StepDraft {
         case .heartRate: return PlannedWorkoutFormat.range(targetLow, targetHigh, unit: "bpm")
         case .pace: return PlannedWorkoutFormat.paceRange(targetLow, targetHigh, swim: sport == .swimming)
         case .speed: return PlannedWorkoutFormat.speedRange(targetLow, targetHigh)
-        case .cadence: return PlannedWorkoutFormat.range(targetLow, targetHigh, unit: sport == .cycling ? "rpm" : "spm")
+        case .cadence: return PlannedWorkoutFormat.range(targetLow, targetHigh, unit: sport.family == .bike ? "rpm" : "spm")
         }
     }
 }

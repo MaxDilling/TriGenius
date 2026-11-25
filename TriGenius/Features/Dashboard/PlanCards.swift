@@ -27,26 +27,36 @@ struct WeeklyTargetCard: View {
     let week: WeekTargets
 
     @State private var metric: VolumeMetric = .tss
-    private var wide = WideLayout()
 
     init(week: WeekTargets) { self.week = week }
 
     var body: some View {
         NavigationLink { ATPView() } label: {
-            HStack(alignment: wide.isWide ? .center : .top, spacing: wide.isWide ? Theme.Spacing.l : Theme.Spacing.s) {
-                ForEach(week.visibleFamilies) { family in
-                    VolumeRing(family: family, metric: metric, horizontal: wide.isWide,
-                               goal: week.target(for: family), projection: week.projection(for: family))
+            HStack {
+                ViewThatFits(in: .horizontal) {
+                    rings(horizontal: true)
+                    rings(horizontal: false)
                 }
                 Chevron()
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Centres the rings when a grid line is taller than the card.
+        .frame(maxHeight: .infinity)
         .cardTitle("Weekly Target") {
             SegmentedPicker("Metric", selection: $metric, options: VolumeMetric.allCases, label: \.label)
         }
         .contentCard()
+    }
+
+    private func rings(horizontal: Bool) -> some View {
+        HStack(alignment: horizontal ? .center : .top, spacing: horizontal ? Theme.Spacing.l : Theme.Spacing.s) {
+            ForEach(week.visibleFamilies) { family in
+                VolumeRing(family: family, metric: metric, horizontal: horizontal,
+                           goal: week.target(for: family), projection: week.projection(for: family))
+            }
+        }
     }
 }
 
@@ -65,8 +75,8 @@ private enum VolumeMetric: CaseIterable {
 private struct VolumeRing: View {
     let family: SportFamily
     let metric: VolumeMetric
-    /// Wide layouts put the numbers beside the ring instead of under it, so three
-    /// tiles fill the row rather than floating in it.
+    /// Numbers beside the ring instead of under it — chosen wherever the row has
+    /// the room, so the rings fill a wide card rather than floating in it.
     var horizontal = false
     let goal: WeeklyTarget
     /// Actual comes from the projection (its own weekly sum), so the solid arc and

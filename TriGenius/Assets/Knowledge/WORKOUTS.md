@@ -13,7 +13,7 @@ To list, edit, move, or delete existing workouts, use `get_workouts` (it returns
 ## 1. Required fields (per workout item)
 
 - `workout_data.name` — short, descriptive (e.g. "Threshold 3×12 min").
-- `workout_data.sport` — `running` | `cycling` | `swimming` | `strength` | `yoga` | `cardio` | `other`.
+- `workout_data.sport` — `running` | `cycling` | `indoor_cycling` (trainer) | `swimming` | `strength` | `yoga` | `cardio` | `other`.
 - `date` — `YYYY-MM-DD` (alongside `workout_data`, not inside it).
 
 Plus **at least one** of: `workout_data.duration_minutes` (time goal),

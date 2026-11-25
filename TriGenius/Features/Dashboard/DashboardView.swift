@@ -199,13 +199,20 @@ struct DashboardView: View {
                     .contentCard()
             }
             let cards = settings.pinnedCards.filter { $0.metric.map { stats.histories[$0.key] != nil } ?? true }
-            ForEach(StatCard.rows(cards), id: \.self) { row in
-                if row[0].isTile {
-                    LazyVGrid(columns: SummaryTile.columns(wide: wide.isWide, fill: 4), spacing: Theme.Spacing.m) {
-                        ForEach(row) { StatCardView(card: $0, stats: stats, markerRange: .threeMonths) }
+            ForEach(StatCard.rows(cards, wide: wide.isWide), id: \.self) { row in
+                if row[0].span(wide: wide.isWide) == nil {
+                    StatCardView(card: row[0], stats: stats, markerRange: .threeMonths)
+                } else if wide.isWide {
+                    SpanGrid(columns: 4, spacing: Theme.Spacing.m) {
+                        ForEach(row) { card in
+                            StatCardView(card: card, stats: stats, markerRange: .threeMonths)
+                                .layoutValue(key: SpanGrid.Span.self, value: card.span(wide: true) ?? 1)
+                        }
                     }
                 } else {
-                    StatCardView(card: row[0], stats: stats, markerRange: .threeMonths)
+                    LazyVGrid(columns: SummaryTile.columns(wide: false), spacing: Theme.Spacing.m) {
+                        ForEach(row) { StatCardView(card: $0, stats: stats, markerRange: .threeMonths) }
+                    }
                 }
             }
         }

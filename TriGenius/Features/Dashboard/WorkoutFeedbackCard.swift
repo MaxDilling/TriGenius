@@ -3,7 +3,7 @@ import SwiftUI
 /// The athlete's subjective read on a completed session — feel, RPE and a note,
 /// each stored through `setWorkoutFeedback` the moment it is given. Tapping the
 /// selected step again clears it. Once rated, the card opens collapsed to its
-/// values in the title; tapping the title expands it.
+/// values in the title and the note beneath; tapping the title expands it.
 struct WorkoutFeedbackCard: View {
     let record: WorkoutRecord
 
@@ -13,6 +13,9 @@ struct WorkoutFeedbackCard: View {
     @FocusState private var noteFocused: Bool
 
     private static let feelLabels = ["Very Weak", "Weak", "Normal", "Strong", "Very Strong"]
+    /// Garmin's perceived-effort wording for 1…10.
+    private static let rpeLabels = ["Very Light", "Light", "Moderate", "Somewhat Hard", "Hard", "Hard",
+                                    "Very Hard", "Very Hard", "Extremely Hard", "Maximum"]
 
     var body: some View {
         let details = (try? JSONSerialization.jsonObject(with: Data(record.detailsJSON.utf8))) as? [String: Any] ?? [:]
@@ -28,7 +31,8 @@ struct WorkoutFeedbackCard: View {
                         expanded = true
                         save(feel: $0, clearing: $0 == nil ? ["feel"] : [])
                     }
-                    RatingScale(title: "RPE", value: rpe, range: 1...10, caption: rpe.map { "\($0) / 10" }) {
+                    RatingScale(title: "RPE", value: rpe, range: 1...10,
+                                caption: rpe.map { "(\(Self.rpeLabels[min(max($0, 1), 10) - 1])) \($0) / 10" }) {
                         expanded = true
                         save(rpe: $0, clearing: $0 == nil ? ["rpe"] : [])
                     }
@@ -39,6 +43,10 @@ struct WorkoutFeedbackCard: View {
                         .focused($noteFocused)
                         .onSubmit { noteFocused = false }
                 }
+            } else if !note.isEmpty {
+                Text(note)
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
         }
         .cardTitle("How it felt", systemImage: "face.smiling") {

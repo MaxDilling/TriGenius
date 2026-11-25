@@ -416,7 +416,7 @@ nonisolated enum WorkoutNormalizer {
     /// its exercises work most ("Strength · Quads & Glutes"), else sport and
     /// duration ("Running 45 min").
     static func defaultName(_ data: [String: Any]) -> String {
-        let sport = token(data["sport"]) ?? "other"
+        let sport = (token(data["sport"]) ?? "other").replacingOccurrences(of: "_", with: " ")
         let label = sport.prefix(1).uppercased() + sport.dropFirst()
         if let focus = focusGroups(data["steps"] as? [[String: Any]] ?? []) { return "\(label) · \(focus)" }
         if let minutes = Coerce.int(data["duration_minutes"]) { return "\(label) \(minutes) min" }

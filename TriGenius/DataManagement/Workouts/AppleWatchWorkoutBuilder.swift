@@ -142,11 +142,12 @@ enum AppleWatchWorkoutBuilder {
 
     // MARK: - Sport mapping
 
-    /// Maps a sport family to its HealthKit activity type; other families return nil.
+    /// Maps a sport key to its HealthKit activity type and location; families
+    /// outside swim/bike/run return nil.
     private static func activityType(for sportKey: String) -> (HKWorkoutActivityType, HKWorkoutSessionLocationType)? {
         switch SportFamily(sportKey: sportKey) {
         case .run: return (.running, .outdoor)
-        case .bike: return (.cycling, .outdoor)
+        case .bike: return (.cycling, sportKey == "indoor_cycling" ? .indoor : .outdoor)
         case .swim: return (.swimming, .indoor)
         default: return nil
         }

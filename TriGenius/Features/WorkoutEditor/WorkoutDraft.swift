@@ -12,10 +12,10 @@ import Foundation
 
 /// The `workout_data.sport` schema enum.
 enum EditorSport: String, CaseIterable, Identifiable {
-    case running, cycling, swimming, strength, yoga, cardio, other
+    case running, cycling, indoorCycling = "indoor_cycling", swimming, strength, yoga, cardio, other
 
     var id: String { rawValue }
-    var label: String { rawValue.capitalized }
+    var label: String { rawValue.replacingOccurrences(of: "_", with: " ").capitalized }
     var family: SportFamily { SportFamily(sportKey: rawValue) }
 
     /// A stored sport key: the exact schema token, else its `SportFamily`

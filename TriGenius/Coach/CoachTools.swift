@@ -839,7 +839,7 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
     /// `modify_workout` (they differ only in which fields are required).
     private static let workoutDataProperties: [String: Any] = [
         "name": ["type": "string", "description": "Workout name."],
-        "sport": ["type": "string", "enum": ["running", "cycling", "swimming", "strength", "yoga", "cardio", "other"], "description": "Workout sport."],
+        "sport": ["type": "string", "enum": ["running", "cycling", "indoor_cycling", "swimming", "strength", "yoga", "cardio", "other"], "description": "Workout sport. indoor_cycling is a trainer session."],
         "duration_minutes": ["type": "integer", "description": "Total duration in minutes (time goal). Give this and/or distance_meters, or explicit steps."],
         "distance_meters": ["type": "number", "description": "Total distance in meters (distance goal)."],
         "pool_length": ["type": "integer", "description": "Pool length in meters for swim workouts (default 50)."],

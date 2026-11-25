@@ -104,7 +104,7 @@ struct StepEditorView: View {
             numberField("Low (km/h)", value: $step.targetLow, format: .number)
             numberField("High (km/h)", value: $step.targetHigh, format: .number)
         case .cadence:
-            let unit = sport == .cycling ? "rpm" : "spm"
+            let unit = sport.family == .bike ? "rpm" : "spm"
             numberField("Low (\(unit))", value: $step.targetLow, format: .number)
             numberField("High (\(unit))", value: $step.targetHigh, format: .number)
         }

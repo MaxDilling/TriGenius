@@ -58,14 +58,19 @@ struct StatCard: Hashable, Identifiable {
 
     var title: String { Self.fixedTitles[self] ?? metric?.title ?? id }
 
-    /// A `SummaryTile`, which flows in a grid; the rest span the full width.
-    var isTile: Bool { metric != nil || Self.pmcTiles.contains(self) }
+    /// The grid columns a card takes: one for a `SummaryTile`, two for Weekly Target
+    /// on wide layouts (filling a line's gap beside the tiles); nil stands alone at
+    /// full width.
+    func span(wide: Bool) -> Int? {
+        if metric != nil || Self.pmcTiles.contains(self) { return 1 }
+        return wide && self == .weeklyTarget ? 2 : nil
+    }
 
-    /// The cards as laid out: consecutive tiles share one grid, a full-width card
-    /// stands alone.
-    static func rows(_ cards: [StatCard]) -> [[StatCard]] {
+    /// The cards as laid out: consecutive grid cards share one grid, a full-width
+    /// card stands alone.
+    static func rows(_ cards: [StatCard], wide: Bool) -> [[StatCard]] {
         cards.reduce(into: []) { rows, card in
-            if card.isTile, rows.last?.last?.isTile == true {
+            if card.span(wide: wide) != nil, rows.last?.last?.span(wide: wide) != nil {
                 rows[rows.count - 1].append(card)
             } else {
                 rows.append([card])
