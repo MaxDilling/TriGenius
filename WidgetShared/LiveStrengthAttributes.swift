@@ -33,7 +33,5 @@ nonisolated struct LiveStrengthAttributes: ActivityAttributes {
         /// Set while paused: the clock stands at `pausedAt − clockStart`.
         var pausedAt: Date?
     }
-
-    var planName: String
 }
 #endif

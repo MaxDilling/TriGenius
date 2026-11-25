@@ -32,7 +32,7 @@ enum LiveStrengthActivity {
         if isRunning {
             Task { await Activity<LiveStrengthAttributes>.activities.first?.update(content) }
         } else if ActivityAuthorizationInfo().areActivitiesEnabled {
-            _ = try? Activity.request(attributes: LiveStrengthAttributes(planName: session.planName), content: content)
+            _ = try? Activity.request(attributes: LiveStrengthAttributes(), content: content)
         }
     }
 

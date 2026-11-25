@@ -14,13 +14,10 @@ struct LiveStrengthLiveActivity: Widget {
         ActivityConfiguration(for: LiveStrengthAttributes.self) { context in
             let status = LiveStrengthStatus(state: context.state, isStale: context.isStale)
             VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Label(context.attributes.planName, systemImage: "dumbbell.fill")
-                    Spacer()
-                    status.clock
-                }
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                status.clock
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                 HStack {
                     status.summary
                     Spacer(minLength: 8)
