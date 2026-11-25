@@ -15,6 +15,7 @@ struct PlannedWorkoutDetailView: View {
     @State private var live: WorkoutRecord?
     @State private var editor: WorkoutEditorContext?
     @State private var confirmDelete = false
+    @State private var templateSave: [String]?
     /// Holds the display awake while the athlete works through a strength plan
     /// on Apple Watch (the phone is the only place the sets are listed).
     @State private var keepAwake = false
@@ -78,7 +79,9 @@ struct PlannedWorkoutDetailView: View {
         #endif
         .toolbar {
             if family == .strength, !workout.isCompleted, !exerciseBlocks.isEmpty {
+                // Its own prominent glass, not on the toolbar's shared one too.
                 ToolbarItem(placement: .primaryAction) { startButton }
+                    .sharedBackgroundVisibility(.hidden)
             }
             if !workout.isReadOnly {
                 ToolbarItem(placement: .primaryAction) {
@@ -86,10 +89,17 @@ struct PlannedWorkoutDetailView: View {
                         Label("Edit", systemImage: "pencil")
                     }
                 }
+            }
+            if workout.source != TrainingDataStore.raceSource {
                 ToolbarItem {
                     Menu {
-                        Button(role: .destructive) { confirmDelete = true } label: {
-                            Label("Delete workout", systemImage: "trash")
+                        Button("Save as Template", systemImage: "square.stack") {
+                            templateSave = TrainingDataStore.shared.saveTemplate(WorkoutPayloadBuilder.workoutData(from: workout))
+                        }
+                        if !workout.isReadOnly {
+                            Button(role: .destructive) { confirmDelete = true } label: {
+                                Label("Delete workout", systemImage: "trash")
+                            }
                         }
                     } label: {
                         Label("More", systemImage: "ellipsis.circle")
@@ -98,6 +108,7 @@ struct PlannedWorkoutDetailView: View {
             }
         }
         .sheet(item: $editor) { WorkoutEditorSheet(context: $0) }
+        .templateSaveAlert($templateSave)
         .alert("Delete this planned workout?", isPresented: $confirmDelete) {
             Button("Delete", role: .destructive) {
                 Task {

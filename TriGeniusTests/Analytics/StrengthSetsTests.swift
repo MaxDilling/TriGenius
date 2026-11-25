@@ -53,6 +53,41 @@ private func compare(_ planned: [[String: Any]], _ performed: [[String: Any]]) -
     #expect(steps.indices.map { StrengthSets.restAfter(steps, at: $0) } == [.lapButton, .timed(seconds: 90), nil])
 }
 
+@Test func everyExerciseStepCountsOnceACircuitsMembersIncluded() {
+    let circuit: [String: Any] = ["type": "repeat", "repeat_count": 3,
+                                  "repeat_steps": [plannedExercise("push_up", reps: [12]),
+                                                   plannedExercise("russian_twist", reps: [20])]]
+    #expect(StrengthSets.exerciseCount([plannedExercise("back_squat", reps: [5]), circuit,
+                                        plannedExercise("back_squat", reps: [5])]) == 4)
+}
+
+@Test func aRestStepFoldsIntoTheExerciseBeforeIt() {
+    let rest: [String: Any] = ["type": "rest", "end_condition": "fixed_rest", "duration_seconds": 120]
+    let lap: [String: Any] = ["type": "rest", "end_condition": "lap_button"]
+    var timed = plannedExercise("push_up", reps: [10])
+    timed["rest_after"] = "timed"
+    timed["rest_after_seconds"] = 60
+    let folded = StrengthSets.foldingRests([rest, plannedExercise("back_squat", reps: [5]), rest, timed, lap])
+    #expect(folded.map { $0["type"] as? String } == ["rest", "exercise", "exercise"])
+    #expect(StrengthSets.restAfter(folded, at: 1) == .timed(seconds: 120))
+    #expect(StrengthSets.restAfter(folded, at: 2) == .lapButton)
+}
+
+@Test func aRecordedSessionBecomesOneStepPerExerciseRun() {
+    let rows = StrengthSets.rows(performed: [
+        ["exercise_id": "back_squat", "sets": [["reps": 5, "weight_kg": 60, "rest_seconds": 97],
+                                               ["reps": 4, "weight_kg": 60]]],
+        ["exercise_name": "Nordic curl", "sets": [["duration_seconds": 31.6]]],
+    ])
+    let steps = StrengthSets.plannedSteps(performed: rows)
+    #expect(steps.map { $0["exercise_id"] as? String } == ["back_squat", nil])
+    #expect(steps[1]["exercise_name"] as? String == "Nordic curl")
+    #expect(steps[1]["is_time_based"] as? Bool == true)
+    #expect(StrengthSets.plannedSets(steps).map { $0.reps } == [5, 4, nil])
+    #expect(StrengthSets.plannedSets(steps).map { $0.seconds } == [nil, nil, 32])
+    #expect(StrengthSets.plannedSets(steps).map { $0.restSeconds } == [90, nil, nil])
+}
+
 @Test func circuitMembersFollowEachOtherDirectly() {
     let circuit: [String: Any] = ["type": "repeat", "repeat_count": 3,
                                   "repeat_steps": [plannedExercise("push_up", reps: [12]),

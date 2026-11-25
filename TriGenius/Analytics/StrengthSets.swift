@@ -169,6 +169,65 @@ nonisolated enum StrengthSets {
         }
     }
 
+    /// The exercise steps of a plan, a circuit's counted once per member rather
+    /// than per round.
+    static func exerciseCount(_ steps: [[String: Any]]) -> Int {
+        steps.reduce(0) { total, step in
+            if let children = step["repeat_steps"] as? [[String: Any]] { return total + exerciseCount(children) }
+            return total + (step["type"] as? String == "exercise" ? 1 : 0)
+        }
+    }
+
+    /// A plan's top-level rest steps folded into the exercise before them as its
+    /// `rest_after` — a strength pause belongs to the exercise, not its own step.
+    /// A rest that follows no exercise stays a step.
+    static func foldingRests(_ steps: [[String: Any]]) -> [[String: Any]] {
+        var out: [[String: Any]] = []
+        for step in steps {
+            guard step["type"] as? String == "rest", let last = out.indices.last,
+                  out[last]["type"] as? String == "exercise" else { out.append(step); continue }
+            if Coerce.token(step["end_condition"] as? String) == "lap_button" {
+                out[last]["rest_after"] = nil
+                out[last]["rest_after_seconds"] = nil
+            } else if let seconds = Coerce.double(step["duration_seconds"]) {
+                out[last]["rest_after"] = "timed"
+                out[last]["rest_after_seconds"] = seconds
+            } else {
+                out.append(step)
+            }
+        }
+        return out
+    }
+
+    /// A recorded session as plan steps: one exercise step per run of sets of
+    /// one exercise, each set as recorded, its rest rounded to 15 s. The pause
+    /// after an exercise is left to its default (until lap).
+    static func plannedSteps(performed rows: [SetRow]) -> [[String: Any]] {
+        var out: [[String: Any]] = []
+        var previous: SetRow?
+        for row in rows {
+            var set: [String: Any] = [:]
+            if let reps = row.reps { set["reps"] = reps } else if let seconds = row.seconds { set["duration_seconds"] = seconds.rounded() }
+            if let kg = row.weightKg { set["weight_kg"] = kg }
+            if let rest = row.restSeconds { set["rest_seconds"] = (rest / 15).rounded() * 15 }
+            if let previous, previous.sameExercise(as: row) {
+                out[out.count - 1]["sets"] = (out[out.count - 1]["sets"] as? [[String: Any]] ?? []) + [set]
+            } else {
+                var step: [String: Any] = ["type": "exercise", "sets": [set],
+                                           "is_time_based": row.reps == nil && row.seconds != nil]
+                if let id = row.exerciseId ?? row.exerciseName.flatMap({ ExerciseLibrary.find(garminName: $0)?.id }) {
+                    step["exercise_id"] = id
+                } else {
+                    step["exercise_name"] = row.exerciseName ?? row.title
+                    if let category = row.exerciseCategory { step["exercise_category"] = category }
+                }
+                out.append(step)
+            }
+            previous = row
+        }
+        return out
+    }
+
     /// A recorded session's `strength.exercises` as rows.
     static func rows(performed entries: [[String: Any]]) -> [SetRow] {
         entries.flatMap { entry in

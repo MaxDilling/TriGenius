@@ -172,29 +172,63 @@ struct LiveQueuePage: View {
     }
 }
 
-/// Picks an exercise and its sets in the workout editor's step editor and adds it
-/// to the session — after everything still to do, or `next`.
+/// Picks exercises and adds them, with their sets, to the session — after
+/// everything still to do, or `next`. Opens on the picker; each picked exercise
+/// is then a row of the workout editor's, adjustable before adding.
 struct LiveAddExerciseSheet: View {
     let next: Bool
 
     @Environment(\.dismiss) private var dismiss
-    @State private var step = StepDraft.exercise()
+    @State private var steps: [StepDraft] = []
+    @State private var picking = true
+    @State private var replacing: UUID?
+    @State private var expanded: UUID?
 
     var body: some View {
         NavigationStack {
-            StepEditorView(step: $step, sport: .strength, allowRepeat: false, picking: true)
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button(role: .close) { dismiss() }
-                    }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Add", role: .confirm) {
-                            let sets = StrengthSession.units(planned: [step.dict(swim: false)]).first?.sets ?? []
-                            LiveStrengthController.shared.update { s, _ in s.add(sets: sets, next: next) }
-                            dismiss()
-                        }
+            Form {
+                ForEach($steps) { $step in
+                    ExerciseEditorRow(step: $step,
+                                      isExpanded: Binding(get: { expanded == step.id }, set: { expanded = $0 ? step.id : nil }),
+                                      pausesAfter: true) {
+                        replacing = step.id
+                        picking = true
                     }
                 }
+                .onDelete { steps.remove(atOffsets: $0) }
+            }
+            .formStyle(.grouped)
+            .navigationTitle("Add Exercises")
+            .toolbarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(role: .close) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add", role: .confirm) {
+                        let units = StrengthSession.units(planned: steps.map { $0.dict(swim: false) })
+                        // Each `next` insert lands before the last, so they go in reversed.
+                        LiveStrengthController.shared.update { s, _ in
+                            for unit in next ? units.reversed() : units { s.add(sets: unit.sets, next: next) }
+                        }
+                        dismiss()
+                    }
+                    .disabled(steps.isEmpty)
+                }
+            }
+            .exercisePicker(isPresented: $picking, multiple: replacing == nil) { choices in
+                if let replacing, let choice = choices.first {
+                    steps.update(id: replacing) { $0.choose(choice) }
+                } else {
+                    steps += choices.map(StepDraft.exercise)
+                    if steps.count == 1 { expanded = steps.first?.id }
+                }
+            }
+            .onChange(of: picking) {
+                guard !picking else { return }
+                replacing = nil
+                if steps.isEmpty { dismiss() }
+            }
         }
         #if os(macOS)
         .frame(minWidth: 420, minHeight: 560)

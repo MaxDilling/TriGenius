@@ -208,7 +208,8 @@ struct RootTabView: View {
         .tabViewStyle(.sidebarAdaptable)
         .background { MapWarmUp() }
         // A live strength workout runs over every tab: full screen, or collapsed
-        // into the mini bar above the tab bar (a sheet on the Mac, which has none).
+        // into the mini bar above the tab bar. The Mac, which has no tab bar,
+        // shows it as a sheet that collapses into a floating mini bar.
         #if os(iOS)
         .tabViewBottomAccessory(isEnabled: live.session != nil && !live.isPresented) {
             if let session = live.session {
@@ -218,6 +219,14 @@ struct RootTabView: View {
         .fullScreenCover(isPresented: $live.isPresented) { LiveStrengthView() }
         #else
         .sheet(isPresented: $live.isPresented) { LiveStrengthView().frame(minWidth: 460, minHeight: 720) }
+        .overlay(alignment: .bottomTrailing) {
+            if let session = live.session, !live.isPresented {
+                LiveStrengthMiniBar(session: session) { live.isPresented = true }
+                    .frame(width: 320, height: Theme.Chrome.pillHeight + Theme.Spacing.s)
+                    .glassSurface(cornerRadius: (Theme.Chrome.pillHeight + Theme.Spacing.s) / 2)
+                    .padding(Theme.Spacing.l)
+            }
+        }
         #endif
         .sensoryFeedback(.impact(weight: .heavy), trigger: live.cue)
         .environment(router)

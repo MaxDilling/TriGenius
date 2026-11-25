@@ -852,7 +852,7 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
             "items": [
                 "type": "object",
                 "properties": [
-                    "type": ["type": "string", "enum": ["warmup", "interval", "main", "recovery", "rest", "cooldown", "repeat", "exercise"], "description": "Step type. \"exercise\" is strength only and takes exercise_id + sets instead of an extent/target; in a strength session a \"rest\" step with duration_seconds is a pause between two exercises."],
+                    "type": ["type": "string", "enum": ["warmup", "interval", "main", "recovery", "rest", "cooldown", "repeat", "exercise"], "description": "Step type. \"exercise\" is strength only and takes exercise_id + sets instead of an extent/target; in a strength session the pause after an exercise is its rest_after, never a \"rest\" step."],
                     "duration_seconds": ["type": "integer", "description": "Step duration in seconds."],
                     "distance_meters": ["type": "number", "description": "Step distance in meters."],
                     "end_condition": ["type": "string", "enum": ["time", "distance", "lap_button", "fixed_rest"], "description": "How the step ends."],

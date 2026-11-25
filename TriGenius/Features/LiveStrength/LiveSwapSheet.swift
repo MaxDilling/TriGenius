@@ -3,8 +3,9 @@ import SwiftUI
 // MARK: - Swap an exercise for today
 //
 // Replaces every set still to do of one exercise in one unit with another
-// library exercise — what the athlete's `StrengthProfile` allows first — or a custom name
-// when the search finds nothing fitting — for this session only. Candidates share
+// library exercise — what the athlete's `StrengthProfile` allows first — or a
+// custom name typed into the search, for this session only; rows look like the
+// exercise picker's (`ExerciseChoiceRow`). Candidates share
 // the set's kind (reps or a hold, a stretch or not), so the prescription carries
 // over unchanged; the weight starts from what the athlete lifted or planned for
 // the new exercise; reps (or a hold's time) and weight can be adjusted before
@@ -79,27 +80,25 @@ struct LiveSwapSheet: View {
                 Section { header }
                     .listRowSeparator(.hidden)
                     .listSectionSeparator(.hidden)
+                if !trimmedQuery.isEmpty,
+                   !ExerciseLibrary.all.contains(where: { $0.name.caseInsensitiveCompare(trimmedQuery) == .orderedSame }) {
+                    Section { customRow(trimmedQuery) }
+                        .listSectionSeparator(.hidden)
+                }
                 ForEach(sections, id: \.rank) { section in
                     Section(Self.sectionTitles[section.rank] ?? "") {
                         ForEach(section.exercises) { row($0) }
                     }
                     .listSectionSeparator(.hidden)
                 }
-                if !trimmedQuery.isEmpty,
-                   !sections.contains(where: { $0.exercises.contains { $0.name.caseInsensitiveCompare(trimmedQuery) == .orderedSame } }) {
-                    Section("Not in the library") { customRow(trimmedQuery) }
-                        .listSectionSeparator(.hidden)
-                } else if sections.isEmpty {
-                    Text("No exercise matches.").foregroundStyle(.secondary)
-                }
             }
             .listStyle(.plain)
             .onChange(of: selection?.id) {
                 weightKg = selection.flatMap { TrainingDataStore.shared.startingWeightKg(for: $0) }
             }
-            .searchable(text: $query, prompt: "Search exercises")
+            .exerciseSearch($query, prompt: "Search exercises")
             .navigationTitle("Swap exercise")
-            .toolbarTitleDisplayMode(.inline)
+            .pickerTitleDisplay()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(role: .close) { dismiss() }
@@ -114,27 +113,32 @@ struct LiveSwapSheet: View {
         #endif
     }
 
+    /// The exercise, what carries over, then reps (or a hold's time) and load
+    /// side by side, then the filters — kept short, so the list starts high.
     @ViewBuilder
     private var header: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-            Text(target.set.title).font(.title2.bold())
-            if let groups = replaced.map(groupsLine) {
-                Text(groups).font(.subheadline).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 2) {
+            Text(target.set.title).font(.headline)
+            Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+        }
+        HStack(spacing: Theme.Spacing.s) {
+            if isHold {
+                PrescriptionField("Time") {
+                    TextField("", text: Binding(get: { MMSS.format(Int((seconds ?? remaining.first?.seconds ?? 0).rounded())) },
+                                                set: { if let s = MMSS.parse($0), s > 0 { seconds = Double(s) } }))
+                }
+            } else {
+                PrescriptionField("Reps") {
+                    TextField("", value: Binding(get: { reps ?? remaining.first?.reps ?? 0 }, set: { reps = min(max($0, 1), 100) }),
+                              format: .number)
+                        .numberPad()
+                }
             }
-        }
-        Text(carriesOver).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
-        if isHold {
-            let shown = seconds ?? remaining.first?.seconds ?? 0
-            Stepper("Time: \(ExerciseSetsCard.time(shown))",
-                    value: Binding(get: { shown }, set: { seconds = $0 }), in: 5...600, step: 5)
-        } else {
-            let shown = reps ?? remaining.first?.reps ?? 0
-            Stepper("Reps: \(shown)", value: Binding(get: { shown }, set: { reps = $0 }), in: 1...100)
-        }
-        Stepper("Load: \(LiveFormat.load(weightKg))",
-                value: Binding(get: { weightKg ?? 0 }, set: { weightKg = $0 > 0 ? $0 : nil }),
-                in: 0...500, step: 2.5)
+            PrescriptionField("kg") {
+                TextField("", value: $weightKg, format: .number, prompt: Text("BW")).decimalPad()
+            }
             .disabled(selection == nil && customName == nil)
+        }
         ScrollView(.horizontal) {
             HStack(spacing: Theme.Spacing.s) {
                 chip("Same muscles", isOn: $sameMuscles).disabled(replaced == nil)
@@ -148,15 +152,6 @@ struct LiveSwapSheet: View {
     /// One equipment filter at a time: turning one on replaces the other.
     private func equipmentFilter(_ kind: Exercise.Equipment) -> Binding<Bool> {
         Binding(get: { equipment == kind }, set: { equipment = $0 ? kind : nil })
-    }
-
-    /// "Primary: calves · Secondary: shins".
-    private func groupsLine(_ exercise: Exercise) -> String {
-        var parts = ["Primary: " + exercise.primaryGroups.map { $0.label.lowercased() }.joined(separator: ", ")]
-        if !exercise.secondaryGroups.isEmpty {
-            parts.append("Secondary: " + exercise.secondaryGroups.map { $0.label.lowercased() }.joined(separator: ", "))
-        }
-        return parts.joined(separator: " · ")
     }
 
     private func chip(_ title: String, isOn: Binding<Bool>) -> some View {
@@ -174,43 +169,28 @@ struct LiveSwapSheet: View {
     }
 
     private func row(_ exercise: Exercise) -> some View {
-        choiceRow(exercise.name,
-                  detail: (exercise.primaryGroups.map(\.label) + [exercise.equipment.label.lowercased()]).joined(separator: " · "),
-                  selected: selection?.id == exercise.id) {
+        ExerciseChoiceRow(choice: .library(exercise),
+                          detail: (exercise.primaryGroups.map(\.label) + [exercise.equipment.label.lowercased()]).joined(separator: " · "),
+                          selected: selection?.id == exercise.id) {
             selection = exercise
             customName = nil
         }
     }
 
     private func customRow(_ name: String) -> some View {
-        choiceRow("Use “\(name)”", detail: "Custom exercise · no muscle groups", selected: customName == name) {
+        ExerciseChoiceRow(choice: .custom(name), detail: "Custom exercise · no muscle groups", selected: customName == name) {
             selection = nil
             customName = name
             weightKg = nil
         }
     }
 
-    private func choiceRow(_ title: String, detail: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: Theme.Spacing.m) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(.headline)
-                    Text(detail).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                }
-                Spacer(minLength: 0)
-                Image(systemName: "checkmark")
-                    .foregroundStyle(Color.accentColor)
-                    .opacity(selected ? 1 : 0)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
-    /// "Carries over: 3 sets · rest 0:45" — reps and load have their own rows.
-    private var carriesOver: String {
-        "Carries over: " + (["\(remaining.count) set\(remaining.count == 1 ? "" : "s")"] + [LiveFormat.rest(remaining.first?.rest)].compactMap { $0 })
-            .joined(separator: " · ")
+    /// "Hamstrings, low back · 3 sets · rest 0:45" — its primary groups, then
+    /// what carries over to the replacement.
+    private var subtitle: String {
+        let groups = replaced.map { $0.primaryGroups.map(\.label).joined(separator: ", ") }
+        let sets = "\(remaining.count) set\(remaining.count == 1 ? "" : "s")"
+        return ([groups, sets, LiveFormat.rest(remaining.first?.rest)].compactMap { $0 }).joined(separator: " · ")
     }
 
     private func swap() {

@@ -13,7 +13,8 @@ enum CalendarLayout {
 // a horizontally paged grid (system events as the three color-coded availability bars
 // under each day); the week is a continuously-scrollable hour-grid (`WeekTimeGridView`).
 // Tap a day to drill into the week, tap an event for its detail, and drag a planned
-// workout onto another day to reschedule it — updating the local store and Garmin.
+// workout onto another day to reschedule it — updating the local store and Garmin —
+// or a library template onto a day to plan it.
 
 /// A tapped calendar item, presented via programmatic navigation. Programmatic nav
 /// (rather than wrapping each chip in a `NavigationLink`) keeps the chips' `.draggable`
@@ -38,6 +39,7 @@ struct CalendarView: View {
     @State private var viewModel = CalendarViewModel()
     @State private var detail: CalendarDetailItem?
     @State private var editor: WorkoutEditorContext?
+    @State private var showingLibrary = false
 
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var hSize
@@ -51,7 +53,8 @@ struct CalendarView: View {
     var body: some View {
         VStack(spacing: Theme.Spacing.s) {
             CalendarNavBar(viewModel: viewModel, visibleCount: visibleCount,
-                           onAdd: { editor = .create(date: viewModel.firstVisibleDay) })
+                           onAdd: { editor = .create(date: viewModel.firstVisibleDay) },
+                           onLibrary: { showingLibrary = true })
                 .padding(.horizontal)
                 .padding(.top, Theme.Spacing.s)
 
@@ -74,6 +77,10 @@ struct CalendarView: View {
             }
         }
         .sheet(item: $editor) { WorkoutEditorSheet(context: $0) }
+        .inspector(isPresented: $showingLibrary) {
+            TemplateLibraryView(date: viewModel.firstVisibleDay, isPresented: $showingLibrary)
+                .inspectorColumnWidth(min: 260, ideal: 300, max: 400)
+        }
         .onAppear { viewModel.load() }
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
             viewModel.load()

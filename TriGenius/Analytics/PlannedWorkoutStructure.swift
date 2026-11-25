@@ -447,13 +447,7 @@ extension WorkoutRecord {
     /// rather than per round. 0 for an unstructured session (and for every
     /// endurance plan, whose structure is described by `structure` instead).
     @MainActor var plannedExerciseCount: Int {
-        func count(_ steps: [[String: Any]]) -> Int {
-            steps.reduce(0) { total, step in
-                if let children = step["repeat_steps"] as? [[String: Any]] { return total + count(children) }
-                return total + ((step["type"] as? String) == "exercise" ? 1 : 0)
-            }
-        }
-        return count(WorkoutPayloadBuilder.parseSteps(stepsJSON) ?? [])
+        StrengthSets.exerciseCount(WorkoutPayloadBuilder.parseSteps(stepsJSON) ?? [])
     }
 
     /// Session character, derived from the planned TSS + duration.

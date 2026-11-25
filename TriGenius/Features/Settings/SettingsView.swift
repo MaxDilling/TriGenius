@@ -627,7 +627,7 @@ struct SettingsView: View {
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("Removes all synced workouts, performance metrics and scheduled workouts (locally and from your iCloud sync), resets your athlete profile, and signs out of Garmin. This cannot be undone.")
+                    Text("Removes all synced workouts, performance metrics, scheduled workouts and your workout library (locally and from your iCloud sync), resets your athlete profile, and signs out of Garmin. This cannot be undone.")
                 }
             } header: {
                 Text("Privacy & Data")

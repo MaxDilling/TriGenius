@@ -1181,12 +1181,12 @@ final class TrainingDataStore {
     }
 
     /// Every `@Model` the store owns: the workout/metric time series, the ATP
-    /// inputs, and the coach-memory rows.
+    /// inputs, the coach-memory rows and the workout library.
     static let schema = Schema([
         WorkoutRecord.self, PerformanceMetricRecord.self,
         ATPConfig.self, ATPEvent.self, ATPWeekOverride.self,
         ProfileRecord.self, WeeklyStructureRecord.self, PreferencesRecord.self,
-        SportProgressRecord.self, FeedbackRecord.self,
+        SportProgressRecord.self, FeedbackRecord.self, WorkoutTemplate.self,
     ])
 
     /// Coalesces change notifications: every mutating method calls this after its
@@ -1262,6 +1262,7 @@ final class TrainingDataStore {
         dedupe(PreferencesRecord.self) { $0.id }
         dedupe(SportProgressRecord.self) { $0.sport }
         dedupe(FeedbackRecord.self) { $0.id }
+        dedupe(WorkoutTemplate.self) { $0.id }
         guard context.hasChanges else { return }
         try? context.save()
         markChanged()
@@ -1357,11 +1358,12 @@ final class TrainingDataStore {
         markChanged()
     }
 
-    /// Erase the training time series and the whole ATP for the in-app "Delete all
-    /// my data" (Guideline 5.1.1-v). Coach-memory rows are reset separately via
-    /// `CoachMemory.reset()`; the CloudKit mirror deletes in step.
+    /// Erase the training time series, the workout library and the whole ATP for
+    /// the in-app "Delete all my data" (Guideline 5.1.1-v). Coach-memory rows are
+    /// reset separately via `CoachMemory.reset()`; the CloudKit mirror deletes in step.
     func deleteTrainingAndATP() {
         try? context.delete(model: WorkoutRecord.self)
+        try? context.delete(model: WorkoutTemplate.self)
         try? context.delete(model: PerformanceMetricRecord.self)
         try? context.delete(model: ATPConfig.self)
         try? context.delete(model: ATPEvent.self)
@@ -1908,6 +1910,30 @@ final class TrainingDataStore {
 
     func lastLiftedSets(for exercise: Exercise) -> [StrengthSets.SetRow] {
         lastLiftedSets(key: StrengthSets.SetRow(exerciseId: exercise.id, exerciseName: exercise.name).garminKey ?? exercise.name)
+    }
+
+    /// The library exercises of the athlete's strength sessions from 90 days back
+    /// to two weeks ahead, done or planned, the latest session's first.
+    func recentExercises(limit: Int = 8) -> [Exercise] {
+        let from = Calendar.current.date(byAdding: .day, value: -90, to: .now) ?? .now
+        let to = Calendar.current.date(byAdding: .day, value: 14, to: .now) ?? .now
+        let records = (try? context.fetch(FetchDescriptor<WorkoutRecord>(
+            predicate: #Predicate { $0.date >= from && $0.date <= to },
+            sortBy: [SortDescriptor(\.date, order: .reverse)]))) ?? []
+        var out: [Exercise] = []
+        for record in records where record.family == .strength {
+            let performed = (Self.jsonObject(record.detailsJSON)?["strength"] as? [String: Any])?["exercises"] as? [[String: Any]]
+            let rows = StrengthSets.rows(performed: performed ?? [])
+                + StrengthSets.plannedSets(WorkoutPayloadBuilder.parseSteps(record.stepsJSON) ?? [])
+            for row in rows {
+                guard let exercise = row.exerciseId.flatMap(ExerciseLibrary.find(id:))
+                        ?? row.exerciseName.flatMap(ExerciseLibrary.find(garminName:)),
+                      !out.contains(exercise) else { continue }
+                out.append(exercise)
+                if out.count == limit { return out }
+            }
+        }
+        return out
     }
 
     /// Depth-first through circuits: the first set of the named exercise that

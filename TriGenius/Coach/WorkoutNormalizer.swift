@@ -112,8 +112,9 @@ nonisolated enum WorkoutNormalizer {
         let family = SportFamily(sportKey: sport)
 
         // --- Top-level defaults ---
+        if let steps = data["steps"] as? [[String: Any]] { data["steps"] = StrengthSets.foldingRests(steps) }
         if (data["name"] as? String)?.isEmpty ?? true {
-            let fallback = defaultName(sport: sport, minutes: Coerce.int(data["duration_minutes"]))
+            let fallback = defaultName(data)
             data["name"] = fallback
             notes.append("Name: defaulted to \"\(fallback)\".")
         }
@@ -400,9 +401,27 @@ nonisolated enum WorkoutNormalizer {
         return String(format: "%d:%02d", total / 60, total % 60)
     }
 
-    private static func defaultName(sport: String, minutes: Int?) -> String {
-        let label = sport.isEmpty ? "Workout" : sport.prefix(1).uppercased() + sport.dropFirst()
-        if let minutes { return "\(label) \(minutes) min" }
-        return String(label)
+    /// The name an unnamed workout gets: a strength session by the muscle groups
+    /// its exercises work most ("Strength · Quads & Glutes"), else sport and
+    /// duration ("Running 45 min").
+    static func defaultName(_ data: [String: Any]) -> String {
+        let sport = token(data["sport"]) ?? "other"
+        let label = sport.prefix(1).uppercased() + sport.dropFirst()
+        if let focus = focusGroups(data["steps"] as? [[String: Any]] ?? []) { return "\(label) · \(focus)" }
+        if let minutes = Coerce.int(data["duration_minutes"]) { return "\(label) \(minutes) min" }
+        return label
+    }
+
+    /// The (up to) two tissue groups most exercises work as a primary mover.
+    private static func focusGroups(_ steps: [[String: Any]]) -> String? {
+        func exercises(_ steps: [[String: Any]]) -> [Exercise] {
+            steps.flatMap { step in
+                exercises(step["repeat_steps"] as? [[String: Any]] ?? [])
+                    + [(step["exercise_id"] as? String).flatMap(ExerciseLibrary.find(id:))].compactMap { $0 }
+            }
+        }
+        let counts = Dictionary(exercises(steps).flatMap(\.primaryGroups).map { ($0, 1) }, uniquingKeysWith: +)
+        let top = counts.sorted { ($1.value, $0.key.label) < ($0.value, $1.key.label) }.prefix(2).map(\.key.label)
+        return top.isEmpty ? nil : top.joined(separator: " & ")
     }
 }

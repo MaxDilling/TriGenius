@@ -288,9 +288,15 @@ final class CalendarViewModel {
     /// local start time to that segment. The day move goes through the shared
     /// `DataSyncCoordinator.movePlan` (local store first, then the active write
     /// target); the start time is local-only. The store's `trainingDataDidChange`
-    /// triggers the view reload.
+    /// triggers the view reload. A dropped library template (`WorkoutTemplate.dragID`)
+    /// is planned on `newDay` instead, through the shared `addPlan`.
     func move(workoutID: String, to newDay: Date, segment: TimeOfDaySegment? = nil) {
         let targetDay = cal.startOfDay(for: newDay)
+        if let template = TrainingDataStore.shared.template(dragID: workoutID) {
+            let data = template.workoutData
+            Task { _ = await DataSyncCoordinator.shared.addPlan(workoutData: data, date: targetDay, startMinute: segment?.anchorMinute) }
+            return
+        }
         guard let record = scheduledRecord(id: workoutID), !record.isReadOnly else { return }
         let dayChanged = cal.startOfDay(for: record.date) != targetDay
         let minuteChanged = segment != nil && record.startMinute != segment?.anchorMinute

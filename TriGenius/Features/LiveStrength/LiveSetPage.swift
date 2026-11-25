@@ -292,6 +292,7 @@ struct LiveSetPage: View {
         }
         .aspectRatio(1, contentMode: .fit)
         .frame(maxWidth: 280, maxHeight: 280)
+        .padding(.top, Theme.Spacing.s)
     }
 
     private var adjustButtons: some View {
@@ -325,6 +326,7 @@ struct LiveSetPage: View {
         }
         .aspectRatio(1, contentMode: .fit)
         .frame(maxWidth: 280, maxHeight: 280)
+        .padding(.top, Theme.Spacing.s)
     }
 
     /// "Up next · Set 3 of 3" over "Bench press · 10 · BW".

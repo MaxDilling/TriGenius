@@ -50,17 +50,8 @@ enum StepKind: String, CaseIterable, Identifiable {
 }
 
 /// A top-level exercise's `rest_after` (`StrengthSets.restAfter`).
-enum RestAfter: String, CaseIterable, Identifiable {
+enum RestAfter: String {
     case lapButton = "lap_button", timed, none
-
-    var id: String { rawValue }
-    var label: String {
-        switch self {
-        case .lapButton: return "Until lap"
-        case .timed: return "Timed"
-        case .none: return "None"
-        }
-    }
 }
 
 enum StepEnd: String, CaseIterable, Identifiable {
@@ -169,37 +160,93 @@ struct StepDraft: Identifiable {
         }
     }
 
-    /// A fresh exercise step, defaulted to the first library entry the athlete's
-    /// `StrengthProfile` allows — or "Custom exercise" when none is available.
-    static func exercise() -> StepDraft {
+    /// A fresh exercise step for `choice`, prescribed as the athlete last did it
+    /// (sets, reps or hold time, weight), else 3 × 10 at bodyweight. Its pause
+    /// after waits for the lap button in a gym — the next station's wait can't
+    /// be known — and runs a minute elsewhere.
+    @MainActor
+    static func exercise(_ choice: ExerciseChoice) -> StepDraft {
         var step = StepDraft()
         step.isExercise = true
-        let profile = StrengthProfile.stored
-        if let first = ExerciseLibrary.all.first(where: profile.allows) {
-            step.exerciseId = first.id
-            step.exerciseName = first.name
-            step.exerciseIsTimeBased = first.isTimeBased
-        } else {
-            step.exerciseName = "Custom exercise"
+        if let place = StrengthProfile.stored.place, place != .gym {
+            step.restAfter = .timed
+            step.restAfterSeconds = 60
+        }
+        step.choose(choice)
+        if case .library(let exercise) = choice, case let last = TrainingDataStore.shared.lastLiftedSets(for: exercise),
+           let first = last.first {
+            step.exerciseSets = min(last.count, 20)
+            if let reps = first.reps { step.exerciseReps = reps }
+            if exercise.isTimeBased, let seconds = first.seconds { step.exerciseSetSeconds = Int(seconds.rounded()) }
         }
         return step
     }
 
-    /// A fresh circuit/superset: a repeat block whose children are exercises
-    /// rather than the endurance interval/recovery pair `StepDraft(isRepeat:
-    /// true)` defaults to.
-    static func exerciseCircuit() -> StepDraft {
-        var step = StepDraft(isRepeat: true)
-        step.children = [StepDraft.exercise(), StepDraft.exercise()]
-        return step
+    /// Point this exercise step at `choice`; a library exercise starts from the
+    /// weight the athlete last lifted or planned for it (nil stays bodyweight
+    /// rather than inventing a load).
+    @MainActor
+    mutating func choose(_ choice: ExerciseChoice) {
+        switch choice {
+        case .library(let exercise):
+            exerciseId = exercise.id
+            exerciseName = exercise.name
+            exerciseIsTimeBased = exercise.isTimeBased
+            exerciseWeightKg = TrainingDataStore.shared.startingWeightKg(for: exercise)
+        case .custom(let name):
+            exerciseId = nil
+            exerciseName = name
+            exerciseIsTimeBased = false
+        }
     }
 
-    /// A pause between exercises: a plain time-ended rest leaf, the same step an
-    /// endurance plan uses.
-    static func exerciseRest() -> StepDraft {
-        var step = StepDraft(kind: .rest)
-        step.durationSeconds = 120
-        return step
+    /// Fit this exercise into a circuit: one set a round, straight on to the
+    /// next member.
+    mutating func joinCircuit() {
+        exerciseSets = 1
+        restAfter = .lapButton
+    }
+
+    /// The rest between this exercise's sets.
+    var setRest: StrengthSets.Rest? {
+        get { exerciseRestUntilLap ? .lapButton : .timed(seconds: Double(exerciseRestSeconds)) }
+        set {
+            exerciseRestUntilLap = newValue == .lapButton
+            if case .timed(let seconds) = newValue { exerciseRestSeconds = Int(seconds) }
+        }
+    }
+
+    /// The pause after this exercise; nil runs straight into the next one.
+    var pauseAfter: StrengthSets.Rest? {
+        get {
+            switch restAfter {
+            case .lapButton: return .lapButton
+            case .timed: return .timed(seconds: Double(restAfterSeconds))
+            case .none: return nil
+            }
+        }
+        set {
+            switch newValue {
+            case .lapButton: restAfter = .lapButton
+            case .timed(let seconds): restAfter = .timed; restAfterSeconds = Int(seconds)
+            case nil: restAfter = .none
+            }
+        }
+    }
+
+    /// A circuit's rest between rounds — always timed.
+    var roundRest: StrengthSets.Rest? {
+        get { .timed(seconds: Double(restBetweenRoundsSeconds)) }
+        set { if case .timed(let seconds) = newValue { restBetweenRoundsSeconds = Int(seconds) } }
+    }
+
+    /// A rest step's pause (one that follows no exercise, so it stays a step).
+    var restStepPause: StrengthSets.Rest? {
+        get { end == .lapButton ? .lapButton : .timed(seconds: Double(durationSeconds)) }
+        set {
+            end = newValue == .lapButton ? .lapButton : .time
+            if case .timed(let seconds) = newValue { durationSeconds = Int(seconds) }
+        }
     }
 
     /// Parse a compact step dict. An out-of-schema `type` token (e.g. Garmin's
@@ -311,22 +358,29 @@ struct WorkoutDraft {
     var steps: [StepDraft] = []
 
     /// A fresh plan on `date`.
-    init(date: Date) {
+    init(date: Date, sport: EditorSport = .running) {
         self.date = Calendar.current.startOfDay(for: date)
+        self.sport = sport
+    }
+
+    /// Prefill from a `workout_data` dict — a stored plan's or a template's — on
+    /// `date`. A strength rest step folds into the exercise before it.
+    init(workoutData data: [String: Any], date: Date) {
+        name = data["name"] as? String ?? ""
+        sport = EditorSport(sportKey: data["sport"] as? String ?? "")
+        self.date = Calendar.current.startOfDay(for: date)
+        durationMinutes = Coerce.int(data["duration_minutes"]).flatMap { $0 > 0 ? $0 : nil }
+        distanceMeters = Coerce.double(data["distance_meters"]).flatMap { $0 > 0 ? $0 : nil }
+        poolLength = Coerce.int(data["pool_length"]).flatMap { $0 > 0 ? $0 : nil }
+        notes = data["description"] as? String ?? ""
+        steps = StrengthSets.foldingRests(data["steps"] as? [[String: Any]] ?? []).map { StepDraft(dict: $0) }
     }
 
     /// Prefill from a stored plan.
     @MainActor
     init(record: WorkoutRecord) {
-        name = record.name
-        sport = EditorSport(sportKey: record.sport)
-        date = record.date
+        self.init(workoutData: WorkoutPayloadBuilder.workoutData(from: record), date: record.date)
         startMinute = record.startMinute
-        durationMinutes = record.targetDurationMinutes > 0 ? Int(record.targetDurationMinutes.rounded()) : nil
-        distanceMeters = record.targetDistanceMeters > 0 ? record.targetDistanceMeters : nil
-        poolLength = record.poolLengthMeters.flatMap { $0 > 0 ? Int($0.rounded()) : nil }
-        notes = record.notes
-        steps = (WorkoutPayloadBuilder.parseSteps(record.stepsJSON) ?? []).map { StepDraft(dict: $0) }
     }
 
     /// Serialize to the compact `workout_data` dict. The editor is a full-state

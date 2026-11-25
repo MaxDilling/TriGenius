@@ -4,8 +4,8 @@ import SwiftUI
 //
 // The floating glass control layer above the grid, mirroring Apple Calendar. The
 // control row carries the month on the left — a back pill that zooms out in week
-// mode, the screen's big title in month mode — and a right-hand "+" that opens the
-// workout editor. Below it, week mode shows a date strip of the visible week that
+// mode, the screen's big title in month mode — and a right-hand "+" menu: a new
+// workout in the editor, or the workout library. Below it, week mode shows a date strip of the visible week that
 // highlights the selected day and the columns currently on screen and tabs to a
 // day; month mode shows the weekday letters.
 
@@ -13,8 +13,9 @@ struct CalendarNavBar: View {
     @Bindable var viewModel: CalendarViewModel
     /// Day columns visible in the week grid — used to highlight the on-screen range.
     let visibleCount: Int
-    /// Opens the workout editor to create a plan (the "+" control).
+    /// The "+" menu: a new plan in the workout editor, or the workout library.
     let onAdd: () -> Void
+    let onLibrary: () -> Void
 
     var body: some View {
         VStack(spacing: Theme.Spacing.s) {
@@ -77,9 +78,13 @@ struct CalendarNavBar: View {
     }
 
     private var controls: some View {
-        Button(action: onAdd) {
+        Menu {
+            Button("New Workout", systemImage: "plus", action: onAdd)
+            Button("From Library", systemImage: "square.stack", action: onLibrary)
+        } label: {
             Image(systemName: "plus").headerSegment()
         }
+        .menuIndicator(.hidden)
         .buttonStyle(.plain)
         .font(.body.weight(.medium))
         .headerPill()

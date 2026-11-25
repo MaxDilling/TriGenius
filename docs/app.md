@@ -1,6 +1,6 @@
 # App entry, Settings & Siri
 
-Detail doc for `App/`, `Features/Settings/`, `AppIntents/`. Index: `CLAUDE.md` → Components.
+Detail doc for `App/`, `Features/Settings/`, `Features/WorkoutEditor/`, `AppIntents/`. Index: `CLAUDE.md` → Components.
 
 ## `App/TriGeniusApp.swift`
 
@@ -8,12 +8,20 @@ Builds `CoachBrain` once; `applyBackend` re-applies backend + `setSources` + `re
 
 ## Live strength workout (`Features/LiveStrength/`)
 
-A planned strength session worked through in the app, set by set — started from "Start workout" on `PlannedWorkoutDetailView` (only a plan with exercises; one session at a time, the button resumes a running one). `RootTabView` presents it over every tab: a full-screen cover that collapses into a `tabViewBottomAccessory` mini bar on iOS/iPadOS, a sheet on the Mac.
+A planned strength session worked through in the app, set by set — started from "Start workout" on `PlannedWorkoutDetailView` (only a plan with exercises; one session at a time, the button resumes a running one). `RootTabView` presents it over every tab: a full-screen cover that collapses into a `tabViewBottomAccessory` mini bar on iOS/iPadOS; on the Mac a sheet that collapses into the same mini bar, floating on glass in the window's bottom-right corner.
 
 - **`StrengthSession`** (`Analytics/`, pinned by `StrengthSessionTests`) is the pure state: the plan's blocks as units (a circuit unrolled round by round), each set carrying the rest after it; every phase anchored on a `Date`, so a relaunch or a backgrounded app reads exactly. Reordering, "Do now", "Later" (current unit to the end — introduced once by a TipKit tip, `Tips.configure()` in `TriGeniusApp.init`), swapping (to a library or custom exercise), adding (at the end, or next from the rest after an exercise's last set), deleting an upcoming unit and "One more set" change the session's record only, never the plan.
 - **`LiveStrengthController`** owns the one running session: every change goes through `update`, which writes `live_strength.json` (Application Support, device-local — a killed app resumes), re-arms the next deadline (5 s before a rest ends, its end, a hold's end — which logs the hold) as a haptic `cue`, and disables auto-lock while a session runs. On iOS it also mirrors the session into a **Live Activity** (`LiveStrengthActivity` → `WidgetShared/LiveStrengthAttributes`, drawn by `LiveStrengthLiveActivity` in the widget extension): the current or next exercise, the rest or hold counting down and the workout clock, all running from dates on their own, so the app updates it only when the session changes. While the app is suspended nothing updates it and no haptic fires: a rest or hold that runs out leaves the content stale (`staleDate`), which reads as over. There is no notification. The session records sets, not heart rate, so it carries no TL; recording on a watch as well yields two sessions, and the athlete ignores one.
 - **Save** → `DataSyncCoordinator.saveLiveStrength` (see `docs/store.md`); **Discard** drops the file and leaves the plan untouched. Nothing is written to Apple Health.
 - The exercise demo and form cues are placeholders until the library carries media.
+
+## Workout editor & library (`Features/WorkoutEditor/`)
+
+`WorkoutEditorSheet` creates and edits plans and library templates (`WorkoutEditorContext`: a new plan, a stored plan, a plan from a template, a template) over `WorkoutDraft`. Endurance steps push `StepEditorView`. A strength session is edited in place: every exercise is an `ExerciseEditorRow` that expands (one at a time) to sets, reps or hold time and kg side by side, then its rests as `RestMenu`s (until lap, a preset time, or none for the pause after); a circuit is its own section (rounds, round rest, members), made by "Group with Next" and split by "Ungroup". There is no rest step: a pause belongs to an exercise (`docs/store.md`). A new exercise starts from what the athlete last did on it (`StepDraft.exercise`), and its pause after waits for the lap button in a gym and runs a minute elsewhere (`StrengthProfile.place`).
+
+`ExercisePickerView` is the one way to choose an exercise — adding to a plan (several at once, in tap order), replacing one, adding live (`LiveAddExerciseSheet`), correcting recorded sets: one search field, a typed name the library lacks offered on top as a custom exercise, recent exercises (`recentExercises`) and the categories when empty. `LiveSwapSheet` keeps its own muscle-group ranking but lists `ExerciseChoiceRow`s like the picker. `StrengthSetsEditorSheet` corrects recorded sets one exercise per section, re-matching all of an exercise's sets at once (a custom name typed live searches the library for itself).
+
+The library (`TemplateLibraryView`) is the calendar's inspector, opened from the "+" menu and closed by its own header (an inspector's toolbar would join the Mac window's): a column on a wide layout, whose rows drag onto a day; a sheet on iPhone. Tapping a template opens the editor prefilled; "Save as Template" sits in the editor, the planned-workout menu and the completed-workout menu (a strength session's template is what was actually done, `StrengthSets.plannedSteps`).
 
 ## Activities (`Features/Activities/`)
 

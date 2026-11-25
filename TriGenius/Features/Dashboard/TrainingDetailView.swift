@@ -60,6 +60,7 @@ struct TrainingDetailView: View {
     @State private var isWide = false
     @State private var exportFile: ExportFile?
     @State private var actionError: String?
+    @State private var templateSave: [String]?
     @State private var showDistanceEdit = false
     @State private var distanceInput = ""
     @State private var showRenameEdit = false
@@ -175,6 +176,11 @@ struct TrainingDetailView: View {
                     } label: {
                         Label("Rename", systemImage: "pencil.line")
                     }
+                    if let template = templateData {
+                        Button("Save as Template", systemImage: "square.stack") {
+                            templateSave = TrainingDataStore.shared.saveTemplate(template)
+                        }
+                    }
                     if family != .strength {
                         Button {
                             distanceInput = String(format: "%.2f", record.distanceKm)
@@ -252,6 +258,7 @@ struct TrainingDetailView: View {
         .sheet(isPresented: Binding(get: { editingSets != nil }, set: { if !$0 { editingSets = nil } })) {
             StrengthSetsEditorSheet(activityId: record.id, rows: editingSets ?? [])
         }
+        .templateSaveAlert($templateSave)
         .alert("Action failed", isPresented: Binding(
             get: { actionError != nil },
             set: { if !$0 { actionError = nil } }
@@ -887,6 +894,16 @@ struct TrainingDetailView: View {
 
     // MARK: Strength
     //
+    /// A template of this workout: the sets a strength session actually did,
+    /// else the plan it was done from; nil when there is neither.
+    private var templateData: [String: Any]? {
+        let rows = StrengthSets.rows(performed: (details["strength"] as? [String: Any])?["exercises"] as? [[String: Any]] ?? [])
+        if !rows.isEmpty {
+            return ["name": record.name, "sport": EditorSport.strength.rawValue, "steps": StrengthSets.plannedSteps(performed: rows)]
+        }
+        return record.isPlanned ? WorkoutPayloadBuilder.workoutData(from: record) : nil
+    }
+
     // What the watch actually counted, set by set (`strength.exercises`, written
     // at ingest). Garmin's classifier names the exercise itself, so a set the
     // athlete improvised still shows up — this is the record, beside the plan it
