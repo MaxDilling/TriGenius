@@ -1,3 +1,4 @@
+import HealthKit
 import SwiftUI
 
 // MARK: - Live strength controller
@@ -8,6 +9,9 @@ import SwiftUI
 // while a session runs and mirrors it into the Live Activity on iOS. The
 // deadlines are the moments the athlete should feel: five seconds before a rest
 // ends, its end, and a hold's end — which also logs the hold at its target.
+// On iOS a `LiveWorkoutRecorder` runs alongside every session for heart rate and
+// background time — a restored one included, backdated to the session's start,
+// so readings from before a relaunch can be missing.
 // Nothing reaches the store until `save`.
 
 @MainActor
@@ -23,6 +27,9 @@ final class LiveStrengthController {
 
     @ObservationIgnored private var deadline: Task<Void, Never>?
     @ObservationIgnored private var lifted: [String: [StrengthSets.SetRow]] = [:]
+    #if os(iOS)
+    @ObservationIgnored private var recorder: LiveWorkoutRecorder?
+    #endif
     @ObservationIgnored private let fileURL: URL = {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -52,11 +59,21 @@ final class LiveStrengthController {
         changed()
     }
 
-    /// Write the session to the store as the plan's completed session.
-    func save() {
+    /// Write the session to the store as the plan's completed session, with the
+    /// heart rate of its Apple Health workout.
+    func save() async {
         guard let session else { return }
-        DataSyncCoordinator.shared.saveLiveStrength(session)
+        var workout: HKWorkout?
+        #if os(iOS)
+        // Taken before `close`, which would discard it.
+        let recorder = self.recorder
+        self.recorder = nil
         close()
+        workout = await recorder?.finish(at: session.endedAt ?? .now)
+        #else
+        close()
+        #endif
+        await DataSyncCoordinator.shared.saveLiveStrength(session, workout: workout)
     }
 
     /// Drop the session; the plan stays exactly as it was.
@@ -65,6 +82,15 @@ final class LiveStrengthController {
         lifted = [:]
         isPresented = false
         changed()
+    }
+
+    /// The live heart rate, nil without a current reading.
+    func heartRate(at date: Date) -> Int? {
+        #if os(iOS)
+        recorder?.heartRate(at: date)
+        #else
+        nil
+        #endif
     }
 
     /// What was lifted on this set's exercise last time, read once per session.
@@ -85,6 +111,12 @@ final class LiveStrengthController {
         #if os(iOS)
         UIApplication.shared.isIdleTimerDisabled = session != nil
         LiveStrengthActivity.sync(session)
+        if let session, recorder == nil {
+            recorder = LiveWorkoutRecorder(start: session.startedAt)
+        } else if session == nil {
+            recorder?.discard()
+            recorder = nil
+        }
         #endif
         arm()
     }

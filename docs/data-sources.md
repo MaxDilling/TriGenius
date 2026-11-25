@@ -6,6 +6,7 @@ Detail doc for `DataManagement/HealthKit/`, `DataManagement/Garmin/`, `DataManag
 
 Read-only Apple Health: workouts, performance markers (FTP/VO2max/weight), daily wellness (`fetchWellnessMetrics`). Per-workout records mirror the Garmin schema — `normalizedRecord(for:)` writes the same `detailsJSON` keys the detail view and `TLCalculator` consume, and returns the `ZoneSamples` the store buckets into time-in-zone.
 
+- **Own workouts are not imported**: `fetchWorkouts` drops TriGenius's own — the live strength workouts `LiveWorkoutRecorder` saves (`docs/app.md`), already in the store as their `app:` activity — beside the Garmin-authored mirrors.
 - **Run normalized pace is grade-adjusted (true NGP)**: `speedStream` grades each running sample by the GPS route's altitude over the distance the speed samples cover — never the track's own distance, which stalls on short steep pitches (Garmin likewise: `directElevation` over `directSpeed`, not `sumDistance`) and defers to `GradeAdjustedPace`/`NormalizedStream`; indoor runs reduce to plain normalized speed.
 - **Time-in-zone is not read from Apple Health** (it doesn't expose one) *and not computed here*: the service hands over the raw HR / power / grade-adjusted-speed streams as `ZoneSamples` and the store buckets them at ingest. Power and pace carry HealthKit's own per-reading interval; the HR point stream is gap-weighted by `ZoneBucketing.durationSamples`.
 - The HR stream comes from `HKQuantitySeriesSampleQuery` (≈1 s), not the ≈2.5 min aggregated samples.

@@ -63,8 +63,9 @@ final class HealthKitService {
 
     /// `since` bounds the query to workouts on/after that date — used by the
     /// incremental sync so only new activities are fetched. Garmin-authored mirrors
-    /// are dropped here (see `isGarmin`); the rich per-workout record is built by
-    /// `normalizedRecord(for:)`.
+    /// are dropped here (see `isGarmin`), and so are TriGenius's own live strength
+    /// workouts, already stored as their `app:` activity; the rich per-workout
+    /// record is built by `normalizedRecord(for:)`.
     func fetchWorkouts(count: Int = 10, since: Date? = nil) async throws -> [HKWorkout] {
         let sort = NSSortDescriptor(key: HKSampleSortIdentifierEndDate, ascending: false)
         let predicate = since.map { HKQuery.predicateForSamples(withStart: $0, end: nil) }
@@ -77,7 +78,8 @@ final class HealthKitService {
             ) { _, samples, error in
                 if let error { continuation.resume(throwing: error); return }
                 let workouts = (samples as? [HKWorkout] ?? [])
-                    .filter { !HealthKitService.isGarmin($0) }
+                    .filter { !HealthKitService.isGarmin($0)
+                        && $0.sourceRevision.source.bundleIdentifier != Bundle.main.bundleIdentifier }
                 continuation.resume(returning: workouts)
             }
             store.execute(query)

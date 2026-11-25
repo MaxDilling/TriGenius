@@ -1,4 +1,5 @@
 import Foundation
+import HealthKit
 
 // MARK: - Data Sync Coordinator
 //
@@ -721,9 +722,10 @@ final class DataSyncCoordinator {
 
     /// Record a finished live strength session as the completed half of its plan:
     /// an `app:` activity linked to the plan before it is ingested, so the ingest
-    /// folds it in like any linked activity and scores it the same way (no heart
-    /// rate, so no TL).
-    func saveLiveStrength(_ session: StrengthSession) {
+    /// folds it in like any linked activity and scores it the same way. Its heart
+    /// rate (and so its TL) is read from the session's Apple Health `workout` by
+    /// the same extraction as any Apple Health activity; without one it has none.
+    func saveLiveStrength(_ session: StrengthSession, workout: HKWorkout?) async {
         let id = "app:\(UUID().uuidString)"
         let start = session.startedAt
         let end = session.endedAt ?? .now
@@ -741,12 +743,21 @@ final class DataSyncCoordinator {
             "strength": ["exercises": StrengthSets.entries(session.performed)],
         ]
         if let rpe = session.rpe { details["rpe"] = rpe }
+        var streamsData = Data()
+        var zoneSamples: ZoneSamples = [:]
+        if let workout, let recorded = try? await HealthKitService.shared.normalizedRecord(for: workout) {
+            for key in ["avg_hr", "max_hr", "calories"] where !(recorded.record[key] is NSNull) {
+                details[key] = recorded.record[key]
+            }
+            streamsData = recorded.streamsData
+            zoneSamples = recorded.zoneSamples
+        }
         store.setExternalRef(id: session.planId, target: TrainingDataStore.completedRefKey, externalId: id)
         store.ingest([IngestedActivity(
             id: id, source: "app", date: Calendar.current.startOfDay(for: start),
             sport: session.sport, name: session.planName, durationMinutes: minutes, distanceKm: 0,
-            detailsJSON: String(compactJSON: details), powerCurveJSON: "", streamsData: Data(),
-            segmentsJSON: "", zoneSamples: [:], legZoneSamples: [:]
+            detailsJSON: String(compactJSON: details), powerCurveJSON: "", streamsData: streamsData,
+            segmentsJSON: "", zoneSamples: zoneSamples, legZoneSamples: [:]
         )])
     }
 

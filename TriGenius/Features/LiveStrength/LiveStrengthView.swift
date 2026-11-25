@@ -44,6 +44,11 @@ struct LiveStrengthView: View {
                     if session.plannedMinutes > 0 {
                         Text("/ ~\(LiveFormat.clock(session.plannedMinutes * 60))").foregroundStyle(.secondary)
                     }
+                    if let bpm = live.heartRate(at: context.date) {
+                        Text("·").foregroundStyle(.secondary)
+                        Label("\(bpm)", systemImage: "heart.fill")
+                            .foregroundStyle(Theme.Palette.danger)
+                    }
                 }
                 .font(.headline)
                 .monospacedDigit()

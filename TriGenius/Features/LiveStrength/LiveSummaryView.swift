@@ -35,7 +35,7 @@ struct LiveSummaryView: View {
                     Text("Discard").foregroundStyle(Theme.Palette.danger)
                 }
                 .buttonStyle(.glass)
-                Button("Save workout") { live.save() }
+                Button("Save workout") { Task { await live.save() } }
                     .buttonStyle(.glassProminent)
                     .disabled(session.log.isEmpty)
             }

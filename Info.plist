@@ -8,7 +8,11 @@
 	<array>
 		<string>fetch</string>
 		<string>remote-notification</string>
+		<string>workout-processing</string>
+		<string>bluetooth-central</string>
 	</array>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>TriGenius reads your heart rate from a Bluetooth sensor, such as a chest strap or a watch broadcasting it, during a strength workout.</string>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
 		<string>com.trigenius.refresh</string>
