@@ -554,9 +554,10 @@ final class DataSyncCoordinator {
     /// onto it, recording the returned external id. Called on launch and whenever the
     /// write target changes, so switching targets never loses an upcoming plan.
     func reconcileWriteTarget(_ target: WriteTarget) async {
+        await freezeDuePlans()
         let syncTarget = WorkoutTargetFactory.make(target)
         guard await syncTarget.isAvailable else { return }
-        for plan in store.plansMissingRef(target: target.refKey, from: Date()) {
+        for plan in store.plansMissingRef(target: target.refKey, from: Date()) where !plan.hasAutomaticValues {
             let payload = PlannedWorkout(
                 workoutData: WorkoutPayloadBuilder.workoutData(from: plan),
                 date: DateFormatter.ymd.string(from: plan.date)
@@ -591,21 +592,29 @@ final class DataSyncCoordinator {
     }
 
     /// Create a locally-owned plan from a raw `workout_data` dict (run through
-    /// `WorkoutNormalizer` here — the one normalization path) and push it to the
-    /// active write target. Rejected (implausible) input is never written.
-    func addPlan(workoutData raw: [String: Any], date: Date, startMinute: Int? = nil) async -> PlanWriteResult {
+    /// `prepared` — the one normalization path) and push it to the active write
+    /// target, unless its automatic values wait to be set. `templateId` links it
+    /// to the library template it came from. Rejected (implausible) input is
+    /// never written.
+    func addPlan(workoutData raw: [String: Any], date: Date, startMinute: Int? = nil,
+                 templateId: String? = nil) async -> PlanWriteResult {
         let writeTarget = AppSettings.storedWriteTarget()
-        let (workoutData, notes, errors) = WorkoutNormalizer.normalize(raw)
+        let (workoutData, notes, errors) = prepared(raw, on: date)
         guard errors.isEmpty else { return .rejected(errors) }
         let id = "local:\(UUID().uuidString)"
         store.ingestScheduled([makePlan(id: id, workoutData: workoutData, date: date)])
         if let startMinute { store.setScheduledStartMinute(id: id, minute: startMinute) }
+        if let templateId { store.linkTemplate(planId: id, templateId: templateId) }
+        let name = workoutData["name"] as? String ?? "Workout"
+        if PlanResolution.isRelative(workoutData["steps"] as? [[String: Any]] ?? []) {
+            return .success(.held(planId: id, name: name, notes: notes, target: writeTarget, date: date))
+        }
         let payload = PlannedWorkout(workoutData: workoutData, date: DateFormatter.ymd.string(from: date))
         let result = await WorkoutTargetFactory.make(writeTarget).schedule(payload)
         if result.success, let ext = result.externalId {
             store.setExternalRef(id: id, target: writeTarget.refKey, externalId: ext)
         }
-        return .success(PlanWriteOutcome(planId: id, name: workoutData["name"] as? String ?? "Workout",
+        return .success(PlanWriteOutcome(planId: id, name: name,
                                 notes: notes, targetName: writeTarget.displayName,
                                 pushed: result.success, pushMessage: result.success ? "" : result.message))
     }
@@ -624,7 +633,7 @@ final class DataSyncCoordinator {
         // dict alone, or the normalizer invents defaults ("Other", pool length,
         // wrong sport for banding) for fields the plan already has.
         let (workoutData, notes, errors) = editsSteps
-            ? WorkoutNormalizer.normalize(WorkoutPayloadBuilder.workoutData(from: existing).merging(raw) { _, edit in edit })
+            ? prepared(WorkoutPayloadBuilder.workoutData(from: existing).merging(raw) { _, edit in edit }, on: existing.date)
             : (raw, [], [])
         guard errors.isEmpty else { return .rejected(errors) }
         let steps = workoutData["steps"] as? [[String: Any]] ?? []
@@ -644,6 +653,9 @@ final class DataSyncCoordinator {
             stepsJSON: editsSteps ? WorkoutPayloadBuilder.stepsJSON(steps) : nil
         )
         guard let updated = store.scheduledWorkout(id: id) else { return nil }
+        if updated.hasAutomaticValues {
+            return .success(.held(planId: id, name: updated.name, notes: notes, target: writeTarget, date: updated.date))
+        }
         let payload = PlannedWorkout(workoutData: WorkoutPayloadBuilder.workoutData(from: updated),
                                      date: DateFormatter.ymd.string(from: updated.date))
         let target = WorkoutTargetFactory.make(writeTarget)
@@ -662,13 +674,21 @@ final class DataSyncCoordinator {
     }
 
     /// Move a plan to a new day locally, then on the active write target (content
-    /// unchanged). Returns nil when no plan with `id` exists.
+    /// unchanged) — a plan whose automatic values wait is frozen once the new
+    /// day is due. Returns nil when no plan with `id` exists.
     func movePlan(id: String, to date: Date) async -> PlanWriteOutcome? {
         guard let rec = editablePlan(id: id) else { return nil }
         let writeTarget = pushTarget(for: rec)
         let fromDate = DateFormatter.ymd.string(from: rec.date)
         let toDate = DateFormatter.ymd.string(from: date)
         store.moveScheduledWorkout(id: id, to: date)
+        if rec.hasAutomaticValues {
+            if PlanResolution.isDue(date),
+               case .success(let outcome)? = await updatePlan(id: id, workoutData: WorkoutPayloadBuilder.workoutData(from: rec)) {
+                return outcome
+            }
+            return .held(planId: id, name: rec.name, notes: [], target: writeTarget, date: date)
+        }
         let target = WorkoutTargetFactory.make(writeTarget)
         let result: WorkoutWriteResult
         if let ext = rec.externalId(for: writeTarget) {
@@ -761,6 +781,39 @@ final class DataSyncCoordinator {
         }
     }
 
+    // MARK: - Automatic values (`PlanResolution`)
+
+    /// `raw` normalized for a plan on `date` — a `target_percent` set against
+    /// the current thresholds — and, once the day is due, frozen: auto-load
+    /// weights set from the last sessions, the markers dropped.
+    private func prepared(_ raw: [String: Any], on date: Date) -> (workoutData: [String: Any], notes: [String], errors: [String]) {
+        var (data, notes, errors) = WorkoutNormalizer.normalize(raw, thresholds: store.latestSnapshot())
+        if PlanResolution.isDue(date), let steps = data["steps"] as? [[String: Any]], PlanResolution.isRelative(steps) {
+            data["steps"] = PlanResolution.frozen(store.progressing(steps))
+        }
+        return (data, notes, errors)
+    }
+
+    /// Freeze every plan whose day is due — through `updatePlan`, which sets its
+    /// values and pushes it.
+    private func freezeDuePlans() async {
+        for plan in store.relativePlans(through: PlanResolution.freezeLimit()) {
+            _ = await updatePlan(id: plan.id, workoutData: WorkoutPayloadBuilder.workoutData(from: plan))
+        }
+    }
+
+    /// Save a library template — new, or `template` replaced — and carry the
+    /// change into every plan made from it that is not frozen yet. The errors
+    /// that rejected it; empty when saved.
+    func saveTemplate(_ workoutData: [String: Any], replacing template: WorkoutTemplate? = nil) async -> [String] {
+        let errors = store.saveTemplate(workoutData, replacing: template)
+        guard errors.isEmpty, let template else { return errors }
+        for plan in store.plans(templateId: template.id, after: PlanResolution.freezeLimit()) {
+            _ = await updatePlan(id: plan.id, workoutData: template.workoutData)
+        }
+        return []
+    }
+
     /// Build a local plan DTO from normalized `workout_data`.
     private func makePlan(id: String, workoutData: [String: Any], date: Date) -> IngestedScheduledWorkout {
         let sport = Coerce.token(workoutData["sport"] as? String, default: "other")
@@ -798,6 +851,14 @@ struct PlanWriteOutcome {
     let targetName: String
     let pushed: Bool
     let pushMessage: String
+    /// The day a plan with automatic values is frozen and pushed; nil once it
+    /// has none.
+    var heldUntil: Date?
+
+    static func held(planId: String, name: String, notes: [String], target: WriteTarget, date: Date) -> Self {
+        PlanWriteOutcome(planId: planId, name: name, notes: notes, targetName: target.displayName,
+                         pushed: false, pushMessage: "", heldUntil: PlanResolution.freezeDate(for: date))
+    }
 }
 
 /// Outcome of `addPlan`/`updatePlan`: either the plan was written (locally, at

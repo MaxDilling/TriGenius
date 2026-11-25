@@ -4,8 +4,14 @@ import SwiftUI
 //
 // One planned exercise, edited in place: collapsed, its figure, name and
 // prescription at a glance; expanded, sets, reps (or a hold's time) and weight
-// side by side, then its rests. The workout editor and the live "add exercise"
-// sheet both list exercises as these rows.
+// side by side, then its rests. On "Auto weight" the weight is the one its last
+// sessions call for (`StrengthProgression`), set for good 4 days before the
+// session (`PlanResolution`) — until then the field shows today's value. The
+// workout editor and the live "add exercise" sheet both list exercises as these rows.
+//
+// The expanded part is the disclosure's one child — a form makes each child a
+// row of its own, separated from the next — with no separator above it, so it
+// reads as part of the exercise.
 
 struct ExerciseEditorRow: View {
     @Binding var step: StepDraft
@@ -15,11 +21,65 @@ struct ExerciseEditorRow: View {
     let onReplace: () -> Void
 
     @State private var lastNote: String?
+    /// Today's auto weight; nil when off or the exercise was never recorded.
+    @State private var autoKg: Double?
+    @State private var showsAutoInfo = false
 
     var body: some View {
-        DisclosureGroup(isExpanded: $isExpanded) {
+        DisclosureGroup(isExpanded: expansion) {
+            details
+                .listRowSeparator(.hidden, edges: .top)
+                .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+                #if os(iOS)
+                // Tucked up under the header; the sides restate iOS's row inset,
+                // which `EdgeInsets` can't leave out.
+                .listRowInsets(EdgeInsets(top: 0, leading: 20, bottom: Theme.Spacing.m, trailing: 20))
+                #endif
+        } label: {
+            header
+                .alignmentGuide(.listRowSeparatorLeading) { $0[.leading] }
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: Theme.Spacing.m) {
+            ExerciseThumbnail(exercise: step.exerciseId.flatMap(ExerciseLibrary.find(id:)))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(step.exerciseName)
+                Text(step.prescription).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
+            }
+            Spacer(minLength: 0)
+            if isExpanded {
+                Button("Replace Exercise", systemImage: "arrow.left.arrow.right", action: onReplace)
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.borderless)
+                    .padding(.trailing, Theme.Spacing.s)
+            }
+        }
+        #if os(macOS)
+        // iOS makes the whole label the toggle; the Mac only its chevron.
+        .contentShape(.rect)
+        .onTapGesture { expansion.wrappedValue.toggle() }
+        #endif
+    }
+
+    /// The Mac's disclosure triangle sets the binding without an animation;
+    /// iOS lists animate the disclosure themselves.
+    private var expansion: Binding<Bool> {
+        #if os(macOS)
+        $isExpanded.animation()
+        #else
+        $isExpanded
+        #endif
+    }
+
+    private var details: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.s) {
             HStack(spacing: Theme.Spacing.s) {
                 PrescriptionField("Sets") { TextField("", value: clamped(\.exerciseSets, 1...20), format: .number).numberPad() }
+                if step.exerciseSets > 1 {
+                    RestField(rest: $step.setRest)
+                }
                 if step.exerciseIsTimeBased {
                     PrescriptionField("Time") {
                         TextField("", text: Binding(get: { MMSS.format(step.exerciseSetSeconds) },
@@ -31,12 +91,27 @@ struct ExerciseEditorRow: View {
                 }
                 PrescriptionField("kg") {
                     TextField("", value: $step.exerciseWeightKg, format: .number, prompt: Text("BW")).decimalPad()
+                        .disabled(autoKg != nil)
                 }
             }
-            // Loaded once the row opens, not for every collapsed row.
-            .task(id: step.exerciseId) { lastNote = Self.lastNote(step.exerciseId) }
-            if step.exerciseSets > 1 {
-                RestMenu(title: "Rest between sets", rest: $step.setRest)
+            if step.canAutoLoad {
+                Toggle(isOn: $step.autoLoad) {
+                    HStack(spacing: Theme.Spacing.xs) {
+                        Text("Auto weight")
+                        Button("About Auto Weight", systemImage: "info.circle") { showsAutoInfo = true }
+                            .labelStyle(.iconOnly)
+                            .buttonStyle(.borderless)
+                            .popover(isPresented: $showsAutoInfo) {
+                                Text(autoInfo)
+                                    .font(.callout)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(width: 280)
+                                    .padding()
+                                    .presentationCompactAdaptation(.popover)
+                            }
+                    }
+                }
+                .padding(.top, Theme.Spacing.xs)
             }
             if pausesAfter {
                 RestMenu(title: "Rest after exercise", rest: $step.pauseAfter, allowsNone: true)
@@ -44,22 +119,12 @@ struct ExerciseEditorRow: View {
             if let lastNote {
                 Text(lastNote).font(.caption).foregroundStyle(.secondary)
             }
-            Button("Replace Exercise", systemImage: "arrow.triangle.2.circlepath", action: onReplace)
-                .buttonStyle(.borderless)
-        } label: {
-            HStack(spacing: Theme.Spacing.m) {
-                ExerciseThumbnail(exercise: step.exerciseId.flatMap(ExerciseLibrary.find(id:)))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(step.exerciseName)
-                    Text(step.prescription).font(.subheadline).foregroundStyle(.secondary).monospacedDigit()
-                }
-            }
-            #if os(macOS)
-            // iOS makes the whole label the toggle; the Mac only its chevron.
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(.rect)
-            .onTapGesture { withAnimation { isExpanded.toggle() } }
-            #endif
+        }
+        // Loaded once the row opens, not for every collapsed row.
+        .task(id: step.exerciseId) { lastNote = Self.lastNote(step.exerciseId) }
+        .task(id: AutoInput(step)) {
+            autoKg = step.autoLoad ? TrainingDataStore.shared.autoWeightKg(step.dict(swim: false)) : nil
+            if let autoKg { step.exerciseWeightKg = autoKg }
         }
     }
 
@@ -71,6 +136,19 @@ struct ExerciseEditorRow: View {
         if !lifted.isEmpty { return "Last lifted: \(ExerciseSetsCard.volume(lifted))" }
         return TrainingDataStore.shared.lastPlannedWeightKg(exerciseId: exercise.id)
             .map { "Last planned: \($0.formatted(.number.precision(.fractionLength(0...1)))) kg" }
+    }
+
+    private var autoInfo: String {
+        "The weight follows your last two sessions of this exercise — the reps you did against the target and how each set felt — and is set for good 4 days before the session."
+            + (step.autoLoad && autoKg == nil ? " Until you have recorded it, the weight you enter is used." : "")
+    }
+
+    /// What today's auto weight depends on.
+    private struct AutoInput: Hashable {
+        let exerciseId: String?, auto: Bool, sets: Int, reps: Int
+        init(_ step: StepDraft) {
+            (exerciseId, auto, sets, reps) = (step.exerciseId, step.autoLoad, step.exerciseSets, step.exerciseReps)
+        }
     }
 
     private func clamped(_ key: WritableKeyPath<StepDraft, Int>, _ range: ClosedRange<Int>) -> Binding<Int> {
@@ -108,7 +186,7 @@ extension StepDraft {
     /// the rest between sets.
     var prescription: String {
         let extent = exerciseIsTimeBased ? MMSS.format(exerciseSetSeconds) : "\(exerciseReps)"
-        var parts = ["\(exerciseSets) × \(extent)", LiveFormat.load(exerciseWeightKg)]
+        var parts = ["\(exerciseSets) × \(extent)", LiveFormat.load(exerciseWeightKg) + (autoLoad ? " (auto)" : "")]
         if exerciseSets > 1, let setRest { parts.append(ExerciseSetsCard.restLabel(setRest).lowercased()) }
         return parts.joined(separator: " · ")
     }
@@ -124,17 +202,48 @@ struct RestMenu: View {
     private static let presets: [Double] = [30, 45, 60, 90, 120, 150, 180, 240, 300]
 
     var body: some View {
-        Picker(title, selection: $rest) {
-            if allowsLap { Text("Until lap").tag(StrengthSets.Rest?.some(.lapButton)) }
-            ForEach(times, id: \.self) { Text(ExerciseSetsCard.time($0)).tag(StrengthSets.Rest?.some(.timed(seconds: $0))) }
-            if allowsNone { Text("None").tag(StrengthSets.Rest?.none) }
-        }
+        Picker(title, selection: $rest) { Self.choices(rest, allowsLap: allowsLap, allowsNone: allowsNone) }
+    }
+
+    @ViewBuilder
+    static func choices(_ rest: StrengthSets.Rest?, allowsLap: Bool, allowsNone: Bool) -> some View {
+        if allowsLap { Text("Until lap").tag(StrengthSets.Rest?.some(.lapButton)) }
+        ForEach(times(rest), id: \.self) { Text(ExerciseSetsCard.time($0)).tag(StrengthSets.Rest?.some(.timed(seconds: $0))) }
+        if allowsNone { Text("None").tag(StrengthSets.Rest?.none) }
     }
 
     /// The presets, plus the current time when it is none of them.
-    private var times: [Double] {
-        guard case .timed(let seconds) = rest, !Self.presets.contains(seconds) else { return Self.presets }
-        return (Self.presets + [seconds]).sorted()
+    private static func times(_ rest: StrengthSets.Rest?) -> [Double] {
+        guard case .timed(let seconds) = rest, !presets.contains(seconds) else { return presets }
+        return (presets + [seconds]).sorted()
+    }
+}
+
+/// The rest between sets as a prescription box beside sets, reps and kg —
+/// its value, tapped for `RestMenu`'s choices.
+struct RestField: View {
+    @Binding var rest: StrengthSets.Rest?
+
+    var body: some View {
+        PrescriptionField("Rest") {
+            Menu {
+                Picker("Rest", selection: $rest) { RestMenu.choices(rest, allowsLap: true, allowsNone: false) }
+                    .pickerStyle(.inline)
+            } label: {
+                Text(value).frame(maxWidth: .infinity)
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+        }
+    }
+
+    private var value: String {
+        switch rest {
+        case .timed(let seconds): ExerciseSetsCard.time(seconds)
+        case .lapButton: "Lap"
+        case nil: "–"
+        }
     }
 }
 

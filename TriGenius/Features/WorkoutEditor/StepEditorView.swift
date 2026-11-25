@@ -6,7 +6,9 @@ import SwiftUI
 // type/extent/target, or a repeat block's count + child steps (children are
 // leaves only, matching the display layer and the Garmin builder). All values
 // edit the raw stored units; only durations and pace show as "m:ss" text (an
-// exact, display-only conversion). Strength exercises are edited in place
+// exact, display-only conversion). A pace, power or heart-rate target can be a
+// share of the athlete's threshold instead, set 4 days before the session
+// (`PlanResolution`). Strength exercises are edited in place
 // instead (`ExerciseEditorRow`).
 
 struct StepEditorView: View {
@@ -62,33 +64,74 @@ struct StepEditorView: View {
             Picker("Target", selection: $step.targetType) {
                 ForEach(StepTargetType.allCases) { Text($0.label).tag($0) }
             }
-            switch step.targetType {
-            case .noTarget:
-                EmptyView()
-            case .pace:
-                let unit = sport == .swimming ? "/100m" : "/km"
-                mmssField("Fast (m:ss \(unit))", seconds: $step.targetLow)
-                mmssField("Slow (m:ss \(unit))", seconds: $step.targetHigh)
-            case .heartRate:
-                numberField("Low (bpm)", value: $step.targetLow, format: .number)
-                numberField("High (bpm)", value: $step.targetHigh, format: .number)
-            case .power:
-                numberField("Low (W)", value: $step.targetLow, format: .number)
-                numberField("High (W)", value: $step.targetHigh, format: .number)
-            case .speed:
-                numberField("Low (km/h)", value: $step.targetLow, format: .number)
-                numberField("High (km/h)", value: $step.targetHigh, format: .number)
-            case .cadence:
-                let unit = sport == .cycling ? "rpm" : "spm"
-                numberField("Low (\(unit))", value: $step.targetLow, format: .number)
-                numberField("High (\(unit))", value: $step.targetHigh, format: .number)
+            .onChange(of: step.targetType) { if reference == nil { step.targetPercent = nil } }
+            if let reference {
+                Toggle("Relative to \(reference)", isOn: Binding(get: { step.targetPercent != nil },
+                                                               set: { step.targetPercent = $0 ? 100 : nil }))
+            }
+            if let reference, step.targetPercent != nil {
+                numberField("% of \(reference)", value: $step.targetPercent, format: .number, prompt: "100")
+            } else {
+                absoluteTarget
             }
         } header: {
             Text("Intensity target")
         } footer: {
-            if step.targetType != .noTarget {
+            if let today = relativeToday {
+                Text("\(today) today — set for good 4 days before the session.")
+            } else if step.targetType != .noTarget {
                 Text("A single value is auto-widened into a band on save.")
             }
+        }
+    }
+
+    @ViewBuilder
+    private var absoluteTarget: some View {
+        switch step.targetType {
+        case .noTarget:
+            EmptyView()
+        case .pace:
+            let unit = sport == .swimming ? "/100m" : "/km"
+            mmssField("Fast (m:ss \(unit))", seconds: $step.targetLow)
+            mmssField("Slow (m:ss \(unit))", seconds: $step.targetHigh)
+        case .heartRate:
+            numberField("Low (bpm)", value: $step.targetLow, format: .number)
+            numberField("High (bpm)", value: $step.targetHigh, format: .number)
+        case .power:
+            numberField("Low (W)", value: $step.targetLow, format: .number)
+            numberField("High (W)", value: $step.targetHigh, format: .number)
+        case .speed:
+            numberField("Low (km/h)", value: $step.targetLow, format: .number)
+            numberField("High (km/h)", value: $step.targetHigh, format: .number)
+        case .cadence:
+            let unit = sport == .cycling ? "rpm" : "spm"
+            numberField("Low (\(unit))", value: $step.targetLow, format: .number)
+            numberField("High (\(unit))", value: $step.targetHigh, format: .number)
+        }
+    }
+
+    /// The threshold a target of this type can be a share of; nil when the
+    /// athlete has none for it.
+    private var reference: String? {
+        guard PlanResolution.thresholdTarget(type: step.targetType.rawValue, percent: 100, family: sport.family,
+                                             thresholds: TrainingDataStore.shared.latestSnapshot()) != nil else { return nil }
+        switch step.targetType {
+        case .pace: return sport == .swimming ? "CSS" : "LT pace"
+        case .power: return "FTP"
+        case .heartRate: return "LTHR"
+        default: return nil
+        }
+    }
+
+    /// "≈ 4:46/km" — what the relative target stands for today.
+    private var relativeToday: String? {
+        guard let percent = step.targetPercent,
+              let value = PlanResolution.thresholdTarget(type: step.targetType.rawValue, percent: percent, family: sport.family,
+                                                         thresholds: TrainingDataStore.shared.latestSnapshot()) else { return nil }
+        switch step.targetType {
+        case .pace: return "≈ \(MMSS.format(Int(value)))\(sport == .swimming ? "/100m" : "/km")"
+        case .power: return "≈ \(Int(value)) W"
+        default: return "≈ \(Int(value)) bpm"
         }
     }
 
@@ -128,6 +171,7 @@ struct StepEditorView: View {
                 }
             }
             .onDelete { step.children.remove(atOffsets: $0) }
+            .movable { step.children.move(fromOffsets: $0, toOffset: $1) }
             Button("Add step") { step.children.append(StepDraft(kind: .interval)) }
         }
     }

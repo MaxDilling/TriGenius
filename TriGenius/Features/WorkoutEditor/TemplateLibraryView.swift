@@ -21,37 +21,55 @@ struct TemplateLibraryView: View {
             .sorted { $0.family.displayName < $1.family.displayName }
     }
 
-    // The header is the view's own, not a navigation toolbar: on the Mac an
-    // inspector's toolbar items join the window's toolbar, and its dismiss
-    // action closes the window.
     var body: some View {
+        #if os(macOS)
+        // The Mac's header is the view's own, not a navigation toolbar: an
+        // inspector's toolbar items join the window's toolbar, and its dismiss
+        // action closes the window.
         VStack(spacing: 0) {
             HStack(spacing: Theme.Spacing.m) {
                 Text("Library").font(.headline)
                 Spacer()
-                Button("New Template", systemImage: "plus") { editor = .template(nil) }
-                Button("Close", systemImage: "xmark") { isPresented = false }
+                buttons
             }
             .labelStyle(.iconOnly)
             .buttonStyle(.borderless)
             .padding(.horizontal, Theme.Spacing.l)
             .padding(.vertical, Theme.Spacing.m)
-            List {
-                ForEach(groups, id: \.family) { group in
-                    // A heading row, not a `Section` header: a Mac list rules its
-                    // section headers heavier than its row separators.
-                    Text(group.family.displayName)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.secondary)
-                        .listRowSeparator(.hidden, edges: .top)
-                    ForEach(group.templates) { row($0) }
-                }
+            list
+        }
+        #else
+        NavigationStack {
+            list
+                .navigationTitle("Library")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItemGroup(placement: .primaryAction) { buttons } }
+        }
+        #endif
+    }
+
+    @ViewBuilder
+    private var buttons: some View {
+        Button("New Template", systemImage: "plus") { editor = .template(nil) }
+        Button("Close", systemImage: "xmark") { isPresented = false }
+    }
+
+    private var list: some View {
+        List {
+            ForEach(groups, id: \.family) { group in
+                // A heading row, not a `Section` header: a Mac list rules its
+                // section headers heavier than its row separators.
+                Text(group.family.displayName)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .listRowSeparator(.hidden, edges: .top)
+                ForEach(group.templates) { row($0) }
             }
-            .overlay {
-                if templates.isEmpty {
-                    ContentUnavailableView("No Templates", systemImage: "square.stack",
-                                           description: Text("Create one here, or save a workout as a template from its editor."))
-                }
+        }
+        .overlay {
+            if templates.isEmpty {
+                ContentUnavailableView("No Templates", systemImage: "square.stack",
+                                       description: Text("Create one here, or save a workout as a template from its editor."))
             }
         }
         .sheet(item: $editor) { WorkoutEditorSheet(context: $0) }

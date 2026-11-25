@@ -101,8 +101,9 @@ nonisolated enum WorkoutNormalizer {
     /// (always with an explicit `steps` array), human-readable notes describing every
     /// default and adjustment that was applied, and any plausibility-check failures —
     /// when `errors` is non-empty the caller must reject the whole item rather than
-    /// store `workoutData`.
-    static func normalize(_ raw: [String: Any]) -> (workoutData: [String: Any], notes: [String], errors: [String]) {
+    /// store `workoutData`. A `target_percent` is set against `thresholds`
+    /// (`PlanResolution.thresholdTarget`) before it is banded.
+    static func normalize(_ raw: [String: Any], thresholds: PerformanceSnapshot? = nil) -> (workoutData: [String: Any], notes: [String], errors: [String]) {
         var data = raw
         var notes: [String] = []
         var errors: [String] = []
@@ -152,7 +153,7 @@ nonisolated enum WorkoutNormalizer {
             notes.append(contentsOf: synthNotes)
         } else {
             data["steps"] = rawSteps.enumerated().map { i, step in
-                normalizeStep(step, label: "Step \(i + 1)", family: family, notes: &notes, errors: &errors)
+                normalizeStep(step, label: "Step \(i + 1)", family: family, thresholds: thresholds, notes: &notes, errors: &errors)
             }
         }
 
@@ -205,7 +206,8 @@ nonisolated enum WorkoutNormalizer {
 
     // MARK: - Per-step normalization
 
-    private static func normalizeStep(_ raw: [String: Any], label: String, family: SportFamily, notes: inout [String], errors: inout [String]) -> [String: Any] {
+    private static func normalizeStep(_ raw: [String: Any], label: String, family: SportFamily, thresholds: PerformanceSnapshot?,
+                                      notes: inout [String], errors: inout [String]) -> [String: Any] {
         var step = raw
         let type = token(raw["type"]) ?? "interval"
         if raw["type"] == nil { step["type"] = "interval" }
@@ -228,7 +230,7 @@ nonisolated enum WorkoutNormalizer {
             }
             if raw["skip_last_rest"] == nil { step["skip_last_rest"] = true }
             step["repeat_steps"] = (raw["repeat_steps"] as? [[String: Any]] ?? []).enumerated().map { j, child in
-                normalizeStep(child, label: "\(label).\(j + 1)", family: family, notes: &notes, errors: &errors)
+                normalizeStep(child, label: "\(label).\(j + 1)", family: family, thresholds: thresholds, notes: &notes, errors: &errors)
             }
             return step
         }
@@ -237,6 +239,15 @@ nonisolated enum WorkoutNormalizer {
         step["end_condition"] = endCondition(for: raw, type: type)
 
         validateExtent(step, label: label, family: family, errors: &errors)
+
+        if let percent = Coerce.double(raw["target_percent"]), let thresholds, let targetType = token(raw["target_type"]) {
+            if let center = PlanResolution.thresholdTarget(type: targetType, percent: percent, family: family, thresholds: thresholds) {
+                step["target_low"] = center
+                step["target_high"] = nil
+            } else {
+                notes.append("\(label): no threshold known for a \(shortNumber(percent)) % \(targetType) target.")
+            }
+        }
 
         // Expand single / degenerate intensity targets into a band.
         expandTarget(in: &step, label: label, notes: &notes)

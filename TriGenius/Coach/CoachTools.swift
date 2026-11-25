@@ -869,6 +869,10 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                                 "duration_seconds": ["type": "integer", "description": "Child step duration in seconds."],
                                 "stroke": ["type": "string", "description": "Child step swim stroke."],
                                 "exercise_id": ["type": "string", "description": "Strength circuit: the exercise, from get_exercises."],
+                                "load": ["type": "string", "enum": ["auto", "fixed"], "description": "Strength circuit: as the top-level load."],
+                                "target_type": ["type": "string", "description": "Child step intensity target type."],
+                                "target_low": ["type": "number", "description": "Child step single target value."],
+                                "target_percent": ["type": "number", "description": "Child step target as % of the athlete's threshold, as the top-level target_percent."],
                                 "sets": ["type": "array", "description": "Strength circuit: usually one entry — the block's repeat_count is the round count.", "items": ["type": "object"]]
                             ]
                         ]
@@ -876,6 +880,7 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                     "skip_last_rest": ["type": "boolean", "description": "Skip the last rest in a repeat block."],
                     "exercise_id": ["type": "string", "description": "Strength: the exercise, from get_exercises. Use exercise_name instead only for something the library doesn't have."],
                     "exercise_name": ["type": "string", "description": "Strength: name of an exercise outside the library (no tissue mapping, no watch guidance)."],
+                    "load": ["type": "string", "enum": ["auto", "fixed"], "description": "Strength: \"auto\" lets the app set this exercise's weight from the athlete's last sessions (reps against target, set ratings) 4 days before the session — weight_kg is then only the start. Default fixed. Use auto for a routine that repeats."],
                     "sets": [
                         "type": "array",
                         "description": "Strength: one entry per set, in order. Uniform sets repeat the same entry.",
@@ -895,6 +900,7 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                     "rest_between_rounds_seconds": ["type": "integer", "description": "Strength: rest between rounds of a circuit (a repeat block of exercise steps)."],
                     "target_type": ["type": "string", "enum": ["no_target", "heart_rate", "power", "pace", "speed", "cadence"], "description": "Intensity target type (units/bands in read_knowledge('workouts') §3)."],
                     "target_low": ["type": "number", "description": "Single target value; the app auto-expands it into a band."],
+                    "target_percent": ["type": "number", "description": "Instead of target_low: the target as % of the athlete's threshold for target_type — pace: LT pace (swim: CSS), power: FTP, heart_rate: LTHR; 105 pace is 5 % faster than threshold. The app sets the value from the threshold current 4 days before the session. Use it for a routine that repeats."],
                     "target_high": ["type": "number", "description": "Optional explicit upper bound (overrides the auto band)."]
                 ]
             ]
@@ -938,6 +944,40 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                         "detailed": ["type": "boolean", "description": "Include the per-lap breakdown of completed workouts (default false)."]
                     ],
                     "required": []
+                ]
+            ),
+            ToolDefinition(
+                name: "get_templates",
+                description: "The athlete's workout library: sessions saved as templates. One line per template, `template_id — name · sport · exercise_ids (strength; * = auto weight) or duration`. Call it before writing a session: when a template fits, schedule it with schedule_template instead of writing a new workout or copying an old one.",
+                parameters: ["type": "object", "properties": [:], "required": []]
+            ),
+            ToolDefinition(
+                name: "schedule_template",
+                description: "Schedule a library template (template_id from get_templates) on one or more dates — a weekly routine is one call with every date. Its automatic values (load auto, target_percent) are set 4 days before each session, and only then is it sent to the watch; later edits of the template reach every session not set yet.",
+                parameters: [
+                    "type": "object",
+                    "properties": [
+                        "template_id": ["type": "string", "description": "Template ID from get_templates."],
+                        "dates": ["type": "array", "items": ["type": "string"], "description": "Target dates in YYYY-MM-DD format, e.g. the next five Mondays."]
+                    ],
+                    "required": ["template_id", "dates"]
+                ]
+            ),
+            ToolDefinition(
+                name: "save_template",
+                description: "Create a library template, or change one (template_id from get_templates). Same workout_data as add_workouts, without a date; for a session that repeats, give strength exercises load auto and endurance targets as target_percent, so each session gets current values. A change merges top-level fields into the template (include `steps` to replace its structure) and reaches every planned session from it not set yet. Save one when the athlete asks, or when a session will repeat (a weekly gym routine), then plan it with schedule_template.",
+                parameters: [
+                    "type": "object",
+                    "properties": [
+                        "template_id": ["type": "string", "description": "Template to change. Omit to create a new one."],
+                        "workout_data": [
+                            "type": "object",
+                            "description": "Workout definition object. A new template needs name and sport.",
+                            "properties": Self.workoutDataProperties,
+                            "required": []
+                        ]
+                    ],
+                    "required": ["workout_data"]
                 ]
             ),
             ToolDefinition(
@@ -1023,6 +1063,12 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                 limit: Coerce.int(arguments["limit"]) ?? 20,
                 detailed: arguments["detailed"] as? Bool ?? false
             )
+        case "get_templates":
+            return Self.templateCatalog()
+        case "schedule_template":
+            return await scheduleTemplate(arguments)
+        case "save_template":
+            return await saveTemplate(arguments)
         case "add_workouts":
             guard let items = arguments["workouts"] as? [[String: Any]], !items.isEmpty else {
                 return "✗ Error: workouts is missing or empty."
@@ -1085,6 +1131,71 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
         return lines.joined(separator: "\n")
     }
 
+    // MARK: - Workout library
+
+    /// The library as plain text, one line per template; an auto-load exercise
+    /// is starred.
+    private static func templateCatalog() -> String {
+        let templates = TrainingDataStore.shared.templates()
+        guard !templates.isEmpty else { return "The athlete's library has no templates." }
+        var lines = ["template_id — name · sport · exercise_ids (* = auto weight) or duration"]
+        for template in templates {
+            let data = template.workoutData
+            let steps = data["steps"] as? [[String: Any]] ?? []
+            let auto = StrengthProgression.autoKeys(steps)
+            let exercises = StrengthSets.plannedSets(steps)
+                .map { ($0.exerciseId ?? $0.title) + ($0.garminKey.map(auto.contains) == true ? "*" : "") }
+                .reduce(into: [String]()) { if !$0.contains($1) { $0.append($1) } }
+            let content = exercises.isEmpty ? Coerce.int(data["duration_minutes"]).map { "\($0) min" } : exercises.joined(separator: ", ")
+            lines.append("\(template.id) — " + [template.name, template.sport, content].compactMap { $0 }.joined(separator: " · "))
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    /// Where a written plan went: to the target, held until its automatic
+    /// values are set, or kept locally after a failed push.
+    private static func destination(_ outcome: PlanWriteOutcome) -> String {
+        if let held = outcome.heldUntil {
+            return "→ \(outcome.targetName) on \(DateFormatter.ymd.string(from: held)), once its automatic values are set"
+        }
+        return outcome.pushed ? "→ \(outcome.targetName)" : "saved locally, \(outcome.targetName) push failed: \(outcome.pushMessage)"
+    }
+
+    private func scheduleTemplate(_ arguments: [String: Any]) async -> String {
+        guard let id = Coerce.string(arguments["template_id"]), let template = TrainingDataStore.shared.template(id: id) else {
+            return "✗ No template found for that template_id. List them with get_templates first."
+        }
+        guard let dates = arguments["dates"] as? [String], !dates.isEmpty else { return "✗ Error: dates is missing or empty." }
+        var lines: [String] = []
+        for dateStr in dates {
+            guard let date = DateFormatter.ymd.date(from: dateStr) else {
+                lines.append("- \(dateStr) — ✗ invalid date (use YYYY-MM-DD)")
+                continue
+            }
+            switch await DataSyncCoordinator.shared.addPlan(workoutData: template.workoutData, date: date, templateId: template.id) {
+            case .rejected(let errors):
+                lines.append("- \(dateStr) — ✗ rejected (implausible): \(errors.joined(separator: "; "))")
+            case .success(let outcome):
+                onCard(.workout(id: outcome.planId, caption: "Scheduled", undo: .deletePlan(id: outcome.planId)))
+                lines.append("- \(dateStr) \(outcome.name) \(Self.destination(outcome)) [id: \(outcome.planId)]")
+            }
+        }
+        return (["Scheduled '\(template.name)' on \(dates.count) date(s):"] + lines).joined(separator: "\n")
+    }
+
+    private func saveTemplate(_ arguments: [String: Any]) async -> String {
+        guard let raw = arguments["workout_data"] as? [String: Any] else { return "✗ Error: workout_data is required." }
+        var existing: WorkoutTemplate?
+        if let id = Coerce.string(arguments["template_id"]) {
+            existing = TrainingDataStore.shared.template(id: id)
+            if existing == nil { return "✗ No template found for that template_id. List them with get_templates first." }
+        }
+        let template = existing ?? WorkoutTemplate()
+        let errors = await DataSyncCoordinator.shared.saveTemplate((existing?.workoutData ?? [:]).merging(raw) { $1 }, replacing: template)
+        guard errors.isEmpty else { return "✗ Rejected (implausible): \(errors.joined(separator: "; "))" }
+        return "✓ \(existing == nil ? "Saved" : "Updated") template '\(template.name)'. [template_id: \(template.id)]"
+    }
+
     // MARK: - add_workouts
 
     private func addWorkoutsBatch(_ items: [[String: Any]]) async -> String {
@@ -1107,13 +1218,9 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                 // The plan exists locally even when the target push failed — card either way.
                 onCard(.workout(id: outcome.planId, caption: "Scheduled",
                                 undo: .deletePlan(id: outcome.planId)))
-                if outcome.pushed {
-                    ok += 1
-                    let suffix = outcome.notes.isEmpty ? "" : " (\(outcome.notes.joined(separator: "; ")))"
-                    lines.append("- \(dateStr) \(outcome.name) → \(outcome.targetName)\(suffix) [id: \(outcome.planId)]")
-                } else {
-                    lines.append("- \(dateStr) \(outcome.name) — saved locally, \(outcome.targetName) push failed: \(outcome.pushMessage) [id: \(outcome.planId)]")
-                }
+                if outcome.pushed || outcome.heldUntil != nil { ok += 1 }
+                let suffix = outcome.notes.isEmpty ? "" : " (\(outcome.notes.joined(separator: "; ")))"
+                lines.append("- \(dateStr) \(outcome.name) \(Self.destination(outcome))\(suffix) [id: \(outcome.planId)]")
             }
         }
         let mark = ok == items.count ? "✓ " : ""
@@ -1157,9 +1264,7 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                                                        workoutDataJSON: WorkoutPayloadBuilder.workoutDataJSON(before.workoutData))))
             }
         }
-        var msg = outcome.pushed
-            ? "✓ Updated '\(outcome.name)' on \(outcome.targetName). [id: \(outcome.planId)]"
-            : "✓ Updated locally; \(outcome.targetName) push failed: \(outcome.pushMessage) [id: \(outcome.planId)]"
+        var msg = "✓ Updated '\(outcome.name)' \(Self.destination(outcome)). [id: \(outcome.planId)]"
         if !outcome.notes.isEmpty { msg += "\nℹ️ Applied defaults & adjustments:\n" + outcome.notes.map { "- \($0)" }.joined(separator: "\n") }
         return msg
     }
@@ -1180,9 +1285,7 @@ final class WorkoutSchedulingToolHandler: CoachToolHandler {
                                 changes: ["Date: \(cardDate(before.date)) → \(cardDate(date))"],
                                 undo: .movePlan(id: outcome.planId, to: before.date)))
         }
-        return outcome.pushed
-            ? "✓ Moved '\(outcome.name)' to \(toDate) on \(outcome.targetName). [id: \(outcome.planId)]"
-            : "✓ Moved locally; \(outcome.targetName) push failed: \(outcome.pushMessage) [id: \(outcome.planId)]"
+        return "✓ Moved '\(outcome.name)' to \(toDate) \(Self.destination(outcome)). [id: \(outcome.planId)]"
     }
 
     // MARK: - delete_workout

@@ -293,8 +293,11 @@ final class CalendarViewModel {
     func move(workoutID: String, to newDay: Date, segment: TimeOfDaySegment? = nil) {
         let targetDay = cal.startOfDay(for: newDay)
         if let template = TrainingDataStore.shared.template(dragID: workoutID) {
-            let data = template.workoutData
-            Task { _ = await DataSyncCoordinator.shared.addPlan(workoutData: data, date: targetDay, startMinute: segment?.anchorMinute) }
+            let (data, id) = (template.workoutData, template.id)
+            Task {
+                _ = await DataSyncCoordinator.shared.addPlan(workoutData: data, date: targetDay,
+                                                             startMinute: segment?.anchorMinute, templateId: id)
+            }
             return
         }
         guard let record = scheduledRecord(id: workoutID), !record.isReadOnly else { return }

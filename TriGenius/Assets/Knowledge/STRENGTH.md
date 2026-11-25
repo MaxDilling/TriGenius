@@ -82,6 +82,11 @@ no weight is known, omit `weight_kg` entirely and let them fill it in — never
 guess a load, and never derive one from a percentage of a max that was never
 tested.
 
+For a session that repeats (a weekly routine, a template), set `"load": "auto"`
+on each loaded exercise instead of working out future weights: the app sets the
+weight 4 days before each session from the athlete's last two sessions — the
+reps done against the target and how hard each set felt.
+
 ## 4. Exercise selection
 
 Call `get_exercises` for the ids. Filter by `equipment` to match where the

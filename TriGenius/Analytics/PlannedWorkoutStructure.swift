@@ -374,6 +374,11 @@ struct PlannedDistance {
 extension WorkoutRecord {
     var family: SportFamily { SportFamily(sportKey: sport) }
 
+    /// The plan still leaves values to the app — it waits to be frozen (`PlanResolution`).
+    @MainActor var hasAutomaticValues: Bool {
+        PlanResolution.isRelative(WorkoutPayloadBuilder.parseSteps(stepsJSON) ?? [])
+    }
+
     /// Parsed structured steps, when the workout carries any. Estimators inside
     /// read the athlete's latest thresholds (cached on the store), so the derived
     /// duration/distance/TSS are @MainActor like every other store read.

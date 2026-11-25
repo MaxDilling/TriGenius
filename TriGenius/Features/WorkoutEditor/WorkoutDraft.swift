@@ -121,6 +121,9 @@ struct StepDraft: Identifiable {
     /// heart rate bpm, cadence rpm/spm.
     var targetLow: Double?
     var targetHigh: Double?
+    /// The target as a share of the athlete's threshold (`PlanResolution`),
+    /// in place of `targetLow`/`targetHigh`.
+    var targetPercent: Double?
     // Repeat fields.
     var repeatCount = 4
     var skipLastRest = true
@@ -147,6 +150,8 @@ struct StepDraft: Identifiable {
     var exerciseSetSeconds = 30
     /// Nil = bodyweight.
     var exerciseWeightKg: Double?
+    /// The weight is set from the last sessions (`StrengthProgression`).
+    var autoLoad = false
     var exerciseRestSeconds = 60
     var exerciseRestUntilLap = false
     var restAfter: RestAfter = .lapButton
@@ -198,6 +203,14 @@ struct StepDraft: Identifiable {
             exerciseName = name
             exerciseIsTimeBased = false
         }
+        autoLoad = canAutoLoad
+    }
+
+    /// A library exercise lifted for reps on equipment with weight steps — one
+    /// `StrengthProgression` can set the weight of.
+    var canAutoLoad: Bool {
+        guard !exerciseIsTimeBased, let exercise = exerciseId.flatMap(ExerciseLibrary.find(id:)) else { return false }
+        return !StrengthProgression.weightSteps(exercise.equipment).isEmpty
     }
 
     /// Fit this exercise into a circuit: one set a round, straight on to the
@@ -271,6 +284,7 @@ struct StepDraft: Identifiable {
                 exerciseRestSeconds = Coerce.int(firstSet["rest_seconds"]) ?? exerciseRestSeconds
                 exerciseRestUntilLap = firstSet["rest_until_lap"] as? Bool ?? false
             }
+            autoLoad = StrengthProgression.isAuto(dict) && canAutoLoad
             restAfter = (dict["rest_after"] as? String).flatMap(RestAfter.init) ?? .lapButton
             restAfterSeconds = Coerce.int(dict["rest_after_seconds"]) ?? restAfterSeconds
             return
@@ -294,6 +308,7 @@ struct StepDraft: Identifiable {
         targetType = (dict["target_type"] as? String).flatMap { StepTargetType(rawValue: Coerce.token($0)) } ?? .noTarget
         targetLow = Coerce.double(dict["target_low"])
         targetHigh = Coerce.double(dict["target_high"])
+        targetPercent = Coerce.double(dict["target_percent"])
     }
 
     /// Serialize back to the compact schema. Raw units, no conversion.
@@ -309,6 +324,7 @@ struct StepDraft: Identifiable {
                 "sets": Array(repeating: setDict, count: max(1, exerciseSets)),
             ]
             if let exerciseId { d["exercise_id"] = exerciseId }
+            if autoLoad { d["load"] = "auto" }
             if restAfter != .lapButton { d["rest_after"] = restAfter.rawValue }
             if restAfter == .timed { d["rest_after_seconds"] = restAfterSeconds }
             return d
@@ -335,10 +351,14 @@ struct StepDraft: Identifiable {
         case .lapButton: break
         }
         if swim, let stroke { d["stroke"] = stroke.rawValue }
-        if targetType != .noTarget, targetLow != nil || targetHigh != nil {
+        if targetType != .noTarget, targetPercent != nil || targetLow != nil || targetHigh != nil {
             d["target_type"] = targetType.rawValue
-            if let targetLow { d["target_low"] = targetLow }
-            if let targetHigh { d["target_high"] = targetHigh }
+            if let targetPercent {
+                d["target_percent"] = targetPercent
+            } else {
+                if let targetLow { d["target_low"] = targetLow }
+                if let targetHigh { d["target_high"] = targetHigh }
+            }
         }
         return d
     }

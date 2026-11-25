@@ -71,6 +71,12 @@ Only send a distinct `target_low`/`target_high` pair when you deliberately want 
 the automatic band. **Never** send the same value for both — that creates a useless zero-width
 zone.
 
+**Relative targets — for a session that repeats.** Instead of `target_low`, send
+`target_percent`: the target as a share of the athlete's threshold for the `target_type`
+(pace → LT pace, swim CSS; power → FTP; heart_rate → LTHR). `105` pace is 5 % faster than
+threshold pace, `75` power is 75 % of FTP. The app sets the value from the threshold current
+4 days before the session and bands it as above. Use it in templates and multi-week plans.
+
 **Plausibility check.** The app rejects clearly-broken values before scheduling anything
 (e.g. a `pace` of `3` — that's 3 seconds per km, not a real pace). Ranges are generous — real
 elite/ultra targets always fit — so a rejection means the value or unit is wrong, most often

@@ -6,7 +6,8 @@ import SwiftData
 // The athlete's workout library: a workout without a date, kept as the
 // normalized `workout_data` a plan is written from — scheduling one is
 // `addPlan` with that dict, and the editor opens it like any plan. Mirrors into
-// CloudKit with the rest of the store (`deduplicate()` merges on `id`).
+// CloudKit with the rest of the store (`deduplicate()` merges on `id`). Its
+// automatic values (`PlanResolution`) are set in each plan made from it.
 
 @Model
 final class WorkoutTemplate {
@@ -32,18 +33,25 @@ final class WorkoutTemplate {
 extension TrainingDataStore {
     func template(dragID: String) -> WorkoutTemplate? {
         guard dragID.hasPrefix(WorkoutTemplate.dragPrefix) else { return nil }
-        let id = String(dragID.dropFirst(WorkoutTemplate.dragPrefix.count))
-        return try? container.mainContext.fetch(FetchDescriptor<WorkoutTemplate>(predicate: #Predicate { $0.id == id })).first
+        return template(id: String(dragID.dropFirst(WorkoutTemplate.dragPrefix.count)))
     }
 
-    /// Store `workoutData` as a template — new, or `template` replaced — after
-    /// the same normalization and plausibility check a plan gets. The errors
-    /// that rejected it; empty when saved.
+    func template(id: String) -> WorkoutTemplate? {
+        try? container.mainContext.fetch(FetchDescriptor<WorkoutTemplate>(predicate: #Predicate { $0.id == id })).first
+    }
+
+    func templates() -> [WorkoutTemplate] {
+        (try? container.mainContext.fetch(FetchDescriptor<WorkoutTemplate>(sortBy: [SortDescriptor(\.name)]))) ?? []
+    }
+
+    /// Store `workoutData` as a template — new, or `template` replaced (inserted
+    /// when not stored yet) — after the same normalization and plausibility
+    /// check a plan gets. The errors that rejected it; empty when saved.
     func saveTemplate(_ workoutData: [String: Any], replacing template: WorkoutTemplate? = nil) -> [String] {
-        let (data, _, errors) = WorkoutNormalizer.normalize(workoutData)
+        let (data, _, errors) = WorkoutNormalizer.normalize(workoutData, thresholds: latestSnapshot())
         guard errors.isEmpty else { return errors }
         let row = template ?? WorkoutTemplate()
-        if template == nil { container.mainContext.insert(row) }
+        if row.modelContext == nil { container.mainContext.insert(row) }
         row.name = data["name"] as? String ?? ""
         row.sport = data["sport"] as? String ?? ""
         row.workoutDataJSON = WorkoutPayloadBuilder.workoutDataJSON(data)

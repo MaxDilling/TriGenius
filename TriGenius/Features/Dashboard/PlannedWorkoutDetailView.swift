@@ -60,6 +60,12 @@ struct PlannedWorkoutDetailView: View {
                 } else if !exerciseBlocks.isEmpty {
                     ExerciseSetsCard(blocks: exerciseBlocks) { editor = .edit(workout) }
                 }
+                if workout.hasAutomaticValues {
+                    Label("Automatic weights and targets are estimates until \(PlanResolution.freezeDate(for: workout.date).formatted(date: .abbreviated, time: .omitted)), when they are set from your latest sessions and thresholds and sent to \(AppSettings.storedWriteTarget().displayName).",
+                          systemImage: "wand.and.stars")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
                 if family == .strength, AppSettings.storedWriteTarget() == .appleWatch {
                     appleWatchCard
                 }
@@ -79,9 +85,12 @@ struct PlannedWorkoutDetailView: View {
         #endif
         .toolbar {
             if family == .strength, !workout.isCompleted, !exerciseBlocks.isEmpty {
-                // Its own prominent glass, not on the toolbar's shared one too.
+                // The Mac draws the prominent glass on the toolbar's shared
+                // background too, so there it goes; iOS needs the shared one.
                 ToolbarItem(placement: .primaryAction) { startButton }
+                    #if os(macOS)
                     .sharedBackgroundVisibility(.hidden)
+                    #endif
             }
             if !workout.isReadOnly {
                 ToolbarItem(placement: .primaryAction) {

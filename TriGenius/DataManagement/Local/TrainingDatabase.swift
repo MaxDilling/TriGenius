@@ -108,6 +108,9 @@ final class WorkoutRecord {
     var notes: String = ""
     /// Pool length in meters for swim plans, when specified. Nil otherwise.
     var poolLengthMeters: Double?
+    /// The library template the plan was made from; its later edits reach the
+    /// plan until it is frozen (`PlanResolution`).
+    var templateId: String?
 
     // MARK: Completed section (present when `isCompleted`)
 
@@ -1885,21 +1888,50 @@ final class TrainingDataStore {
         return nil
     }
 
-    /// This exercise's sets in the most recent completed session that has it —
-    /// what was lifted, matched on the key plan and record share
-    /// (`SetRow.garminKey`). Empty when it was never recorded.
-    func lastLiftedSets(key: String, before: Date = .now) -> [StrengthSets.SetRow] {
+    /// Each exercise's sets in its latest `count` completed sessions, latest
+    /// first — what was lifted, matched on the key plan and record share
+    /// (`SetRow.garminKey`) — with each session's RPE. A key never recorded is absent.
+    func recentSessions(keys: Set<String>, count: Int, before: Date = .now) -> [String: [StrengthProgression.Session]] {
         var descriptor = FetchDescriptor<WorkoutRecord>(
             predicate: #Predicate { $0.isCompleted && $0.date < before },
             sortBy: [SortDescriptor(\.date, order: .reverse)]
         )
         descriptor.fetchLimit = 60
+        var out: [String: [StrengthProgression.Session]] = [:]
         for record in (try? context.fetch(descriptor)) ?? [] where SportFamily(sportKey: record.sport) == .strength {
-            let entries = (Self.jsonObject(record.detailsJSON)?["strength"] as? [String: Any])?["exercises"] as? [[String: Any]]
-            let sets = StrengthSets.rows(performed: entries ?? []).filter { $0.garminKey == key }
-            if !sets.isEmpty { return sets }
+            let details = Self.jsonObject(record.detailsJSON)
+            let entries = (details?["strength"] as? [String: Any])?["exercises"] as? [[String: Any]]
+            let rows = StrengthSets.rows(performed: entries ?? [])
+            for key in keys where out[key, default: []].count < count {
+                let sets = rows.filter { $0.garminKey == key }
+                if !sets.isEmpty { out[key, default: []].append(.init(sets: sets, rpe: Coerce.int(details?["rpe"]))) }
+            }
+            if keys.allSatisfy({ out[$0, default: []].count == count }) { break }
         }
-        return []
+        return out
+    }
+
+    /// `steps` with every auto-load exercise's weight set from its last sessions
+    /// (`StrengthProgression`).
+    func progressing(_ steps: [[String: Any]]) -> [[String: Any]] {
+        let keys = StrengthProgression.autoKeys(steps)
+        guard !keys.isEmpty else { return steps }
+        let recent = recentSessions(keys: keys, count: StrengthProgression.sessionsConsidered)
+        return StrengthProgression.progressing(steps) { recent[$0] ?? [] }
+    }
+
+    /// The weight an auto-load exercise step gets today; nil when it was never recorded.
+    func autoWeightKg(_ step: [String: Any]) -> Double? {
+        let keys = StrengthProgression.autoKeys([step])
+        guard !keys.isEmpty else { return nil }
+        let recent = recentSessions(keys: keys, count: StrengthProgression.sessionsConsidered)
+        guard !recent.isEmpty else { return nil }
+        return StrengthSets.plannedSets(StrengthProgression.progressing([step]) { recent[$0] ?? [] }).first?.weightKg
+    }
+
+    /// The sets of the latest session that has this exercise; empty when it was never recorded.
+    func lastLiftedSets(key: String) -> [StrengthSets.SetRow] {
+        recentSessions(keys: [key], count: 1)[key]?.first?.sets ?? []
     }
 
     /// Where a new prescription of `exercise` starts: the heaviest set the athlete
@@ -2290,6 +2322,29 @@ final class TrainingDataStore {
             predicate: #Predicate { $0.isPlanned && !$0.isCompleted && $0.source == "local" && $0.date >= day }
         ))) ?? []
         return open.filter { $0.externalRefs[target] == nil }
+    }
+
+    /// Open, locally-authored plans on or before `through` that still leave
+    /// values to the app — the ones due to be frozen.
+    func relativePlans(through: Date) -> [WorkoutRecord] {
+        let day = Calendar.current.startOfDay(for: through)
+        return ((try? context.fetch(FetchDescriptor<WorkoutRecord>(
+            predicate: #Predicate { $0.isPlanned && !$0.isCompleted && $0.source == "local" && $0.date <= day }
+        ))) ?? []).filter(\.hasAutomaticValues)
+    }
+
+    /// Open plans made from `templateId` after `after` — the ones its edits reach.
+    func plans(templateId: String, after: Date) -> [WorkoutRecord] {
+        let day = Calendar.current.startOfDay(for: after)
+        return (try? context.fetch(FetchDescriptor<WorkoutRecord>(
+            predicate: #Predicate { $0.isPlanned && !$0.isCompleted && $0.templateId == templateId && $0.date > day }
+        ))) ?? []
+    }
+
+    func linkTemplate(planId: String, templateId: String) {
+        guard let record = try? context.fetch(FetchDescriptor<WorkoutRecord>(predicate: #Predicate { $0.id == planId })).first else { return }
+        record.templateId = templateId
+        try? context.save()
     }
 
     /// Clear the `target` external ref on any open, locally-authored plan within

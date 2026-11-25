@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Workout editor sheet
 //
@@ -209,6 +210,7 @@ struct WorkoutEditorSheet: View {
                 }
             }
             .onDelete { draft.steps.remove(atOffsets: $0) }
+            .movable { draft.steps.move(fromOffsets: $0, toOffset: $1) }
             addButtons {
                 Button("Step", systemImage: "plus") { draft.steps.append(StepDraft()) }
                 Button("Repeat block", systemImage: "plus") { draft.steps.append(StepDraft(isRepeat: true)) }
@@ -243,6 +245,10 @@ struct WorkoutEditorSheet: View {
                 Section {
                     ForEach(group) { strengthRow($0, in: nil) }
                         .onDelete { offsets in offsets.forEach { draft.steps.remove(id: group[$0].id) } }
+                        .movable { offsets, destination in
+                            guard let base = draft.steps.firstIndex(where: { $0.id == group[0].id }) else { return }
+                            draft.steps.move(fromOffsets: IndexSet(offsets.map { $0 + base }), toOffset: destination + base)
+                        }
                 }
             }
         }
@@ -263,6 +269,9 @@ struct WorkoutEditorSheet: View {
             RestMenu(title: "Rest between rounds", rest: binding(circuit.id).roundRest, allowsLap: false)
             ForEach(circuit.children) { strengthRow($0, in: circuit.id) }
                 .onDelete { offsets in offsets.forEach { draft.steps.remove(id: circuit.children[$0].id) } }
+                .movable { offsets, destination in
+                    draft.steps.update(id: circuit.id) { $0.children.move(fromOffsets: offsets, toOffset: destination) }
+                }
             addButtons {
                 Button("Exercise", systemImage: "plus") { picking = .add(into: circuit.id) }
                 Button("Ungroup", systemImage: "rectangle.split.1x2") { ungroup(circuit.id) }
@@ -270,8 +279,8 @@ struct WorkoutEditorSheet: View {
         }
     }
 
-    /// An exercise row — or a rest step that follows no exercise. Reorders by
-    /// drag within its list; macOS has no swipe-to-delete, so the context menu
+    /// An exercise row — or a rest step that follows no exercise. Reorders
+    /// within its list; macOS has no swipe-to-delete, so the context menu
     /// deletes too.
     private func strengthRow(_ step: StepDraft, in circuit: UUID?) -> some View {
         Group {
@@ -385,12 +394,17 @@ struct WorkoutEditorSheet: View {
                 }
             }
         case .create, .fromTemplate:
+            let templateId: String? = switch context {
+            case .fromTemplate(let template, _): template.id
+            default: nil
+            }
             if case .rejected(let rejected) = await DataSyncCoordinator.shared.addPlan(workoutData: draft.workoutData(), date: day,
-                                                                                    startMinute: draft.startMinute) {
+                                                                                    startMinute: draft.startMinute,
+                                                                                    templateId: templateId) {
                 errors = rejected
             }
         case .template(let template):
-            errors = TrainingDataStore.shared.saveTemplate(draft.workoutData(), replacing: template)
+            errors = await DataSyncCoordinator.shared.saveTemplate(draft.workoutData(), replacing: template)
         }
         guard errors.isEmpty else {
             validationError = errors.joined(separator: "\n")
@@ -455,19 +469,65 @@ func numberField<F: ParseableFormatStyle>(_ label: String, value: Binding<F.Form
     }
 }
 
+// A form row reorders the native way on each platform: on iOS a long press
+// lifts it and the list makes room live (`movable`); macOS's grouped `Form` is
+// not a `List`, so `onMove` never gets a drag there — the dragged row moves
+// live into each row it passes instead (`reorderable`).
+
 extension View {
-    /// Drag this row onto another row of `items` to move it into that slot.
-    /// Drag and drop, not `onMove`: macOS's grouped `Form` is not a `List`, so
-    /// `onMove` never gets a drag there.
+    /// On the Mac: drag this row over the other rows of `items` to move it.
+    @ViewBuilder
     func reorderable<Item: Identifiable>(_ id: UUID, in items: Binding<[Item]>) -> some View where Item.ID == UUID {
-        draggable(id.uuidString)
-            .dropDestination(for: String.self) { dropped, _ in
-                let list = items.wrappedValue
-                guard let movedId = dropped.first.flatMap(UUID.init(uuidString:)),
-                      let from = list.firstIndex(where: { $0.id == movedId }),
-                      let to = list.firstIndex(where: { $0.id == id }), from != to else { return }
-                items.wrappedValue.move(fromOffsets: [from], toOffset: to > from ? to + 1 : to)
-            }
+        #if os(macOS)
+        onDrag {
+            DraggedRow.id = id
+            return NSItemProvider(object: id.uuidString as NSString)
+        }
+        .onDrop(of: [.text], delegate: RowReorder(target: id, items: items))
+        #else
+        self
+        #endif
+    }
+}
+
+#if os(macOS)
+/// Moves the dragged row into the slot of each row it enters, so the form
+/// shows the new order while the drag is still on.
+private struct RowReorder<Item: Identifiable>: DropDelegate where Item.ID == UUID {
+    let target: UUID
+    let items: Binding<[Item]>
+
+    func dropEntered(info: DropInfo) {
+        let list = items.wrappedValue
+        guard let dragging = DraggedRow.id, dragging != target,
+              let from = list.firstIndex(where: { $0.id == dragging }),
+              let to = list.firstIndex(where: { $0.id == target }) else { return }
+        withAnimation { items.wrappedValue.move(fromOffsets: [from], toOffset: to > from ? to + 1 : to) }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        DraggedRow.id = nil
+        return true
+    }
+}
+
+/// The row being dragged — one drag at a time app-wide. A drop delegate reads
+/// the payload only asynchronously, too late to move rows live.
+@MainActor private enum DraggedRow {
+    static var id: UUID?
+}
+#endif
+
+extension DynamicViewContent {
+    /// On iOS: long-press and drag to reorder in place.
+    func movable(_ move: @escaping (IndexSet, Int) -> Void) -> some DynamicViewContent {
+        #if os(iOS)
+        onMove(perform: move)
+        #else
+        self
+        #endif
     }
 }
 
@@ -544,8 +604,10 @@ extension StepDraft {
         return parts.joined(separator: " ")
     }
 
-    /// Formatted target range in the type's display unit (raw values are stored).
+    /// Formatted target range in the type's display unit (raw values are
+    /// stored), or the share of the threshold.
     func targetText(sport: EditorSport) -> String? {
+        if let targetPercent, targetType != .noTarget { return "\(targetPercent.formatted()) % \(targetType.label)" }
         switch targetType {
         case .noTarget: return nil
         case .power: return PlannedWorkoutFormat.range(targetLow, targetHigh, unit: "W")
