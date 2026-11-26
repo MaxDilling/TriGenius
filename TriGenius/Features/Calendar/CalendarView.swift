@@ -13,8 +13,9 @@ enum CalendarLayout {
 // a horizontally paged grid (system events as the three color-coded availability bars
 // under each day); the week is a continuously-scrollable hour-grid (`WeekTimeGridView`).
 // Tap a day to drill into the week, tap an event for its detail, and drag a planned
-// workout onto another day to reschedule it — updating the local store and Garmin —
-// or a library template onto a day to plan it.
+// workout onto another day to reschedule it (⌥ copies it) — updating the local store
+// and the write target — or a library template onto a day to plan it. A day's and a
+// workout's context menus plan, copy and paste (`CalendarMenus`).
 
 /// A tapped calendar item, presented via programmatic navigation. Programmatic nav
 /// (rather than wrapping each chip in a `NavigationLink`) keeps the chips' `.draggable`
@@ -23,6 +24,13 @@ enum CalendarDetailItem: Identifiable, Hashable {
     case planned(WorkoutRecord)
     case completed(WorkoutRecord)
     case event(BusyWindow)
+
+    var record: WorkoutRecord? {
+        switch self {
+        case .planned(let w), .completed(let w): return w
+        case .event: return nil
+        }
+    }
 
     var id: String {
         switch self {
@@ -38,8 +46,6 @@ enum CalendarDetailItem: Identifiable, Hashable {
 struct CalendarView: View {
     @State private var viewModel = CalendarViewModel()
     @State private var detail: CalendarDetailItem?
-    @State private var editor: WorkoutEditorContext?
-    @State private var showingLibrary = false
 
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var hSize
@@ -52,9 +58,7 @@ struct CalendarView: View {
 
     var body: some View {
         VStack(spacing: Theme.Spacing.s) {
-            CalendarNavBar(viewModel: viewModel, visibleCount: visibleCount,
-                           onAdd: { editor = .create(date: viewModel.firstVisibleDay) },
-                           onLibrary: { showingLibrary = true })
+            CalendarNavBar(viewModel: viewModel, visibleCount: visibleCount, wide: useColumns)
                 .padding(.horizontal)
                 .padding(.top, Theme.Spacing.s)
 
@@ -76,10 +80,17 @@ struct CalendarView: View {
             case .event(let window): BusyEventDetailView(window: window)
             }
         }
-        .sheet(item: $editor) { WorkoutEditorSheet(context: $0) }
-        .inspector(isPresented: $showingLibrary) {
-            TemplateLibraryView(date: viewModel.firstVisibleDay, isPresented: $showingLibrary)
+        .sheet(item: $viewModel.editor) { WorkoutEditorSheet(context: $0) }
+        .inspector(isPresented: $viewModel.showingLibrary) {
+            TemplateLibraryView(date: viewModel.libraryDay, isPresented: $viewModel.showingLibrary)
                 .inspectorColumnWidth(min: 260, ideal: 300, max: 400)
+        }
+        .templateSaveAlert($viewModel.templateSave)
+        .alert("Can't Plan Workout", isPresented: Binding(get: { viewModel.planRejection != nil },
+                                                          set: { if !$0 { viewModel.planRejection = nil } })) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text(viewModel.planRejection?.joined(separator: "\n") ?? "")
         }
         .onAppear { viewModel.load() }
         .onReceive(NotificationCenter.default.publisher(for: .trainingDataDidChange)) { _ in
@@ -197,6 +208,7 @@ private struct WeekRow: View {
 
             ForEach(viewModel.weekDays(for: weekStart), id: \.self) { day in
                 DayCell(
+                    viewModel: viewModel,
                     day: day,
                     planned: viewModel.planned(on: day),
                     completed: viewModel.completed(on: day),
@@ -207,9 +219,10 @@ private struct WeekRow: View {
                     onOpen: onOpen
                 )
                 .frame(maxWidth: .infinity)
+                .contextMenu { DayMenu(viewModel: viewModel, day: day) }
                 .dropDestination(for: String.self) { ids, _ in
                     guard let id = ids.first else { return false }
-                    viewModel.move(workoutID: id, to: day)
+                    viewModel.move(workoutID: id, to: day, copying: dropCopies)
                     return true
                 }
             }
@@ -222,6 +235,7 @@ private struct WeekRow: View {
 // MARK: - Day Cell (month grid)
 
 private struct DayCell: View {
+    let viewModel: CalendarViewModel
     let day: Date
     let planned: [WorkoutRecord]
     let completed: [WorkoutRecord]
@@ -294,12 +308,14 @@ private struct DayCell: View {
                 eventRow(sport: activity.sport, title: activity.name, filled: true)
                     .contentShape(Rectangle())
                     .onTapGesture { onOpen(.completed(activity)) }
+                    .contextMenu { WorkoutMenu(viewModel: viewModel, record: activity) }
             }
             let plannedSlots = max(0, 3 - completed.count)
             ForEach(planned.prefix(plannedSlots)) { workout in
                 eventRow(sport: workout.sport, title: workout.name, filled: false)
                     .contentShape(Rectangle())
                     .onTapGesture { onOpen(.planned(workout)) }
+                    .contextMenu { WorkoutMenu(viewModel: viewModel, record: workout) }
                     .planDraggable(workout)
             }
             let overflow = completed.count + planned.count - 3
@@ -336,11 +352,13 @@ private struct DayCell: View {
                 sportChip(sport: activity.sport, completed: true)
                     .contentShape(Rectangle())
                     .onTapGesture { onOpen(.completed(activity)) }
+                    .contextMenu { WorkoutMenu(viewModel: viewModel, record: activity) }
             }
             ForEach(planned.prefix(max(0, 2 - completed.count))) { workout in
                 sportChip(sport: workout.sport, completed: false)
                     .contentShape(Rectangle())
                     .onTapGesture { onOpen(.planned(workout)) }
+                    .contextMenu { WorkoutMenu(viewModel: viewModel, record: workout) }
                     .planDraggable(workout)
             }
             let overflow = planned.count + completed.count - 2

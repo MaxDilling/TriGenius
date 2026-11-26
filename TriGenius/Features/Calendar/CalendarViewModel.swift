@@ -5,8 +5,8 @@ import Foundation
 // A Week and a Month view of the athlete's days, each showing
 // planned workouts, completed activities and real-world commitments (EventKit), plus
 // a per-day time-of-day availability indicator so it's obvious where there is still
-// time to train. Reads the local `TrainingDataStore` + `CalendarService` and writes
-// reschedules back (locally always, and to Garmin when that's the active source).
+// time to train. Reads the local `TrainingDataStore` + `CalendarService`; moves,
+// copies and pastes go through `DataSyncCoordinator`'s shared plan CRUD.
 //
 // Layout mirrors Apple Calendar: the month is a horizontally paged grid; the week is
 // a continuously-scrollable multi-day time grid. Both render from a bounded-but-large
@@ -282,33 +282,74 @@ final class CalendarViewModel {
         if granted { load() } else { needsCalendarAccess = true }
     }
 
+    // MARK: - Planning
+
+    /// The editor the calendar presents — from its "+", a day's menu or a workout's.
+    var editor: WorkoutEditorContext?
+    var showingLibrary = false
+    /// The day a tapped library template is planned on.
+    private(set) var libraryDay = Date()
+    /// A workout copied from its menu, pasted onto a day from the day's.
+    var copied: PlanSeed?
+    /// "Save as Template"'s outcome (`templateSaveAlert`).
+    var templateSave: [String]?
+    /// Why a paste, duplicate or drop was refused.
+    var planRejection: [String]?
+
+    /// The day a plan started from the header lands on: today while it is on
+    /// screen, else the first day shown.
+    func newPlanDay(visibleCount: Int) -> Date {
+        let today = cal.startOfDay(for: Date())
+        switch mode {
+        case .week:
+            let end = cal.date(byAdding: .day, value: visibleCount, to: firstVisibleDay) ?? firstVisibleDay
+            return (firstVisibleDay..<end).contains(today) ? today : firstVisibleDay
+        case .month:
+            return cal.isDate(today, equalTo: visibleMonth, toGranularity: .month) ? today : visibleMonth
+        }
+    }
+
+    /// A blank plan opens on running, the editor's first sport.
+    func newPlan(on day: Date, sport: EditorSport = .running, startMinute: Int? = nil) {
+        editor = .create(PlanSeed(sport: sport, startMinute: startMinute), date: day)
+    }
+
+    func openLibrary(on day: Date) {
+        libraryDay = cal.startOfDay(for: day)
+        showingLibrary = true
+    }
+
+    /// Plan `seed` on `day` through the shared `addPlan`, without the editor.
+    func plan(_ seed: PlanSeed, on day: Date) {
+        let day = cal.startOfDay(for: day)
+        Task {
+            if case .rejected(let errors) = await DataSyncCoordinator.shared.addPlan(
+                workoutData: seed.workoutData, date: day, startMinute: seed.startMinute, templateId: seed.templateId) {
+                planRejection = errors
+            }
+        }
+    }
+
     // MARK: - Reschedule
 
-    /// Move a planned workout to `newDay` and, when `segment` is given, anchor its
-    /// local start time to that segment. The day move goes through the shared
+    /// Move a planned workout to `newDay` through the shared
     /// `DataSyncCoordinator.movePlan` (local store first, then the active write
-    /// target); the start time is local-only. The store's `trainingDataDidChange`
-    /// triggers the view reload. A dropped library template (`WorkoutTemplate.dragID`)
-    /// is planned on `newDay` instead, through the shared `addPlan`.
-    func move(workoutID: String, to newDay: Date, segment: TimeOfDaySegment? = nil) {
-        let targetDay = cal.startOfDay(for: newDay)
+    /// target), or plan a copy there when `copying`. The store's
+    /// `trainingDataDidChange` triggers the view reload. A dropped library template
+    /// (`WorkoutTemplate.dragID`) is planned on `newDay`.
+    func move(workoutID: String, to newDay: Date, copying: Bool) {
         if let template = TrainingDataStore.shared.template(dragID: workoutID) {
-            let (data, id) = (template.workoutData, template.id)
-            Task {
-                _ = await DataSyncCoordinator.shared.addPlan(workoutData: data, date: targetDay,
-                                                             startMinute: segment?.anchorMinute, templateId: id)
-            }
+            plan(PlanSeed(template), on: newDay)
             return
         }
         guard let record = scheduledRecord(id: workoutID), !record.isReadOnly else { return }
-        let dayChanged = cal.startOfDay(for: record.date) != targetDay
-        let minuteChanged = segment != nil && record.startMinute != segment?.anchorMinute
-        guard dayChanged || minuteChanged else { return }
-
-        if let segment { TrainingDataStore.shared.setScheduledStartMinute(id: workoutID, minute: segment.anchorMinute) }
-        if dayChanged {
-            Task { _ = await DataSyncCoordinator.shared.movePlan(id: workoutID, to: targetDay) }
+        if copying {
+            if let seed = PlanSeed(record) { plan(seed, on: newDay) }
+            return
         }
+        let targetDay = cal.startOfDay(for: newDay)
+        guard cal.startOfDay(for: record.date) != targetDay else { return }
+        Task { _ = await DataSyncCoordinator.shared.movePlan(id: workoutID, to: targetDay) }
     }
 
     /// Find a scheduled workout by id within the loaded window (falls back to a wide

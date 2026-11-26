@@ -35,9 +35,6 @@ enum TimeOfDaySegment: String, CaseIterable, Identifiable, Sendable {
     /// Length of the segment in minutes.
     var lengthMinutes: Int { range.upperBound - range.lowerBound }
 
-    /// Minute a workout dropped onto this segment is anchored to (its start).
-    var anchorMinute: Int { range.lowerBound }
-
     var label: String {
         switch self {
         case .morning: return "Morning"

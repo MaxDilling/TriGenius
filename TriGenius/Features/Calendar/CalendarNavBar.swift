@@ -4,8 +4,9 @@ import SwiftUI
 //
 // The floating glass control layer above the grid, mirroring Apple Calendar. The
 // control row carries the month on the left — a back pill that zooms out in week
-// mode, the screen's big title in month mode — and a right-hand "+" menu: a new
-// workout in the editor, or the workout library. Below it, week mode shows a date strip of the visible week that
+// mode, the screen's big title in month mode — and on the right the "+" menu (a new
+// plan per sport, on today while it is on screen) and, on a wide layout, the library
+// toggle; iPhone keeps the library in the "+" menu. Below it, week mode shows a date strip of the visible week that
 // highlights the selected day and the columns currently on screen and tabs to a
 // day; month mode shows the weekday letters.
 
@@ -13,9 +14,8 @@ struct CalendarNavBar: View {
     @Bindable var viewModel: CalendarViewModel
     /// Day columns visible in the week grid — used to highlight the on-screen range.
     let visibleCount: Int
-    /// The "+" menu: a new plan in the workout editor, or the workout library.
-    let onAdd: () -> Void
-    let onLibrary: () -> Void
+    /// Roomy layout (iPad / macOS): the library gets its own toggle.
+    let wide: Bool
 
     var body: some View {
         VStack(spacing: Theme.Spacing.s) {
@@ -24,6 +24,7 @@ struct CalendarNavBar: View {
                     leftPill
                     Spacer(minLength: Theme.Spacing.s)
                     todayPill
+                    if wide { libraryToggle }
                     controls
                 }
             }
@@ -77,10 +78,33 @@ struct CalendarNavBar: View {
         .headerPill()
     }
 
+    private var newPlanDay: Date { viewModel.newPlanDay(visibleCount: visibleCount) }
+
+    private var libraryToggle: some View {
+        Button {
+            if viewModel.showingLibrary {
+                viewModel.showingLibrary = false
+            } else {
+                viewModel.openLibrary(on: newPlanDay)
+            }
+        } label: {
+            Image(systemName: "square.stack")
+                .foregroundStyle(viewModel.showingLibrary ? Color.accentColor : .primary)
+                .headerSegment()
+        }
+        .buttonStyle(.plain)
+        .font(.body.weight(.medium))
+        .headerPill()
+        .help("Library")
+    }
+
     private var controls: some View {
         Menu {
-            Button("New Workout", systemImage: "plus", action: onAdd)
-            Button("From Library", systemImage: "square.stack", action: onLibrary)
+            SportMenuItems { viewModel.newPlan(on: newPlanDay, sport: $0) }
+            if !wide {
+                Divider()
+                Button("From Library", systemImage: "square.stack") { viewModel.openLibrary(on: newPlanDay) }
+            }
         } label: {
             Image(systemName: "plus").headerSegment()
         }

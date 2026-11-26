@@ -20,6 +20,17 @@ enum WorkoutPayloadBuilder {
         return d
     }
 
+    /// What a workout repeats as — a template, a copy, "Plan Again": the sets a
+    /// strength session actually did, else its plan; nil when it has neither.
+    static func templateData(from rec: WorkoutRecord) -> [String: Any]? {
+        let performed = (parseWorkoutData(rec.detailsJSON)?["strength"] as? [String: Any])?["exercises"] as? [[String: Any]]
+        let rows = StrengthSets.rows(performed: performed ?? [])
+        if !rows.isEmpty {
+            return ["name": rec.name, "sport": EditorSport.strength.rawValue, "steps": StrengthSets.plannedSteps(performed: rows)]
+        }
+        return rec.isPlanned ? workoutData(from: rec) : nil
+    }
+
     /// `workout_data` as one JSON string and back — how an undoable chat card
     /// carries the plan it would restore (`ChatCard.PlanUndo`).
     static func workoutDataJSON(_ data: [String: Any]) -> String {

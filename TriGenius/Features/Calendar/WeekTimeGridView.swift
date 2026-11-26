@@ -7,7 +7,8 @@ import SwiftUI
 // commitments live in the all-day band above the grid; timed calendar events are
 // positioned inside the grid at their start/end. The hour grid is pinch-zoomable and
 // the columns scroll horizontally and endlessly (3 visible on a compact iPhone, 7 on
-// roomy devices). Drag a workout pill onto another day's all-day band to reschedule.
+// roomy devices). Drag a workout pill onto another day's all-day band to reschedule;
+// double-click free time to plan a workout there.
 
 struct WeekTimeGridView: View {
     @Bindable var viewModel: CalendarViewModel
@@ -204,7 +205,7 @@ struct WeekTimeGridView: View {
             // Timed grid, pushed below the header band. Fed pre-computed value inputs and
             // marked `.equatable()` so a scroll-frame `offset` change — which re-runs this
             // body — skips the hour-grid columns whose data hasn't changed.
-            DayColumnGrid(day: day, items: Self.timedItems(viewModel: viewModel, day: day),
+            DayColumnGrid(viewModel: viewModel, day: day, items: Self.timedItems(viewModel: viewModel, day: day),
                           hourHeight: hourHeight, columnWidth: columnWidth,
                           isToday: Calendar.current.isDateInToday(day), onOpen: onOpen)
                 .equatable()
@@ -435,6 +436,8 @@ private struct DayHeaderCell: View, Equatable {
             Spacer(minLength: 0)
         }
         .overlay(alignment: .leading) { Rectangle().fill(Color.primary.opacity(0.12)).frame(width: 0.5) }
+        .contentShape(Rectangle())
+        .contextMenu { DayMenu(viewModel: viewModel, day: day) }
     }
 
     // All-day band — workouts sit here (above the hour grid) together with any
@@ -452,7 +455,7 @@ private struct DayHeaderCell: View, Equatable {
         // Drag a workout pill here to reschedule it onto this day.
         .dropDestination(for: String.self) { ids, _ in
             guard let id = ids.first else { return false }
-            viewModel.move(workoutID: id, to: day)
+            viewModel.move(workoutID: id, to: day, copying: dropCopies)
             return true
         }
     }
@@ -466,11 +469,13 @@ private struct DayHeaderCell: View, Equatable {
                        subtitle: Self.completedMetadata(for: activity), kind: .completed)
                 .contentShape(Rectangle())
                 .onTapGesture { onOpen(.completed(activity)) }
+                .contextMenu { WorkoutMenu(viewModel: viewModel, record: activity) }
         case .planned(let workout):
             AllDayPill(sport: workout.sport, title: workout.name,
                        subtitle: Self.plannedMetadata(for: workout), kind: .planned)
                 .contentShape(Rectangle())
                 .onTapGesture { onOpen(.planned(workout)) }
+                .contextMenu { WorkoutMenu(viewModel: viewModel, record: workout) }
                 .planDraggable(workout)
         case .event(let window):
             // System events stay single-line (no metadata).
@@ -522,6 +527,7 @@ private struct DayHeaderCell: View, Equatable {
 // MARK: - Day column hour grid (timed events)
 
 private struct DayColumnGrid: View, Equatable {
+    let viewModel: CalendarViewModel
     let day: Date
     let items: [TimedItem]
     let hourHeight: CGFloat
@@ -532,8 +538,8 @@ private struct DayColumnGrid: View, Equatable {
     private let gridLine = Color.primary.opacity(0.10)
 
     // Skip re-render on scroll: a per-frame `offset` change re-runs the parent body but
-    // leaves these value inputs unchanged. `onOpen` is intentionally excluded (a closure
-    // isn't comparable, and it's stable for a given column).
+    // leaves these value inputs unchanged. `viewModel` and `onOpen` are excluded (both
+    // stable for a given column).
     static func == (l: DayColumnGrid, r: DayColumnGrid) -> Bool {
         l.day == r.day && l.hourHeight == r.hourHeight
             && l.columnWidth == r.columnWidth && l.isToday == r.isToday && l.items == r.items
@@ -543,6 +549,18 @@ private struct DayColumnGrid: View, Equatable {
         let lanes = TimedEventLayout.lanes(for: items)
 
         ZStack(alignment: .topLeading) {
+            // Free time: a double-click plans a workout at that quarter hour. The day menu
+            // stays on the header on iOS, whose long-press would lift the whole column.
+            Color.clear
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { point in
+                    let minute = min(23 * 60 + 45, max(0, Int(point.y / hourHeight * 4) * 15))
+                    viewModel.newPlan(on: day, startMinute: minute)
+                }
+                #if os(macOS)
+                .contextMenu { DayMenu(viewModel: viewModel, day: day) }
+                #endif
+
             // Trailing day separator (hour gridlines are drawn once by `HourGridlines`).
             Rectangle().fill(gridLine).frame(width: 0.5)
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -559,6 +577,9 @@ private struct DayColumnGrid: View, Equatable {
                     .frame(width: laneWidth, height: blockHeight(placed.item), alignment: .topLeading)
                     .contentShape(Rectangle())
                     .onTapGesture { onOpen(placed.item.detail) }
+                    .contextMenu {
+                        if let record = placed.item.detail.record { WorkoutMenu(viewModel: viewModel, record: record) }
+                    }
                     .offset(x: CGFloat(placed.lane) * laneWidth, y: yOffset(placed.item))
             }
         }

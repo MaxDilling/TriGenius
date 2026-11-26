@@ -378,7 +378,7 @@ struct WorkoutDraft {
     var steps: [StepDraft] = []
 
     /// A fresh plan on `date`.
-    init(date: Date, sport: EditorSport = .running) {
+    init(date: Date, sport: EditorSport) {
         self.date = Calendar.current.startOfDay(for: date)
         self.sport = sport
     }

@@ -4,8 +4,8 @@ import UniformTypeIdentifiers
 // MARK: - Workout editor sheet
 //
 // The manual create/edit form for planned workouts and library templates,
-// reached from the calendar's "+", the library, and the planned-workout
-// detail's Edit. A full-state form over `WorkoutDraft`; saving a plan routes
+// reached from the calendar (its "+", a day's menu, a workout's), the library,
+// and a workout page. A full-state form over `WorkoutDraft`; saving a plan routes
 // through `DataSyncCoordinator`'s shared plan CRUD — the exact write path the
 // coach's scheduling tools use — and a template through `saveTemplate`, the same
 // normalization. A strength session is edited in place: each exercise a row
@@ -13,20 +13,45 @@ import UniformTypeIdentifiers
 
 /// What the sheet edits.
 enum WorkoutEditorContext: Identifiable {
-    case create(date: Date)
+    /// A new plan on `date`.
+    case create(PlanSeed, date: Date)
     case edit(WorkoutRecord)
-    /// A new plan on `date`, prefilled from a library template.
-    case fromTemplate(WorkoutTemplate, date: Date)
     /// A library template itself; nil for a new one.
     case template(WorkoutTemplate?)
 
     var id: String {
         switch self {
-        case .create(let date): return "create-\(date.timeIntervalSinceReferenceDate)"
+        case .create(let seed, _): return "create-\(seed.id)"
         case .edit(let record): return "edit-\(record.id)"
-        case .fromTemplate(let template, let date): return "from-\(template.id)-\(date.timeIntervalSinceReferenceDate)"
         case .template(let template): return "template-\(template?.id ?? "new")"
         }
+    }
+}
+
+/// What a new plan starts from: a sport, a library template (which the plan stays
+/// linked to), or a workout repeated.
+struct PlanSeed: Identifiable {
+    let id = UUID()
+    var workoutData: [String: Any]
+    var startMinute: Int?
+    var templateId: String?
+}
+
+extension PlanSeed {
+    init(sport: EditorSport, startMinute: Int? = nil) {
+        self.init(workoutData: ["sport": sport.rawValue], startMinute: startMinute)
+    }
+
+    init(_ template: WorkoutTemplate) {
+        self.init(workoutData: template.workoutData, templateId: template.id)
+    }
+
+    /// The workout again, at its start time (`WorkoutPayloadBuilder.templateData`);
+    /// an open plan keeps its template link. Nil when there is nothing to repeat.
+    init?(_ record: WorkoutRecord) {
+        guard let data = WorkoutPayloadBuilder.templateData(from: record) else { return nil }
+        self.init(workoutData: data, startMinute: record.startMinute,
+                  templateId: record.isCompleted ? nil : record.templateId)
     }
 }
 
@@ -50,13 +75,13 @@ struct WorkoutEditorSheet: View {
     @MainActor
     init(context: WorkoutEditorContext) {
         self.context = context
-        let draft = switch context {
-        case .create(let date): WorkoutDraft(date: date)
+        var draft = switch context {
+        case .create(let seed, let date): WorkoutDraft(workoutData: seed.workoutData, date: date)
         case .edit(let record): WorkoutDraft(record: record)
-        case .fromTemplate(let template, let date): WorkoutDraft(workoutData: template.workoutData, date: date)
         case .template(let template?): WorkoutDraft(workoutData: template.workoutData, date: .now)
         case .template(nil): WorkoutDraft(date: .now, sport: .strength)
         }
+        if case .create(let seed, _) = context { draft.startMinute = seed.startMinute }
         _draft = State(initialValue: draft)
     }
 
@@ -67,7 +92,7 @@ struct WorkoutEditorSheet: View {
 
     private var title: String {
         switch context {
-        case .create, .fromTemplate: return "New Workout"
+        case .create: return "New Workout"
         case .edit: return "Edit \(draft.sport.label) Workout"
         case .template(let template): return template == nil ? "New Template" : "Edit Template"
         }
@@ -128,7 +153,7 @@ struct WorkoutEditorSheet: View {
             TextField("Name", text: $draft.name, prompt: Text(WorkoutNormalizer.defaultName(draft.workoutData())))
             // A plan's sport is fixed once it exists — the title names it.
             switch context {
-            case .create, .fromTemplate, .template(nil):
+            case .create, .template(nil):
                 Picker("Sport", selection: $draft.sport) {
                     ForEach(EditorSport.allCases) { sport in
                         Label(sport.label, systemImage: sport.family.icon).tag(sport)
@@ -393,14 +418,10 @@ struct WorkoutEditorSheet: View {
                     _ = TrainingDataStore.shared.setScheduledStartMinute(id: record.id, minute: draft.startMinute)
                 }
             }
-        case .create, .fromTemplate:
-            let templateId: String? = switch context {
-            case .fromTemplate(let template, _): template.id
-            default: nil
-            }
+        case .create(let seed, _):
             if case .rejected(let rejected) = await DataSyncCoordinator.shared.addPlan(workoutData: draft.workoutData(), date: day,
                                                                                     startMinute: draft.startMinute,
-                                                                                    templateId: templateId) {
+                                                                                    templateId: seed.templateId) {
                 errors = rejected
             }
         case .template(let template):
@@ -446,7 +467,7 @@ extension View {
               isPresented: Binding(get: { result.wrappedValue != nil }, set: { if !$0 { result.wrappedValue = nil } })) {
             Button("OK", role: .cancel) { }
         } message: {
-            Text(result.wrappedValue.map { $0.isEmpty ? "Plan it from the calendar’s + → From Library." : $0.joined(separator: "\n") } ?? "")
+            Text(result.wrappedValue.map { $0.isEmpty ? "Plan it from the calendar’s library." : $0.joined(separator: "\n") } ?? "")
         }
     }
 }

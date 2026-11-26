@@ -90,7 +90,7 @@ struct TemplateLibraryView: View {
             Chevron()
         }
         .contentShape(Rectangle())
-        .onTapGesture { editor = .fromTemplate(template, date: date) }
+        .onTapGesture { editor = .create(PlanSeed(template), date: date) }
         .draggable(template.dragID)
         .contextMenu {
             Button("Edit Template", systemImage: "pencil") { editor = .template(template) }
