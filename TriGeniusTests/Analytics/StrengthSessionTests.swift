@@ -4,7 +4,7 @@ import Testing
 
 // Pins `Analytics/StrengthSession.swift`: how a plan unrolls into the units a live
 // session works through, where each rest lands, and how logging, rests, holds,
-// pauses and reordering move the session on.
+// pauses, the continue step and reordering move the session on.
 
 private let t0 = Date(timeIntervalSinceReferenceDate: 0)
 
@@ -120,6 +120,38 @@ private func done(_ s: inout StrengthSession, at time: TimeInterval, reps: Int? 
     set.seconds = 20
     s.complete(set, at: at(30))
     #expect(s.performed.map(\.seconds) == [20])
+}
+
+@Test func continuingTakesTheSessionThroughSetRestAndEnd() {
+    var s = session([exercise("back_squat", reps: [5, 5])])
+    var steps: [StrengthSession.Step] = []
+    for time in [40.0, 50, 90, 100] {
+        let step = s.nextStep(at: at(time))
+        steps.append(step)
+        s.advance(step, at: at(time))
+    }
+    #expect(steps == [.logSet, .nextSet, .logSet, .finish] && s.endedAt == at(100))
+}
+
+@Test func continuingAHoldStartsItThenLogsTheSecondsHeld() {
+    var s = session([["type": "exercise", "exercise_id": "plank", "sets": [["duration_seconds": 30]]]])
+    s.advance(.startHold, at: at(10))
+    s.advance(.endHold, at: at(35))
+    #expect(s.performed.map(\.seconds) == [25])
+}
+
+@Test func continuingAPausedSessionResumesIt() {
+    var s = session([exercise("back_squat", reps: [5, 5])])
+    s.pause(at: at(20))
+    s.advance(s.nextStep(at: at(30)), at: at(30))
+    #expect(s.pausedAt == nil && s.performed.isEmpty)
+}
+
+@Test func aStepThatIsNoLongerNextDoesNothing() {
+    var s = session([exercise("back_squat", reps: [5, 5])])
+    done(&s, at: 40)
+    s.advance(.nextSet, at: at(500))
+    #expect(s.phase == .resting(since: at(40), until: at(100)) && s.performed.count == 1)
 }
 
 @Test func theCurrentSetCountsWithinItsExercise() {

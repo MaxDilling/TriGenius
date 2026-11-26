@@ -52,7 +52,7 @@ struct LiveSetPage: View {
                 .padding(.horizontal)
             }
             Text(nextLine(unit: unit, set: set)).font(.subheadline).foregroundStyle(.secondary)
-            primaryButton(set)
+            continueButton()
         }
     }
 
@@ -140,27 +140,18 @@ struct LiveSetPage: View {
         return "Next: \(rest) · then \(then)"
     }
 
-    @ViewBuilder
-    private func primaryButton(_ set: StrengthSets.SetRow) -> some View {
-        let isHold = set.reps == nil && set.seconds != nil
-        Group {
-            if case .holding(let since) = session.phase {
-                bigButton("Done", systemImage: "checkmark") {
-                    live.update { s, now in
-                        guard var held = s.draft else { return }
-                        held.seconds = now.timeIntervalSince(since).rounded()
-                        s.complete(held, at: now)
-                    }
-                }
-            } else if isHold {
-                bigButton("Start hold", systemImage: "play.fill") { live.update { s, now in s.startHold(at: now) } }
-            } else {
-                bigButton("Set done", systemImage: "checkmark") {
-                    live.update { s, now in if let set = s.draft { s.complete(set, at: now) } }
-                }
-            }
+    /// The session's next step, the same one the Live Activity's button takes.
+    private func continueButton(exerciseDone: Bool = false) -> some View {
+        let step = session.nextStep(at: .now)
+        let title = switch step {
+        case .resume: "Resume"
+        case .logSet: "Set done"
+        case .startHold: "Start hold"
+        case .endHold: "Done"
+        case .nextSet: exerciseDone ? "Start next exercise" : "Start next set"
+        case .finish: "End workout"
         }
-        .disabled(session.pausedAt != nil)
+        return bigButton(title, systemImage: step.symbol) { live.update { s, now in s.advance(step, at: now) } }
     }
 
     private func bigButton(_ title: String, systemImage: String, action: @escaping () -> Void) -> some View {
@@ -203,16 +194,7 @@ struct LiveSetPage: View {
                 .disabled(session.pausedAt != nil)
                 .padding(.bottom, Theme.Spacing.s)
             }
-            Group {
-                if session.isComplete {
-                    bigButton("End workout", systemImage: "flag.checkered") { live.update { s, now in s.end(at: now) } }
-                } else {
-                    bigButton(exerciseDone ? "Start next exercise" : "Start next set", systemImage: "forward.end") {
-                        live.update { s, now in s.skipRest(at: now) }
-                    }
-                }
-            }
-            .disabled(session.pausedAt != nil)
+            continueButton(exerciseDone: exerciseDone)
         }
     }
 
@@ -378,5 +360,17 @@ struct LiveEditSetSheet: View {
             }
         }
         .presentationDetents([.medium])
+    }
+}
+
+extension StrengthSession.Step {
+    /// Shared by the set page and the Live Activity.
+    var symbol: String {
+        switch self {
+        case .resume, .startHold: "play.fill"
+        case .logSet, .endHold: "checkmark"
+        case .nextSet: "forward.end"
+        case .finish: "flag.checkered"
+        }
     }
 }

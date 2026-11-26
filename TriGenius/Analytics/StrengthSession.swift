@@ -46,6 +46,12 @@ nonisolated struct StrengthSession: Codable, Hashable, Sendable {
         case resting(since: Date, until: Date?)
     }
 
+    /// The one way forward from where the session stands — the live set page's
+    /// main button, and the Live Activity's.
+    nonisolated enum Step: String, Sendable {
+        case resume, logSet, startHold, endHold, nextSet, finish
+    }
+
     /// One logged set and the unit it belongs to.
     nonisolated struct Logged: Codable, Hashable, Sendable {
         var unit: Int
@@ -159,7 +165,34 @@ nonisolated struct StrengthSession: Codable, Hashable, Sendable {
         return phase
     }
 
+    func nextStep(at now: Date) -> Step {
+        if pausedAt != nil { return .resume }
+        if isComplete { return .finish }
+        switch phase(at: now) {
+        case .holding: return .endHold
+        case .resting: return .nextSet
+        case .working: return draft?.isHold == true ? .startHold : .logSet
+        }
+    }
+
     // MARK: Moving through the session
+
+    /// Take `step` only while it is still the next one, so a tap on an outdated
+    /// display — a Live Activity whose rest ran out unseen — does nothing.
+    mutating func advance(_ step: Step, at now: Date) {
+        guard step == nextStep(at: now) else { return }
+        switch step {
+        case .resume: resume(at: now)
+        case .logSet: if let draft { complete(draft, at: now) }
+        case .startHold: startHold(at: now)
+        case .endHold:
+            guard case .holding(let since) = phase, var held = draft else { return }
+            held.seconds = now.timeIntervalSince(since).rounded()
+            complete(held, at: now)
+        case .nextSet: skipRest(at: now)
+        case .finish: end(at: now)
+        }
+    }
 
     /// Close a timed rest that ran out: the rest it lasted goes onto the set
     /// before it.

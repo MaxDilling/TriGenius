@@ -42,7 +42,7 @@ struct LiveSwapSheet: View {
     init(target: LiveSwapTarget) {
         self.target = target
         replaced = target.set.exerciseId.flatMap(ExerciseLibrary.find(id:))
-        isHold = target.set.reps == nil && target.set.seconds != nil
+        isHold = target.set.isHold
         let unit = LiveStrengthController.shared.session?.units.first { $0.id == target.unit }
         remaining = unit.map { u in u.sets[u.done...].filter { $0.sameExercise(as: target.set) } } ?? []
         _sameMuscles = State(initialValue: !(replaced?.primaryGroups.isEmpty ?? true))

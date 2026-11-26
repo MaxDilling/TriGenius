@@ -1,5 +1,6 @@
 #if os(iOS)
 import ActivityKit
+import AppIntents
 import Foundation
 
 // MARK: - Live Activity
@@ -52,8 +53,9 @@ enum LiveStrengthActivity {
         let detail = s.draft.flatMap { set in
             s.currentSetPosition.map { "Set \($0.number) of \($0.of) · \(LiveFormat.set(set))" }
         }
+        let step = s.nextStep(at: .now)
         return .init(phase: phase, title: s.current?.title ?? s.planName, detail: detail ?? "",
-                     doneSets: s.doneSets, totalSets: s.totalSets,
+                     step: step.rawValue, stepSymbol: step.symbol, doneSets: s.doneSets, totalSets: s.totalSets,
                      clockStart: s.startedAt.addingTimeInterval(s.pausedSeconds), pausedAt: s.pausedAt)
     }
 
@@ -62,6 +64,24 @@ enum LiveStrengthActivity {
         case .holding(_, let until), .resting(_, let until?): until
         default: nil
         }
+    }
+}
+
+extension LiveStrengthContinueIntent {
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        if let step = StrengthSession.Step(rawValue: step) {
+            LiveStrengthController.shared.update { s, now in s.advance(step, at: now) }
+        }
+        return .result()
+    }
+}
+
+extension LiveStrengthOpenIntent {
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        LiveStrengthController.shared.isPresented = true
+        return .result()
     }
 }
 #endif

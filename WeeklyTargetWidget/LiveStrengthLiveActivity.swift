@@ -1,4 +1,5 @@
 import ActivityKit
+import AppIntents
 import SwiftUI
 import WidgetKit
 
@@ -13,30 +14,26 @@ struct LiveStrengthLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: LiveStrengthAttributes.self) { context in
             let status = LiveStrengthStatus(state: context.state, isStale: context.isStale)
-            VStack(alignment: .leading, spacing: 10) {
-                status.clock
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                HStack {
-                    status.summary
+            VStack(spacing: 12) {
+                status.header
+                HStack(alignment: .lastTextBaseline) {
+                    status.total
                     Spacer(minLength: 8)
-                    status.countdown(size: 40)
+                    status.countdown
                 }
-                status.progress
             }
             .padding()
         } dynamicIsland: { context in
             let status = LiveStrengthStatus(state: context.state, isStale: context.isStale)
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
-                    status.summary.padding(.leading, 4)
+                    status.total.padding(.leading, 8)
                 }
                 DynamicIslandExpandedRegion(.trailing) {
-                    status.countdown(size: 32)
+                    status.countdown.padding(.trailing, 8)
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    status.progress
+                    status.header
                 }
             } compactLeading: {
                 Image(systemName: "dumbbell.fill").foregroundStyle(.tint)
@@ -77,7 +74,7 @@ private struct LiveStrengthStatus {
         }
     }
 
-    var summary: some View {
+    private var summary: some View {
         VStack(alignment: .leading, spacing: 2) {
             if let caption {
                 Text(caption).font(.caption.weight(.semibold)).foregroundStyle(.tint)
@@ -90,21 +87,76 @@ private struct LiveStrengthStatus {
     }
 
     /// The workout's active time, standing still while paused.
-    var clock: some View {
+    private var clock: some View {
         Text(timerInterval: state.clockStart...Date.distantFuture, pauseTime: state.pausedAt, countsDown: false)
             .monospacedDigit()
-            .multilineTextAlignment(.trailing)
+    }
+
+    /// Progress, the exercise and the button in one row.
+    var header: some View {
+        HStack(spacing: 12) {
+            ring
+            summary
+            Spacer(minLength: 8)
+            button
+        }
+    }
+
+    var total: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            clock.font(.title3.weight(.semibold))
+            Text("Total time").font(.caption2).foregroundStyle(.secondary)
+        }
     }
 
     @ViewBuilder
-    func countdown(size: CGFloat) -> some View {
+    var countdown: some View {
         if let timer {
             Text(timerInterval: timer.range, countsDown: timer.countsDown)
-                .font(.system(size: size, weight: .bold, design: .rounded))
+                .font(.system(size: 34, weight: .bold, design: .rounded))
                 .monospacedDigit()
                 .multilineTextAlignment(.trailing)
-                .frame(maxWidth: size * 3, alignment: .trailing)
+                .frame(maxWidth: 120, alignment: .trailing)
         }
+    }
+
+    /// Sets done of all, the open part on a track that shows on a dark and a
+    /// light Lock Screen alike.
+    private var ring: some View {
+        ZStack {
+            Circle().stroke(.primary.opacity(0.2), lineWidth: 4)
+            Circle()
+                .trim(from: 0, to: Double(state.doneSets) / Double(max(1, state.totalSets)))
+                .stroke(.green, style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+            Text("\(state.doneSets)/\(state.totalSets)")
+                .font(.caption2.weight(.bold))
+                .monospacedDigit()
+                .minimumScaleFactor(0.6)
+                .padding(5)
+        }
+        .frame(width: 44, height: 44)
+    }
+
+    /// The session's next step; once every set is done, the app, where the
+    /// workout is ended.
+    private var button: some View {
+        Group {
+            if state.phase == .allDone {
+                Button(intent: LiveStrengthOpenIntent()) { buttonLabel }
+            } else {
+                Button(intent: LiveStrengthContinueIntent(step: state.step)) { buttonLabel }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var buttonLabel: some View {
+        Image(systemName: state.stepSymbol)
+            .font(.title2.weight(.bold))
+            .foregroundStyle(.tint)
+            .frame(width: 50, height: 50)
+            .background(.tint.opacity(0.25), in: .circle)
     }
 
     /// The rest or hold when one runs, else the workout clock.
@@ -118,11 +170,16 @@ private struct LiveStrengthStatus {
             }
         }
         .monospacedDigit()
+        .multilineTextAlignment(.trailing)
         .frame(maxWidth: 56)
     }
+}
 
-    var progress: some View {
-        ProgressView(value: Double(state.doneSets), total: Double(max(1, state.totalSets)))
-            .tint(.green)
-    }
+// Stubs: the system performs both intents in the app.
+extension LiveStrengthContinueIntent {
+    func perform() async throws -> some IntentResult { .result() }
+}
+
+extension LiveStrengthOpenIntent {
+    func perform() async throws -> some IntentResult { .result() }
 }

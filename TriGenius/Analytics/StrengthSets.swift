@@ -51,6 +51,9 @@ nonisolated enum StrengthSets {
         var rest: Rest?
         var effort: Effort?
 
+        /// Held for time rather than counted in reps.
+        var isHold: Bool { reps == nil && seconds != nil }
+
         /// A timed rest, the only kind a recorded set carries.
         var restSeconds: Double? {
             get { if case .timed(let seconds) = rest { seconds } else { nil } }
@@ -214,7 +217,7 @@ nonisolated enum StrengthSets {
                 out[out.count - 1]["sets"] = (out[out.count - 1]["sets"] as? [[String: Any]] ?? []) + [set]
             } else {
                 var step: [String: Any] = ["type": "exercise", "sets": [set],
-                                           "is_time_based": row.reps == nil && row.seconds != nil]
+                                           "is_time_based": row.isHold]
                 if let id = row.exerciseId ?? row.exerciseName.flatMap({ ExerciseLibrary.find(garminName: $0)?.id }) {
                     step["exercise_id"] = id
                 } else {
